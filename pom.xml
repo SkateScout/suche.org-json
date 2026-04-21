@@ -40,23 +40,17 @@
 	</dependencies>
 	<build>
 		<plugins>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.13.0</version> <configuration>
-                    <compilerArgs>
-                        <arg>--add-exports</arg>
-                        <arg>org.suche.json/org.suche.json=ALL-UNNAMED</arg>
-                        </compilerArgs>
-                </configuration>
-            </plugin>		
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-compiler-plugin</artifactId>
-				<version>3.11.0</version>
+				<version>3.13.0</version>
 				<configuration>
 					<source>26</source>
 					<target>26</target>
+					<compilerArgs>
+						<arg>--add-exports</arg>
+						<arg>org.suche.json/org.suche.json=ALL-UNNAMED</arg>
+					</compilerArgs>
 
 					<annotationProcessorPaths>
 						<path>
@@ -116,6 +110,7 @@
 		</plugins>
 	</build>
 	<!-- 
-mvn clean package test-compile exec:exec -Dexec.executable="java" -Dexec.classpathScope=test -Dexec.args="-cp %classpath org.openjdk.jmh.Main"
+mvn clean package test-compile exec:exec -Dexec.executable="java"
+	-Dexec.classpathScope=test -Dexec.args="-cp %classpath org.openjdk.jmh.Main"
 -->
 </project>
