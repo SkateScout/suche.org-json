@@ -168,7 +168,7 @@ final class SealedUnionMapper {
 
 	private static ObjectMeta getMeta(final InternalEngine engine, final Object[] raw, final Class<?> targetType) {
 		String className = null;
-		for (var i = 0; i < raw.length; i += 2) if (CLASS_KEY.equals(raw[i]) || ENUM_KEY.equals(raw[i])) { className = (String) raw[i + 1]; break; }
+		for (var i = 0; i < raw.length - 1; i += 2) if (CLASS_KEY.equals(raw[i]) || ENUM_KEY.equals(raw[i])) { className = (String) raw[i + 1]; break; }
 		Class<?> concreteClass = targetType;
 		if (className != null) {
 			final var baseMeta = engine.metaOf(targetType);
