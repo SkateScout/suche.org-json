@@ -102,7 +102,6 @@ final class SealedUnionMapper {
 		final var targetObj   = targetCtx.objs;
 		final var targetPrim  = targetCtx.prims;
 
-
 		for (var i = 0; i < targetMeta.components.length; i++) {
 			final var comp = targetMeta.components[i];
 			final var unionIdx = keys.get(comp.name());

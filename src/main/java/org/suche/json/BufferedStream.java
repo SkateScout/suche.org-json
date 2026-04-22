@@ -39,11 +39,11 @@ sealed class BufferedStream  implements MetaPool permits JsonInputStream {
 	int         maxCollectionSize ;
 	int         maxStringLength   ;
 	int         maxDepth          ;
+	int     escapedParsedLen;
+	boolean escapedIsAscii  ;
 
 	private final ObjectMeta[] dynamicMetaCache = new ObjectMeta[16];
 	private int dynamicMetaCount = 0;
-
-
 
 	ObjectMeta getDynamicMeta(final Class<?> compType, final int targetMetaType) {
 		final var searchType = compType == null ? Object.class : compType;
@@ -449,50 +449,6 @@ sealed class BufferedStream  implements MetaPool permits JsonInputStream {
 		return cp;
 	}
 
-	@Override
-	public final String internBytes(final byte[] src, final int start, final int len, final int hash, final boolean isAscii) {
-		if (stringPoolKeys == null || hash == -1) return new String(src, start, len, isAscii ? StandardCharsets.ISO_8859_1 : StandardCharsets.UTF_8);
-		final var mask = stringPoolKeys.length - 1;
-		var idx = hash & mask;
-		if (stringPoolKeys[idx] instanceof final byte[] k && k.length == len && Arrays.equals(k, 0, len, src, start, start + len))
-			return stringPoolVals[idx];
-		while (stringPoolKeys[idx] != null) {
-			final var k = stringPoolKeys[idx];
-			if (k.length == len && Arrays.equals(k, 0, len, src, start, start + len)) return stringPoolVals[idx];
-			idx = (idx + 1) & mask;
-		}
-		return internBytesSlow(src, start, len, isAscii, mask, idx);
-	}
-
-	private String internBytesSlow(final byte[] src, final int start, final int len, final boolean isAscii, int mask, final int idx) {
-		if (stringPoolSize >= maxCollectionSize) return new String(src, start, len, isAscii ? StandardCharsets.ISO_8859_1 : StandardCharsets.UTF_8);
-		final var s = new String(src, start, len, isAscii ? StandardCharsets.ISO_8859_1 : StandardCharsets.UTF_8);
-		stringPoolKeys[idx] = java.util.Arrays.copyOfRange(src, start, start + len);
-		stringPoolVals[idx] = s;
-		if (++stringPoolSize > stringPoolKeys.length * 0.75f) {
-			final var oldK = stringPoolKeys;
-			final var oldV = stringPoolVals;
-			stringPoolKeys = new byte[oldK.length << 1][];
-			stringPoolVals = new String[oldV.length << 1];
-			mask = stringPoolKeys.length - 1;
-			for (var i = 0; i < oldK.length; i++) {
-				final var k = oldK[i];
-				if (k != null) {
-					var h = 0;
-					for (final byte element : k) h = 31 * h + element;
-					var newIdx = h & mask;
-					while (stringPoolKeys[newIdx] != null) newIdx = (newIdx + 1) & mask;
-					stringPoolKeys[newIdx] = k;
-					stringPoolVals[newIdx] = oldV[i];
-				}
-			}
-		}
-		return s;
-	}
-
-	int     escapedParsedLen;
-	boolean escapedIsAscii  ;
-
 	void parseU(int dstLen) throws IOException {
 		final var buf = this.buffer;
 		var isAscii = true   ;
@@ -522,6 +478,56 @@ sealed class BufferedStream  implements MetaPool permits JsonInputStream {
 		}
 		this.escapedIsAscii   = isAscii;
 		this.escapedParsedLen = dstLen;
+	}
+
+	final int parseStringKeyAsIndex(final Object context, final ObjectMeta meta) throws IOException {
+		var lPos = pos;
+		final var start = lPos;
+		final var buf = buffer;
+		var hash = 0; // Hash wird on-the-fly berechnet
+
+		while (lPos < limit) {
+			final var b = buf[lPos];
+			if (b == '"') {
+				final var len = lPos - start;
+				pos = lPos + 1;
+				// Zuerst Byte-Lookup in der Tabelle (für POJOs)
+				final var idx = meta.prepareKey(hash, buf, start, len);
+				if (idx != -1) return idx;
+
+				// Nur wenn unbekannt oder MAP, String aus dem Pool holen
+				final var key = internBytes(buf, start, len, hash, true);
+				return meta.prepareKey(context, key);
+			}
+			if (b == '\\' || b < 0) break;
+			hash = 31 * hash + b; // Fused Hashing
+			lPos++;
+		}
+		// Slow path handles escapes and UTF-8 decoding.
+		final var key = parseStringSlow(start, lPos, true);
+		return meta.prepareKey(context, key);
+	}
+
+	final String parseStringValue() throws IOException {
+		var       lPos   = pos;
+		final var lLimit = limit;
+		final var start  = lPos;
+		final var buf    = buffer;
+		var       hash   = 0; // Hash wird on-the-fly berechnet
+
+		// MICRO-LOOP: Pure ASCII fast-path
+		while (lPos < lLimit) {
+			final var b = buf[lPos];
+			if (b == '"') {
+				pos = lPos + 1;
+				// FIX: Nutzt jetzt den echten Hash und dedupliziert Werte extrem aggressiv!
+				return internBytes(buf, start, lPos - start, hash, true);
+			}
+			if (b == '\\' || b < 0) break;
+			hash = 31 * hash + b; // Fused Hashing
+			lPos++;
+		}
+		return parseStringSlow(start, lPos, true);
 	}
 
 	private String parseStringSlow(final int start, final int lPos, boolean isAscii) throws IOException {
@@ -567,56 +573,59 @@ sealed class BufferedStream  implements MetaPool permits JsonInputStream {
 			strBuf[parsedLen++] = b;
 			if (b < 0) isAscii = false;
 		}
-		return internBytes(strBuf, 0, parsedLen, -1, isAscii);
+
+		// Hash nach Escaping sauber über den temporären Buffer berechnen
+		var hash = 0;
+		for (var i = 0; i < parsedLen; i++) hash = 31 * hash + strBuf[i];
+		return internBytes(strBuf, 0, parsedLen, hash, isAscii);
 	}
 
-	final int parseStringKeyAsIndex(final Object context, final ObjectMeta meta) throws IOException {
-		var lPos = pos;
-		final var start = lPos;
-		final var buf = buffer;
+	@Override
+	public final String internBytes(final byte[] src, final int start, final int len, final int hash, final boolean isAscii) {
+		if (stringPoolKeys == null) return new String(src, start, len, isAscii ? StandardCharsets.ISO_8859_1 : StandardCharsets.UTF_8);
 
-		while (lPos < limit) {
-			final var b = buf[lPos];
-			if (b == '"') {
-				final var len = lPos - start;
-				var hash = 0; // Kein Salt für globale Keys
-				for (var i = start; i < lPos; i++) hash = 31 * hash + buf[i];
+		final var keys = this.stringPoolKeys;
+		final var mask = keys.length - 1;
+		var idx = hash & mask;
 
-				pos = lPos + 1;
-				// Zuerst Byte-Lookup in der Tabelle
-				final var idx = meta.prepareKey(hash, buf, start, len);
-				if (idx != -1) return idx;
-
-				// Nur wenn unbekannt oder MAP, String bauen
-				final var key = internBytes(buf, start, len, hash, true);
-				return meta.prepareKey(context, key);
+		// Hyper-optimierter Linear Probe ohne instanceof
+		while (true) {
+			final var k = keys[idx];
+			if (k == null) break;
+			if (k.length == len && Arrays.equals(k, 0, len, src, start, start + len)) {
+				return stringPoolVals[idx];
 			}
-			if (b == '\\' || b < 0) break;
-			lPos++;
+			idx = (idx + 1) & mask;
 		}
-		// Slow path handles escapes and UTF-8 decoding.
-		final var key = parseStringSlow(start, lPos, true);
-		return meta.prepareKey(context, key);
+		return internBytesSlow(src, start, len, isAscii, mask, idx);
 	}
 
-	final String parseStringValue() throws IOException {
-		var       lPos   = pos;
-		final var lLimit = limit;
-		final var start  = lPos;
-		final var buf    = buffer;
+	private String internBytesSlow(final byte[] src, final int start, final int len, final boolean isAscii, int mask, final int idx) {
+		if (stringPoolSize >= maxCollectionSize) return new String(src, start, len, isAscii ? StandardCharsets.ISO_8859_1 : StandardCharsets.UTF_8);
 
-		// MICRO-LOOP: Pure ASCII fast-path without data dependencies (no asciiMask accumulation)
-		while (lPos < lLimit) {
-			final var b = buf[lPos];
-			if (b == '"') {
-				pos = lPos + 1;
-				return internBytes(buf, start, lPos - start, -1, true);
+		final var s = new String(src, start, len, isAscii ? StandardCharsets.ISO_8859_1 : StandardCharsets.UTF_8);
+		stringPoolKeys[idx] = java.util.Arrays.copyOfRange(src, start, start + len);
+		stringPoolVals[idx] = s;
+
+		if (++stringPoolSize > stringPoolKeys.length * 0.75f) {
+			final var oldK = stringPoolKeys;
+			final var oldV = stringPoolVals;
+			stringPoolKeys = new byte[oldK.length << 1][];
+			stringPoolVals = new String[oldV.length << 1];
+			mask = stringPoolKeys.length - 1;
+			for (var i = 0; i < oldK.length; i++) {
+				final var k = oldK[i];
+				if (k != null) {
+					var h = 0;
+					for (final byte b : k) h = 31 * h + b;
+					var newIdx = h & mask;
+					while (stringPoolKeys[newIdx] != null) newIdx = (newIdx + 1) & mask;
+					stringPoolKeys[newIdx] = k;
+					stringPoolVals[newIdx] = oldV[i];
+				}
 			}
-			if (b == '\\' || b < 0) break;
-			lPos++;
 		}
-
-		return parseStringSlow(start, lPos, true);
+		return s;
 	}
 
 	// Bit 9 (\t), 10 (\n), 13 (\r), 32 (Space)
