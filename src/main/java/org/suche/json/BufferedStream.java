@@ -45,13 +45,11 @@ sealed class BufferedStream  implements MetaPool permits JsonInputStream {
 	ObjectMeta genericArrayMeta     ;
 	ObjectMeta genericSetMeta       ;
 
-	private final ObjectMeta[] dynamicMetaCache = new ObjectMeta[16];
+	private final ObjectMeta[] dynamicMetaCache = new ObjectMeta[32];
 	private int dynamicMetaCount = 0;
 
 	ObjectMeta getDynamicMeta(final Class<?> compType, final int targetMetaType) {
 		final var searchType = compType == null ? Object.class : compType;
-
-		// 1. FAST-PATH: O(1) Zugriff für 99% der untypisierten JSON-Knoten
 		if (searchType == Object.class) {
 			switch (targetMetaType) {
 			case ObjectMeta.TYPE_COLLECTION: if (genericCollectionMeta == null) genericCollectionMeta = new ObjectMeta(engine, Object.class, ObjectMeta.TYPE_COLLECTION); return genericCollectionMeta;
@@ -61,13 +59,13 @@ sealed class BufferedStream  implements MetaPool permits JsonInputStream {
 			}
 		}
 
-		// 2. SLOW-PATH: Linearer Scan nur noch für spezifisch typisierte Arrays/Listen (z.B. List<User>)
 		for (var i = 0; i < dynamicMetaCount; i++) {
 			final var m = dynamicMetaCache[i];
 			if (m.metaType == targetMetaType && m.type(0) == searchType) return m;
 		}
+
 		final var m = new ObjectMeta(engine, searchType, targetMetaType);
-		if (dynamicMetaCount < 32) dynamicMetaCache[dynamicMetaCount++] = m;
+		if (dynamicMetaCount < dynamicMetaCache.length) dynamicMetaCache[dynamicMetaCount++] = m;
 		return m;
 	}
 

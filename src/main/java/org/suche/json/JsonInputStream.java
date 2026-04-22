@@ -242,7 +242,11 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				pushState(TYPE_OBJECT, meta.start(this), meta, -1, t);
 			}
 			case '[' -> {
-				if (targetType != null && targetType.isArray() && targetType.componentType().isPrimitive()) {
+				if (targetType == null) {
+					pos++;
+					if (genericCollectionMeta == null) genericCollectionMeta = new ObjectMeta(engine, Object.class, ObjectMeta.TYPE_COLLECTION);
+					pushState(TYPE_COL, genericCollectionMeta.start(this), genericCollectionMeta, 0, Object.class);
+				} else if (targetType.isArray() && targetType.componentType().isPrimitive()) {
 					final var result = parsePrimitiveArray(targetType.componentType());
 					final var parentState = stack.stack[stack.depth];
 					((ObjectMeta) parentState.meta).set(this, parentState.obj, parentState.targetIdx, result);
@@ -250,12 +254,11 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 					consumeCommaIfPresent();
 				} else {
 					pos++;
-					final var isArray  = targetType != null && targetType.isArray();
-					final var isSet    = targetType != null && Set.class.isAssignableFrom(targetType);
+					final var isArray  = targetType.isArray();
+					final var isSet    = Set.class.isAssignableFrom(targetType);
 					final var metaType = isArray ? ObjectMeta.TYPE_OBJ_ARRAY : (isSet ? ObjectMeta.TYPE_SET : ObjectMeta.TYPE_COLLECTION);
-					final var compType = isArray ? targetType.componentType() : (targetType != null && !isSet ? targetType : Object.class);
+					final var compType = isArray ? targetType.componentType() : (isSet ? Object.class : targetType);
 					final var meta = getDynamicMeta(compType, metaType);
-
 					pushState(isArray ? TYPE_ARRAY : TYPE_COL, meta.start(this), meta, 0, compType);
 				}
 			}
@@ -484,16 +487,23 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				meta.set(this, context, targetIdx, value);
 			}
 			case '[' -> {
-				if (recursionDeep >= this.maxDepth) {
+				if (type == null) {
 					pos++;
-					if (type != null && type.isArray() && type.componentType().isPrimitive()) {
+					if (recursionDeep >= this.maxDepth) {
+						if (genericCollectionMeta == null) genericCollectionMeta = new ObjectMeta(engine, Object.class, ObjectMeta.TYPE_COLLECTION);
+						value = runStateEngine(TYPE_COL, genericCollectionMeta.start(this), genericCollectionMeta, 0, Object.class);
+					} else {
+						value = parseArrayRecursive(null, recursionDeep + 1);
+					}
+				} else if (recursionDeep >= this.maxDepth) {
+					pos++;
+					if (type.isArray() && type.componentType().isPrimitive()) {
 						value = parsePrimitiveArray(type.componentType());
 					} else {
-
-						final var isArray  = type != null && type.isArray();
-						final var isSet    = type != null && Set.class.isAssignableFrom(type);
+						final var isArray  = type.isArray();
+						final var isSet    = Set.class.isAssignableFrom(type);
 						final var metaType = isArray ? ObjectMeta.TYPE_OBJ_ARRAY : (isSet ? ObjectMeta.TYPE_SET : ObjectMeta.TYPE_COLLECTION);
-						final var compType = isArray ? type.componentType() : (type != null && !isSet ? type : Object.class);
+						final var compType = isArray ? type.componentType() : (isSet ? Object.class : type);
 						final var subMeta = getDynamicMeta(compType, metaType);
 						value = runStateEngine(isArray ? TYPE_ARRAY : TYPE_COL, subMeta.start(this), subMeta, 0, compType);
 					}
@@ -520,17 +530,30 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 	}
 
 	private Object parseArrayRecursive(final Class<?> targetType, final int recursionDeep) throws Throwable {
-		final var isArray = targetType != null && targetType.isArray();
-		final var compType = isArray ? targetType.componentType() : (targetType != null ? targetType : Object.class);
-		if (isArray && compType.isPrimitive()) return parsePrimitiveArray(compType);
-		final var meta = getDynamicMeta(compType, ObjectMeta.TYPE_OBJ_ARRAY);
+		final ObjectMeta meta;
+		final Class<?> compType;
+
+		if (targetType == null) {
+			if (genericCollectionMeta == null) genericCollectionMeta = new ObjectMeta(engine, Object.class, ObjectMeta.TYPE_COLLECTION);
+			meta = genericCollectionMeta;
+			compType = Object.class;
+		} else if (targetType.isArray()) {
+			compType = targetType.componentType();
+			if (compType.isPrimitive()) return parsePrimitiveArray(compType);
+			meta = getDynamicMeta(compType, ObjectMeta.TYPE_OBJ_ARRAY);
+		} else {
+			final var isSet = Set.class.isAssignableFrom(targetType);
+			compType = isSet ? Object.class : targetType;
+			meta = getDynamicMeta(compType, isSet ? ObjectMeta.TYPE_SET : ObjectMeta.TYPE_COLLECTION);
+		}
+
 		final var context = meta.start(this);
 		var idx = 0;
 		while (true) {
 			skipWhitespace();
 			if (pos < limit && buffer[pos] == (byte) ']') {
 				pos++;
-				return meta.end(this, context); // Elegante Rückgabe über Meta!
+				return meta.end(this, context);
 			}
 
 			final var b = buffer[pos];
@@ -561,18 +584,26 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				if (recursionDeep >= this.maxDepth) {
 					if (b == '{') {
 						pos++;
-						final var t = compType == null ? Map.class : compType;
+						final var t = compType == Object.class ? Map.class : compType;
 						final var fallbackMeta = t == Map.class ? defaultMapMeta : metaOf(t);
 						val = runStateEngine(TYPE_OBJECT, fallbackMeta.start(this), fallbackMeta, -1, t);
 					} else if (b == '[') {
-						pos++;
-						if (compType != null && compType.isArray() && compType.componentType().isPrimitive()) {
-							val = parsePrimitiveArray(compType.componentType());
+						if (compType == Object.class) {
+							pos++;
+							if (genericCollectionMeta == null) genericCollectionMeta = new ObjectMeta(engine, Object.class, ObjectMeta.TYPE_COLLECTION);
+							val = runStateEngine(TYPE_COL, genericCollectionMeta.start(this), genericCollectionMeta, 0, Object.class);
 						} else {
-							final var isSubArray = compType != null && compType.isArray();
-							final var subCompType = isSubArray ? compType.componentType() : (compType != null ? compType : Object.class);
-							final var subMeta = getDynamicMeta(subCompType, ObjectMeta.TYPE_OBJ_ARRAY);
-							val = runStateEngine(isSubArray ? TYPE_ARRAY : TYPE_COL, subMeta.start(this), subMeta, 0, subCompType);
+							pos++;
+							if (compType.isArray() && compType.componentType().isPrimitive()) {
+								val = parsePrimitiveArray(compType.componentType());
+							} else {
+								final var isSubArray = compType.isArray();
+								final var isSubSet   = Set.class.isAssignableFrom(compType);
+								final var subMetaType = isSubArray ? ObjectMeta.TYPE_OBJ_ARRAY : (isSubSet ? ObjectMeta.TYPE_SET : ObjectMeta.TYPE_COLLECTION);
+								final var subCompType = isSubArray ? compType.componentType() : (isSubSet ? Object.class : compType);
+								final var subMeta = getDynamicMeta(subCompType, subMetaType);
+								val = runStateEngine(isSubArray ? TYPE_ARRAY : TYPE_COL, subMeta.start(this), subMeta, 0, subCompType);
+							}
 						}
 					} else {
 						val = parsePrimitiveInline(b, compType);
@@ -580,10 +611,10 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				} else // Reguläre Rekursion
 					if (b == '{') {
 						pos++;
-						val = parseRecordRecursive(compType == null || compType == Map.class ? defaultMapMeta : metaOf(compType), recursionDeep + 1);
+						val = parseRecordRecursive(compType == Object.class ? defaultMapMeta : metaOf(compType), recursionDeep + 1);
 					} else if (b == '[') {
 						pos++;
-						val = parseArrayRecursive(compType, recursionDeep + 1);
+						val = parseArrayRecursive(compType == Object.class ? null : compType, recursionDeep + 1);
 					} else {
 						val = parsePrimitiveInline(b, compType);
 					}
