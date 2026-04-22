@@ -9,9 +9,11 @@ interface MetaPool {
 	}
 
 	Object[]     takeArray(int minCapacity);
+	long[]       takeLongArray(int minCapacity);
 	ParseContext takeContext(int minCapacity);
 
 	void         returnArray(Object[] arr);
+	void         returnLongArray(long[] arr);
 	void         returnContext(ParseContext ctx);
 
 	Object deduplicate(final Object value);

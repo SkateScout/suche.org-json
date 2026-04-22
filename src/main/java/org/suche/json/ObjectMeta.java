@@ -314,16 +314,18 @@ public final class ObjectMeta {
 
 	private static void grow(final MetaPool s, final ParseContext ctx, final int requiredCapacity) {
 		var newSize = ctx.objs.length * 2;
+		if (newSize == 0) newSize = 16;
 		while (newSize <= requiredCapacity) newSize *= 2;
 
 		final var newObjs = s.takeArray(newSize);
-		System.arraycopy(ctx.objs, 0, newObjs, 0, ctx.objs.length);
+		System.arraycopy(ctx.objs, 0, newObjs, 0, ctx.cnt); // Nur bis cnt kopieren!
 		s.returnArray(ctx.objs);
 		ctx.objs = newObjs;
 
 		if (ctx.prims != null) {
-			final var newPrims = new long[newSize];
-			System.arraycopy(ctx.prims, 0, newPrims, 0, ctx.prims.length);
+			final var newPrims = s.takeLongArray(newSize);
+			System.arraycopy(ctx.prims, 0, newPrims, 0, ctx.cnt); // Nur bis cnt kopieren!
+			s.returnLongArray(ctx.prims);
 			ctx.prims = newPrims;
 		}
 	}
@@ -331,7 +333,11 @@ public final class ObjectMeta {
 	Object start(final MetaPool s) {
 		return switch (metaType) {
 		case TYPE_MAP, TYPE_OBJ_ARRAY, TYPE_COLLECTION -> s.takeContext(16);
-		case TYPE_INSTANTIATOR -> s.takeContext(types.length); // Feste Größe, wächst nie!
+		case TYPE_INSTANTIATOR -> {
+			final var ctx = s.takeContext(types.length);
+			ctx.cnt = types.length; // CRITICAL: Erlaubt korrektes Arrays.fill beim Zurückgeben
+			yield ctx;
+		}
 		case TYPE_SET -> new HashSet<>();
 		default -> throw new IllegalArgumentException("T: "+metaType);
 		};
@@ -482,7 +488,4 @@ public final class ObjectMeta {
 		default -> throw new IllegalArgumentException("Type: " + metaType);
 		};
 	}
-
-
-
 }
