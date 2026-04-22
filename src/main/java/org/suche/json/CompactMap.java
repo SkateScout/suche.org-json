@@ -102,11 +102,11 @@ public final class CompactMap<K, V> extends AbstractMap<K, V> {
 		throw new NullPointerException("Key["+key+"] unknown");
 	}
 
-	public int       getInteger(final Object key) { return getLong(key); }
-	public short     getShort  (final Object key) { return getLong(key); }
-	public byte      getByte   (final Object key) { return getLong(key); }
-	public boolean   getBoolean(final Object key) { return (getLong(key)==0) == false; }
-	public char      getChar   (final Object key) { return (char)getLong(key); }
+	public int       getInteger(final Object key) { return (int  ) getLong(key); }
+	public short     getShort  (final Object key) { return (short) getLong(key); }
+	public byte      getByte   (final Object key) { return (byte ) getLong(key); }
+	public boolean   getBoolean(final Object key) { return (getLong(key) != 0); }
+	public char      getChar   (final Object key) { return (char ) getLong(key); }
 	public double    getDouble (final Object key) { return        Double.longBitsToDouble(getLong(key)); }
 	public float     getFloat  (final Object key) { return (float)Double.longBitsToDouble(getLong(key)); }
 

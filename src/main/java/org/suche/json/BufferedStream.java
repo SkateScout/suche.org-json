@@ -28,6 +28,9 @@ sealed class BufferedStream  implements MetaPool permits JsonInputStream {
 	private final ParseContext[] contextPool     = new ParseContext[32];
 	private int                  contextPoolSize = 0;
 
+	private final long[][]       longArrayPool     = new long[32][];
+	private int                  longArrayPoolSize = 0;
+
 	protected InternalEngine engine;
 	InputStream in;
 	int         pos               ;
@@ -39,6 +42,8 @@ sealed class BufferedStream  implements MetaPool permits JsonInputStream {
 
 	private final ObjectMeta[] dynamicMetaCache = new ObjectMeta[16];
 	private int dynamicMetaCount = 0;
+
+
 
 	ObjectMeta getDynamicMeta(final Class<?> compType, final int targetMetaType) {
 		final var searchType = compType == null ? Object.class : compType;
@@ -81,32 +86,49 @@ sealed class BufferedStream  implements MetaPool permits JsonInputStream {
 		}
 	}
 
-
-	@Override
-	public ParseContext takeContext(final int minCapacity) {
+	@Override public ParseContext takeContext(final int minCapacity) {
 		if (contextPoolSize > 0) {
 			final var ctx = contextPool[--contextPoolSize];
-			ctx.cnt = 0;
-			ctx.currentKey = null;
 			if (ctx.objs == null || ctx.objs.length < minCapacity) {
 				if (ctx.objs != null) returnArray(ctx.objs);
+				if (ctx.prims != null) returnLongArray(ctx.prims);
 				ctx.objs = takeArray(minCapacity);
-				ctx.prims = new long[ctx.objs.length];
+				ctx.prims = takeLongArray(ctx.objs.length);
 			}
+			ctx.cnt = 0;
+			ctx.currentKey = null;
 			return ctx;
 		}
 		final var ctx = new ParseContext();
 		ctx.objs = takeArray(Math.max(16, minCapacity));
-		ctx.prims = new long[ctx.objs.length];
+		ctx.prims = takeLongArray(ctx.objs.length);
 		return ctx;
 	}
 
-	@Override
-	public void returnContext(final ParseContext ctx) {
+	@Override public long[] takeLongArray(final int minCapacity) {
+		if (longArrayPoolSize > 0) {
+			final var arr = longArrayPool[--longArrayPoolSize];
+			if (arr.length >= minCapacity) return arr;
+		}
+		return new long[Math.max(16, minCapacity)];
+	}
+
+	@Override public void returnLongArray(final long[] arr) {
+		if (arr.length > 1024) return;
+		if (longArrayPoolSize < longArrayPool.length) longArrayPool[longArrayPoolSize++] = arr;
+	}
+
+	@Override public void returnContext(final ParseContext ctx) {
 		if (contextPoolSize < contextPool.length) {
-			if (ctx.objs != null) Arrays.fill(ctx.objs, 0, ctx.cnt > 0 ? ctx.cnt : ctx.objs.length, null);
+			if (ctx.cnt > 0) {
+				if (ctx.objs != null) Arrays.fill(ctx.objs, 0, ctx.cnt, null);
+				if (ctx.prims != null) Arrays.fill(ctx.prims, 0, ctx.cnt, 0L);
+			}
 			contextPool[contextPoolSize++] = ctx;
-		} else if (ctx.objs != null) returnArray(ctx.objs);
+		} else {
+			if (ctx.objs != null) returnArray(ctx.objs);
+			if (ctx.prims != null) returnLongArray(ctx.prims);
+		}
 	}
 
 	@Override public Object[] takeArray(final int minCapacity) {

@@ -123,7 +123,7 @@ final class Meta {
 			System.err.println("Value : "+value+" is not an valid enum name");
 			yield null;
 		}
-		case final Enum        e -> e;
+		case final Enum<?>     e -> e;
 		case final Integer     i -> (i >= 0 && i < constants.length ? constants[i] : null);
 		case null,default        -> null;
 		};

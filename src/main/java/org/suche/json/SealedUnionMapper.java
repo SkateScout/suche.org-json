@@ -98,6 +98,7 @@ final class SealedUnionMapper {
 		final var engine      = s.engine();
 		final var targetMeta  = engine.metaOf(targetClass);
 		final var targetCtx   = s.takeContext(targetMeta.components.length);
+		targetCtx.cnt         = targetMeta.components.length;
 		final var targetObj   = targetCtx.objs;
 		final var targetPrim  = targetCtx.prims;
 
@@ -199,10 +200,10 @@ final class SealedUnionMapper {
 		CTX[] stack;
 		int depth ;
 		CtxStack() { stack = new CTX[64]; for (var i = 0; i < 64; i++) stack[i] = new CTX(); }
-		void ensureCapacity(final int depth) {
-			if (depth >= stack.length) {
+		void ensureCapacity(final int requestedDepth) {
+			if (requestedDepth >= stack.length) {
 				final var oldLen = stack.length;
-				stack = Arrays.copyOf(stack, depth * 2);
+				stack = Arrays.copyOf(stack, requestedDepth * 2);
 				for (var i = oldLen; i < stack.length; i++) stack[i] = new CTX();
 			}
 		}
