@@ -21,6 +21,7 @@ import org.openjdk.jmh.infra.Blackhole;
 import org.suche.json.JsonEngine;
 import org.suche.json.MetaConfig;
 
+import com.alibaba.fastjson2.JSON;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 @State(Scope.Benchmark)
@@ -47,36 +48,51 @@ public class JsonDeserializationBenchmark {
 			) {}
 
 	private ObjectMapper jacksonMapper;
-	private JsonEngine myEngine;
 	private Class<?> dest;
 	private byte[] jsonData;
 
-	@Param({"canada.json", "citm_catalog.json", "twitter.json"}) public String fileName;
-	@Param({"0","128"}) public int  maxRecursion;
+	@Param({"canada.json", "citm_catalog.json", "twitter.json"})
+	public String fileName;
 
 	@Setup(Level.Trial)
 	public void setup() throws Exception {
 		dest = Object.class;
 		jacksonMapper = new ObjectMapper();
-		myEngine = JsonEngine.of(MetaConfig.DEFAULT);
-		myEngine.maxRecursiveDepth(maxRecursion);
 		try (var is = getClass().getClassLoader().getResourceAsStream(fileName)) {
 			if (is == null) throw new RuntimeException("File not found: " + fileName);
 			jsonData = is.readAllBytes();
 		}
 	}
 
-	// --- Benchmark 1: Jackson ---
+	@State(Scope.Thread)
+	public static class EngineState {
+		@Param({"0", "128"})
+		public int maxRecursion;
+
+		public JsonEngine myEngine;
+
+		@Setup(Level.Trial)
+		public void setupEngine() {
+			myEngine = JsonEngine.of(MetaConfig.DEFAULT);
+			myEngine.maxRecursiveDepth(maxRecursion);
+		}
+	}
+
 	@Benchmark
 	public void benchmarkJackson(final Blackhole bh) throws Exception {
 		final var parsedTree = jacksonMapper.readValue(jsonData, dest);
 		bh.consume(parsedTree);
 	}
 
-	// --- Benchmark 2: suche.org Engine ---
 	@Benchmark
-	public void benchmarkMyEngine(final Blackhole bh) throws Exception {
-		try (var is = myEngine.jsonInputStream(new ByteArrayInputStream(jsonData))) {
+	public void benchmarkFastjson2(final Blackhole bh) {
+		final var parsedTree = JSON.parseObject(jsonData, dest);
+		bh.consume(parsedTree);
+	}
+
+	@Benchmark
+	public void benchmarkMyEngine(final Blackhole bh, final EngineState state) throws Exception {
+		try (var is = state.myEngine.jsonInputStream(new ByteArrayInputStream(jsonData))) {
 			final var parsedTree = is.readObject(dest);
 			bh.consume(parsedTree);
 		}

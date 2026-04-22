@@ -1,3 +1,4 @@
+// text
 package org.suche.json;
 
 import java.lang.reflect.Array;
@@ -9,8 +10,6 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
-
-import org.suche.json.ObjectMeta.FastKeyTable;
 
 final class SealedUnionMapper {
 	static final String CLASS_KEY = "__class__";
@@ -47,7 +46,7 @@ final class SealedUnionMapper {
 		return TOP;
 	}
 
-	private static Class<?>[]    getPermittedClasses(final Class<?> baseClass) {
+	private static Class<?>[] getPermittedClasses(final Class<?> baseClass) {
 		final var r = new HashSet   <Class<?>>();
 		final var q = new ArrayDeque<Class<?>>();
 		q.add(baseClass);
@@ -63,7 +62,7 @@ final class SealedUnionMapper {
 		final var keyToAllTypes = new HashMap<String, Set<Class<?>>>();
 		for (final var sub : subclasses) {
 			final var meta = e.metaOf(sub);
-			for (final var comp : meta.components) keyToAllTypes.computeIfAbsent(comp.name(), k -> new HashSet<>()).add(comp.type());
+			for (final var comp : meta.components) keyToAllTypes.computeIfAbsent(comp.name(), _ -> new HashSet<>()).add(comp.type());
 		}
 		var totalKeys = 1;
 		final var keyToIndex = new HashMap<String, Integer>();
@@ -85,27 +84,29 @@ final class SealedUnionMapper {
 		}
 		unionKeys [0] = CLASS_KEY;
 		unionTypes[0] = String.class;
-		return new ObjectMeta(sealedInterface.getCanonicalName(), subclasses, unionKeys, unionTypes, e.failOnUnknownProperties());
+		return new ObjectMeta(e, sealedInterface.getCanonicalName(), subclasses, unionKeys, unionTypes, e.failOnUnknownProperties());
 	}
 
 	static Object end(final MetaPool s, final Object context, final Class<?> baseType, final Class<?>[] permitted, final FastKeyTable keys, final Class<?>[] unionTypes) throws Throwable {
 		if(null == permitted) throw new IllegalStateException("permitted=null");
-		final var unionCtx  = (MetaPool.CtxArrays) context;
-		final var unionObj  = unionCtx.objects();
-		final var unionPrim = unionCtx.primitives();
+		final var unionCtx  = (MetaPool.ParseContext) context;
+		final var unionObj  = unionCtx.objs;
+		final var unionPrim = unionCtx.prims;
 		var className = (String) unionObj[0];
 		if (className == null) { final var enumIdx = keys.get(ENUM_KEY); if (enumIdx >= 0) className = (String) unionObj[enumIdx]; }
 		final var targetClass = resolvePermittedSubclass(baseType, permitted, className);
 		final var engine      = s.engine();
 		final var targetMeta  = engine.metaOf(targetClass);
-		final var targetCtx  = s.takeCtxArrays(targetMeta.components.length);
-		final var targetObj  = targetCtx.objects();
-		final var targetPrim = targetCtx.primitives();
+		final var targetCtx   = s.takeContext(targetMeta.components.length);
+		final var targetObj   = targetCtx.objs;
+		final var targetPrim  = targetCtx.prims;
+
 		for (var i = 0; i < targetMeta.components.length; i++) {
 			final var comp = targetMeta.components[i];
 			final var unionIdx = keys.get(comp.name());
 			if (unionIdx < 0) continue;
 			final var uType = unionTypes[unionIdx];
+
 			if (uType.isPrimitive()) {
 				targetPrim[i] = unionPrim[unionIdx];
 			} else {
@@ -139,20 +140,11 @@ final class SealedUnionMapper {
 			}
 		}
 
-		final Object result;
-		if (targetMeta.factory != null) {
-			result = targetMeta.factory.create(targetObj, targetPrim);
-			if (targetMeta.pojoSetters != null) {
-				for (var i = targetMeta.ctorParamCount; i < targetMeta.pojoSetters.length; i++) {
-					if (targetObj[i] != null && targetMeta.pojoSetters[i] != null) targetMeta.pojoSetters[i].objSetter.accept(result, targetObj[i]);
-				}
-			}
-		} else {
-			result = targetMeta.pojoStart.get();
-			for (var i = 0; i < targetObj.length; i++) if (targetObj[i] != null && targetMeta.pojoSetters[i] != null) targetMeta.pojoSetters[i].objSetter.accept(result, targetObj[i]);
-		}
-		s.returnCtxArrays(targetCtx);
-		s.returnCtxArrays(unionCtx);
+		// MAXIMALE VEREINFACHUNG: Die Factory erledigt nun Instanziierung UND Setter!
+		final var result = targetMeta.factory.create(targetObj, targetPrim);
+
+		s.returnContext(targetCtx);
+		s.returnContext(unionCtx);
 		return result;
 	}
 
@@ -179,6 +171,7 @@ final class SealedUnionMapper {
 
 	static final class CTX {
 		Object[]   raw;
+		long[]     prims;
 		ObjectMeta meta;
 		Object     context;
 		int        idx;
@@ -187,8 +180,9 @@ final class SealedUnionMapper {
 		Class<?>   compType;
 		int        parentTargetIdx;
 
-		void seti(final Object[] raw, final ObjectMeta meta, final Object context, final Class<?> compType, final int parentTargetIdx) {
+		void seti(final Object[] raw, final long[] prims, final ObjectMeta meta, final Object context, final Class<?> compType, final int parentTargetIdx) {
 			this.raw             = raw             ;
+			this.prims           = prims           ;
 			this.meta            = meta            ;
 			this.context         = context         ;
 			this.idx             = 0               ;
@@ -198,7 +192,7 @@ final class SealedUnionMapper {
 			this.parentTargetIdx = parentTargetIdx ;
 		}
 
-		void clear() { raw = null; meta = null; context = null; compType = null; }
+		void clear() { raw = null; prims = null; meta = null; context = null; compType = null; }
 	}
 
 	static final class CtxStack {
@@ -214,10 +208,10 @@ final class SealedUnionMapper {
 		}
 		CtxStack init() { depth = -1; return this; }
 
-		void push(final Object[] raw, final ObjectMeta meta, final Object context, final Class<?> compType, final int parentTargetIdx) {
+		void push(final Object[] raw, final long[] prims, final ObjectMeta meta, final Object context, final Class<?> compType, final int parentTargetIdx) {
 			depth++;
 			ensureCapacity(depth);
-			stack[depth].seti(raw, meta, context, compType, parentTargetIdx);
+			stack[depth].seti(raw, prims, meta, context, compType, parentTargetIdx);
 		}
 	}
 
@@ -231,13 +225,14 @@ final class SealedUnionMapper {
 		try {
 			if (rootVal instanceof final CompactMap<?, ?> m) {
 				final var raw = m.getRawData();
+				final var prims = m.prims;
 				final var meta = getMeta(engine, raw, rootExpected);
 				if (meta == null || meta == ObjectMeta.GENERIC_MAP || meta == ObjectMeta.NULL) return rootVal;
-				stack.push(raw, meta, meta.start(s), null, -1);
+				stack.push(raw, prims, meta, meta.start(s), null, -1);
 			} else if (rootVal instanceof final CompactList<?> l) {
 				final var raw = l.getRawData();
 				final var context = Array.newInstance(rootExpected.componentType(), raw.length);
-				stack.push(raw, null, context, rootExpected.componentType(), -1);
+				stack.push(raw, null, null, context, rootExpected.componentType(), -1);
 			}
 			while (stack.depth >= 0) {
 				final var c = stack.stack[stack.depth];
@@ -247,15 +242,16 @@ final class SealedUnionMapper {
 						final var currentIdx = c.idx++;
 						if (val instanceof final CompactMap<?, ?> m && c.compType != Object.class && c.compType != java.util.Map.class) {
 							final var childRaw = m.getRawData();
+							final var childPrims = m.prims;
 							final var childMeta = getMeta(engine, childRaw, c.compType);
 							if (childMeta == null || childMeta == ObjectMeta.GENERIC_MAP || childMeta == ObjectMeta.NULL) {
-								java.lang.reflect.Array.set(c.context, currentIdx, m);
+								Array.set(c.context, currentIdx, m);
 							} else {
-								stack.push(childRaw, childMeta, childMeta.start(s), null, currentIdx);
+								stack.push(childRaw, childPrims, childMeta, childMeta.start(s), null, currentIdx);
 							}
 						} else if (val instanceof final CompactList<?> l && c.compType.isArray()) {
 							final var childRaw = l.getRawData();
-							stack.push(childRaw, null, Array.newInstance(c.compType.componentType(), childRaw.length), c.compType.componentType(), currentIdx);
+							stack.push(childRaw, null, null, Array.newInstance(c.compType.componentType(), childRaw.length), c.compType.componentType(), currentIdx);
 						} else {
 							Array.set(c.context, currentIdx, coercePrimitive(val, c.compType));
 						}
@@ -273,24 +269,31 @@ final class SealedUnionMapper {
 					var pushed = false;
 					while (c.idx < c.len) {
 						final var key = (String) c.raw[c.idx];
-						final var val = c.raw[c.idx + 1];
+						var val = c.raw[c.idx + 1];
+
+						// LAZY PRIMITIVES AUFLÖSEN
+						if (val == CompactMap.PRIMITIVE.LONG)        val = c.prims[(c.idx + 1) >> 1];
+						else if (val == CompactMap.PRIMITIVE.DOUBLE) val = Double.longBitsToDouble(c.prims[(c.idx + 1) >> 1]);
+
 						c.idx += 2;
+
 						if (CLASS_KEY.equals(key)) continue;
 						final var targetIdx = c.meta.prepareKey(c.context, key);
 						if (targetIdx >= 0) {
 							final Class<?> expectedType = c.meta.type(targetIdx);
 							if (val instanceof final CompactMap<?, ?> m && expectedType != Object.class && expectedType != java.util.Map.class) {
 								final var childRaw = m.getRawData();
+								final var childPrims = m.prims;
 								final var childMeta = getMeta(engine, childRaw, expectedType);
 								if ((childMeta != null) && (childMeta != ObjectMeta.GENERIC_MAP) && (childMeta != ObjectMeta.NULL)) {
-									stack.push(childRaw, childMeta, childMeta.start(s), null, targetIdx);
+									stack.push(childRaw, childPrims, childMeta, childMeta.start(s), null, targetIdx);
 									pushed = true;
 									break;
 								}
 								c.meta.set(s, c.context, targetIdx, val);
 							} else if (val instanceof final CompactList<?> l && expectedType.isArray()) {
 								final var childRaw = l.getRawData();
-								stack.push(childRaw, null, Array.newInstance(expectedType.componentType(), childRaw.length), expectedType.componentType(), targetIdx);
+								stack.push(childRaw, null, null, Array.newInstance(expectedType.componentType(), childRaw.length), expectedType.componentType(), targetIdx);
 								pushed = true;
 								break;
 							} else {
@@ -326,5 +329,4 @@ final class SealedUnionMapper {
 		}
 		return val;
 	}
-
 }

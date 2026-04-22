@@ -1,17 +1,18 @@
 package org.suche.json;
 
-import org.suche.json.ObjectMeta.ArrayBuilder;
-
 interface MetaPool {
-	record CtxArrays(Object[] objects, long[] primitives) {}
+	static final class ParseContext {
+		Object[] objs;
+		long[]   prims;
+		int      cnt;
+		String   currentKey;
+	}
 
 	Object[]     takeArray(int minCapacity);
-	ArrayBuilder takeBuilder();
-	CtxArrays    takeCtxArrays(int size);
+	ParseContext takeContext(int minCapacity);
 
 	void         returnArray(Object[] arr);
-	void         returnBuilder(ArrayBuilder b);
-	void         returnCtxArrays(CtxArrays c);
+	void         returnContext(ParseContext ctx);
 
 	Object deduplicate(final Object value);
 

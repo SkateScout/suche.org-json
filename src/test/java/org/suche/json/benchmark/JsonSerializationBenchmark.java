@@ -21,6 +21,7 @@ import org.suche.json.MetaConfig;
 
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.alibaba.fastjson2.JSON;
 
 @State(Scope.Benchmark)
 @BenchmarkMode(Mode.Throughput)
@@ -62,16 +63,22 @@ public class JsonSerializationBenchmark {
 	}
 
 	@Benchmark
-	public void benchmarkMyEngine(final Blackhole bh) throws Exception {
-		myOs.reset();
-		try (var s = myEngine.jsonOutputStream(myOs)) { s.writeObject(testData); }
-		bh.consume(myOs.size());
-	}
-
-	@Benchmark
 	public void benchmarkJackson(final Blackhole bh) throws Exception {
 		jacksonOs.reset();
 		jacksonMapper.writeValue(jacksonOs, testData);
 		bh.consume(jacksonOs.size());
+	}
+
+	@Benchmark
+	public void benchmarkFastjson2(final Blackhole bh) {
+		final byte[] bytes = JSON.toJSONBytes(testData);
+		bh.consume(bytes);
+	}
+
+	@Benchmark
+	public void benchmarkMyEngine(final Blackhole bh) throws Exception {
+		myOs.reset();
+		try (var s = myEngine.jsonOutputStream(myOs)) { s.writeObject(testData); }
+		bh.consume(myOs.size());
 	}
 }

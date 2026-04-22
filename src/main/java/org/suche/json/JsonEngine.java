@@ -112,7 +112,7 @@ final class EngineImpl implements InternalEngine {
 
 	@Override public JsonInputStream jsonInputStream(final InputStream is) { return JsonInputStream.of(is, this); }
 	@Override public MetaConfig      config         () { return cfg; }
-	@Override public MethodHandle    getFilter(final Class<?> c) { return filterCache.computeIfAbsent(c, k->Meta.newFilter(c)); }
+	@Override public MethodHandle    getFilter(final Class<?> c) { return filterCache.computeIfAbsent(c, Meta::newFilter); }
 
 	private ObjectMeta createMeta(final Class<?> c) {
 		if (c.isPrimitive() || c.isArray()) return ObjectMeta.NULL;
@@ -161,7 +161,7 @@ final class EngineImpl implements InternalEngine {
 	private static boolean skipClass(final String cls) { return (cls.startsWith("java.") || cls.startsWith("javax.") || cls.startsWith("jdk.") || cls.startsWith("sun.")); }
 
 	@Override
-	@SuppressWarnings("unchecked") public KeyValueObject[] ofComplex( final Class<?> c) {
+	public KeyValueObject[] ofComplex( final Class<?> c) {
 		if(kvCache.get(c) instanceof final KeyValueObject[] r) return r == KeyValueObject.NULL ? null : r;
 		if (c.getClassLoader() == null || skipClass(c.getName())) { kvCache.put(c, KeyValueObject.NULL); return null; }
 		final var emitClass = cfg.emitClassName();

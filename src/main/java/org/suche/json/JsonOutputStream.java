@@ -122,7 +122,6 @@ public final class JsonOutputStream implements AutoCloseable {
 
 	public enum Flags { printNull, printFalse, printEmpty, printOneFractional, printThreeFractional }
 
-	private int          depth      = -1;
 	private static final byte[] DIGITS = new byte[200];
 	static {
 		var c0 = (byte)'0';
@@ -142,7 +141,6 @@ public final class JsonOutputStream implements AutoCloseable {
 		this.engine             = engine;
 		this.out                = out;
 		this.pos                = 0;
-		this.depth              = -1;
 		this.timeFormat         = timeFormat==null ? TimeFormatDefault.EPOCH_MILLIS : timeFormat;
 		this.stack              = STACK_POOL.acquire();
 		this.stack.depth        = -1;
@@ -167,25 +165,25 @@ public final class JsonOutputStream implements AutoCloseable {
 
 	void init(final InternalEngine engine, final OutputStream out, final TimeFormat timeFormat, final Flags... flags) {
 		init0(engine, out, timeFormat);
-		var skipNull  = true;
-		var skipFalse = true;
-		var skipEmpty = true;
+		var preSkipNull  = true;
+		var preSkipFalse = true;
+		var preSkipEmpty = true;
 		var frac = 6;
 		if(null!=flags)for(final var f:flags) switch(f) {
-		case printNull            -> skipNull  = false;
-		case printEmpty           -> skipEmpty = false;
-		case printFalse           -> skipFalse = false;
+		case printNull            -> preSkipNull  = false;
+		case printEmpty           -> preSkipEmpty = false;
+		case printFalse           -> preSkipFalse = false;
 		case printOneFractional   -> frac      = 1;
 		case printThreeFractional -> frac      = 3;
 		}
-		this.skipNull        = skipNull ;
-		this.skipFalse       = skipFalse;
-		this.skipEmpty       = skipEmpty;
+		this.skipNull        = preSkipNull ;
+		this.skipFalse       = preSkipFalse;
+		this.skipEmpty       = preSkipEmpty;
 		this.fractionalLimit = frac;
 	}
 
-	private void init(final InternalEngine engine, final OutputStream out, final TimeFormat timeFormat, final int flags) {
-		init0(engine, out, timeFormat);
+	private void init(final InternalEngine e, final OutputStream out, final TimeFormat timeFormat, final int flags) {
+		init0(e, out, timeFormat);
 		var frac = 6;
 		this.skipNull  = (flags & PRINT_NULL)  == 0;
 		this.skipFalse = (flags & PRINT_FALSE) == 0;
@@ -395,7 +393,9 @@ public final class JsonOutputStream implements AutoCloseable {
 		return null;
 	}
 
-	void write(final byte   b) throws IOException { if (pos == buffer.length) flushBuffer(); buffer[pos++] = b;  }
+	void write(final byte   b) throws IOException {
+		if (pos == buffer.length) flushBuffer(); buffer[pos++] = b;
+	}
 
 	private void mayFlush(final int require) throws IOException {
 		if (pos > 0 && pos + require > buffer.length) flushBuffer();
@@ -403,9 +403,21 @@ public final class JsonOutputStream implements AutoCloseable {
 
 	private void flushBuffer       () throws IOException { if (pos > 0) { out.write(buffer, 0, pos); pos = 0; } }
 
-	private Void writeBaseAscii    (final String s, final int start, final int end) throws IOException { for (var i = start; i < end; i++) write((byte) s.charAt(i)); return null; }
-	private Void writeBaseAscii    (final char[] c, final int start, final int end) throws IOException { for (var i = start; i < end; i++) write((byte) c[i]       ); return null; }
-	private Void writeBaseAscii    (final String s) throws IOException { final var l = s.length(); for (var i = 0; i < l; i++) write((byte) s.charAt(i)); return null; }
+	private Void writeBaseAscii    (final String s, final int start, final int end) throws IOException {
+		for (var i = start; i < end; i++) write((byte) s.charAt(i));
+		return null;
+	}
+
+	private Void writeBaseAscii    (final char[] c, final int start, final int end) throws IOException {
+		for (var i = start; i < end; i++) write((byte) c[i]       );
+		return null;
+	}
+
+	private Void writeBaseAscii    (final String s) throws IOException {
+		final var l = s.length();
+		for (var i = 0; i < l; i++) write((byte) s.charAt(i));
+		return null;
+	}
 
 	private void writeBoolean(final boolean b) throws IOException { write(b ? TRUE_BYTES : FALSE_BYTES); }
 
@@ -454,7 +466,10 @@ public final class JsonOutputStream implements AutoCloseable {
 		return len;
 	}
 
-	private int getCleanLen(final char[] c, int len, final int dotIdx) { while (len > dotIdx && (c[len - 1] == '0' || c[len - 1] == '.')) if (c[--len] == '.') break; return len; }
+	private int getCleanLen(final char[] c, int len, final int dotIdx) {
+		while (len > dotIdx && (c[len - 1] == '0' || c[len - 1] == '.')) if (c[--len] == '.') break;
+		return len;
+	}
 
 	private Void writeDouble(double d) throws IOException {
 		if (Double.isNaN(d) || Double.isInfinite(d)) return write(NULL_BYTES);
@@ -628,7 +643,6 @@ public final class JsonOutputStream implements AutoCloseable {
 		return ret;
 	}
 
-	@SuppressWarnings("unchecked")
 	private void handleValue(final Object val) throws IOException {
 		if(null == val) { write(NULL_BYTES); return; }
 		if(handleSimple(val)) return;

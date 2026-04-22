@@ -7,11 +7,7 @@ import java.lang.invoke.MethodHandles.Lookup;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.util.function.BiConsumer;
 import java.util.function.Function;
-import java.util.function.ObjDoubleConsumer;
-import java.util.function.ObjIntConsumer;
-import java.util.function.ObjLongConsumer;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.function.ToDoubleFunction;
@@ -33,20 +29,8 @@ final class Meta {
 	private static final MethodType   MT_FUNC           = MethodType.methodType(Function.class);
 	private static final MethodType   MT_S_APPLY        = MethodType.methodType(Object.class, Object.class);
 	private static final MethodType   ENUM_MFILTER      = MethodType.methodType(Object.class, Object[].class, Object[].class);
-	private static final MethodType   MT_VOID_OBJ       = MethodType.methodType(void.class, Object.class, Object.class);
-	private static final MethodType   MT_BICONSUMER     = MethodType.methodType(BiConsumer.class);
 	private static final MethodType   MT_SUPPLIER       = MethodType.methodType(Supplier.class);
 	private static final MethodType   MT_OBJECT         = MethodType.methodType(Object.class);
-
-	private static final MethodType MT_OBJ_INT_CONS    = MethodType.methodType(ObjIntConsumer.class);
-	private static final MethodType MT_OBJ_LONG_CONS   = MethodType.methodType(ObjLongConsumer.class);
-	private static final MethodType MT_OBJ_DOUBLE_CONS = MethodType.methodType(ObjDoubleConsumer.class);
-	private static final MethodType MT_OBJ_BOOL_CONS   = MethodType.methodType(ObjBooleanConsumer.class);
-
-	private static final MethodType MT_VOID_OBJ_INT    = MethodType.methodType(void.class, Object.class, int.class);
-	private static final MethodType MT_VOID_OBJ_LONG   = MethodType.methodType(void.class, Object.class, long.class);
-	private static final MethodType MT_VOID_OBJ_DOUBLE = MethodType.methodType(void.class, Object.class, double.class);
-	private static final MethodType MT_VOID_OBJ_BOOL   = MethodType.methodType(void.class, Object.class, boolean.class);
 
 	private static final MethodHandle constructEnumObj;
 	private static final MethodHandle enumFilter;
@@ -56,7 +40,6 @@ final class Meta {
 		try {  enumFilter       = lookup.findStatic(Meta.class, "resolveEnum", MethodType.methodType(Object.class, Object[].class, Object.class)); } catch(final Throwable t) { throw new RuntimeException(t); }
 	}
 
-	@SuppressWarnings("unchecked")
 	static KeyValueObject createFastFieldGetter(final byte[] key, final Field f, final Filter filter) throws Throwable {
 		try { f.setAccessible(true); } catch (final Exception ignored) {}
 		final var handle = lookup.unreflectGetter(f);
@@ -76,7 +59,6 @@ final class Meta {
 		return new KeyValueObject(key, 0, obj -> { try { return mh.invokeExact(obj); } catch (final Throwable x) { throw new RuntimeException(x); } }, null, null, null, null);
 	}
 
-	@SuppressWarnings("unchecked")
 	static KeyValueObject createFastGetter(final byte[] key, final Method m, final Filter filter) throws Throwable {
 		try { m.setAccessible(true); } catch (final Exception ignored) {}
 		final var handle = lookup.unreflect(m);
@@ -159,55 +141,7 @@ final class Meta {
 		return null;
 	}
 
-	@SuppressWarnings("unchecked")
-	static PropSetter propSetter(final Class<?> c, final boolean isField, final String name, final MethodHandle setterHandle, final Class<?> type, final MethodHandle filter) throws Throwable {
-		final var mh = filter == null ? setterHandle : MethodHandles.filterArguments(setterHandle, 1, filter);
-		try {
-			if (!isField && filter == null) {
-				try {
-					if (type == int.class || type == short.class || type == byte.class || type == char.class) {
-						final var site = LambdaMetafactory.metafactory(lookup, "accept", MT_OBJ_INT_CONS, MT_VOID_OBJ_INT, mh, MethodType.methodType(void.class, c, type));
-						return new PropSetter(null, (ObjIntConsumer<Object>) site.getTarget().invokeExact(), null, null, null);
-					}
-					if (type == long.class) {
-						final var site = LambdaMetafactory.metafactory(lookup, "accept", MT_OBJ_LONG_CONS, MT_VOID_OBJ_LONG, mh, MethodType.methodType(void.class, c, type));
-						return new PropSetter(null, null, (ObjLongConsumer<Object>) site.getTarget().invokeExact(), null, null);
-					}
-					if (type == double.class || type == float.class) {
-						final var site = LambdaMetafactory.metafactory(lookup, "accept", MT_OBJ_DOUBLE_CONS, MT_VOID_OBJ_DOUBLE, mh, MethodType.methodType(void.class, c, type));
-						return new PropSetter(null, null, null, (ObjDoubleConsumer<Object>) site.getTarget().invokeExact(), null);
-					}
-					if (type == boolean.class) {
-						final var site = LambdaMetafactory.metafactory(lookup, "accept", MT_OBJ_BOOL_CONS, MT_VOID_OBJ_BOOL, mh, MethodType.methodType(void.class, c, type));
-						return new PropSetter(null, null, null, null, (ObjBooleanConsumer<Object>) site.getTarget().invokeExact());
-					}
-					final var site = LambdaMetafactory.metafactory(lookup, "accept", MT_BICONSUMER, MT_VOID_OBJ, mh, MethodType.methodType(void.class, c, type));
-					return new PropSetter((BiConsumer<Object, Object>) site.getTarget().invokeExact(), null, null, null, null);
-				} catch (final Throwable _) { }
-			}
-			if (type == int.class || type == short.class || type == byte.class || type == char.class) {
-				final var finalMh = mh.asType(MT_VOID_OBJ_INT);
-				return new PropSetter(null, (obj, val) -> { try { finalMh.invokeExact(obj, val); } catch (final RuntimeException | Error t) { throw t; } catch (final Throwable t) { throw new RuntimeException(t); } }, null, null, null);
-			}
-			if (type == long.class) {
-				final var finalMh = mh.asType(MT_VOID_OBJ_LONG);
-				return new PropSetter(null, null, (obj, val) -> { try { finalMh.invokeExact(obj, val); } catch (final RuntimeException | Error t) { throw t; } catch (final Throwable t) { throw new RuntimeException(t); } }, null, null);
-			}
-			if (type == double.class || type == float.class) {
-				final var finalMh = mh.asType(MT_VOID_OBJ_DOUBLE);
-				return new PropSetter(null, null, null, (obj, val) -> { try { finalMh.invokeExact(obj, val); } catch (final RuntimeException | Error t) { throw t; } catch (final Throwable t) { throw new RuntimeException(t); } }, null);
-			}
-			if (type == boolean.class) {
-				final var finalMh = mh.asType(MT_VOID_OBJ_BOOL);
-				return new PropSetter(null, null, null, null, (obj, val) -> { try { finalMh.invokeExact(obj, val); } catch (final RuntimeException | Error t) { throw t; } catch (final Throwable t) { throw new RuntimeException(t); } });
-			}
 
-			final var finalMh = mh.asType(MT_VOID_OBJ);
-			return new PropSetter((obj, val) -> { try { finalMh.invokeExact(obj, val); } catch (final RuntimeException | Error t) { throw t; } catch (final Throwable t) { throw new RuntimeException(t); } }, null, null, null, null);
-		} catch(Throwable t) { while(t.getCause() instanceof final Throwable x) t = x; System.err.println("PROP: "+name); t.printStackTrace(); throw t; }
-	}
-
-	@SuppressWarnings("unchecked")
 	static Supplier<Object> asSupplier(final Class<?> type, final MethodHandle ctorHandle) {
 		try {
 			return (Supplier<Object>) LambdaMetafactory.metafactory(lookup, "get", MT_SUPPLIER, MT_OBJECT, ctorHandle, MethodType.methodType(type)).getTarget().invokeExact();

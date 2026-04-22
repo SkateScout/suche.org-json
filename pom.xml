@@ -28,14 +28,19 @@
 		<dependency>
 			<groupId>com.fasterxml.jackson.core</groupId>
 			<artifactId>jackson-databind</artifactId>
-			<version>2.17.1</version>
+			<version>2.21.2</version>
 		</dependency>
-
 		<dependency>
 			<groupId>org.json</groupId>
 			<artifactId>json</artifactId>
 			<version>20251224</version>
 			<scope>compile</scope>
+		</dependency>
+		<dependency>
+			<groupId>com.alibaba.fastjson2</groupId>
+			<artifactId>fastjson2</artifactId>
+			<version>2.0.47</version>
+			<scope>test</scope>
 		</dependency>
 	</dependencies>
 	<build>
@@ -107,10 +112,39 @@
 					</execution>
 				</executions>
 			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-pmd-plugin</artifactId>
+				<version>3.21.2</version>
+				<executions>
+					<execution>
+						<phase>verify</phase>
+						<goals>
+							<goal>check</goal>
+						</goals>
+					</execution>
+				</executions>
+				<configuration>
+					<printFailingErrors>true</printFailingErrors>
+					<rulesets>
+						<ruleset>category/java/bestpractices.xml</ruleset>
+						<ruleset>category/java/errorprone.xml</ruleset>
+					</rulesets>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>com.github.spotbugs</groupId>
+				<artifactId>spotbugs-maven-plugin</artifactId>
+				<version>4.8.3.1</version>
+				<executions>
+					<execution>
+						<phase>verify</phase>
+						<goals>
+							<goal>check</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
 		</plugins>
 	</build>
-	<!-- 
-mvn clean package test-compile exec:exec -Dexec.executable="java"
-	-Dexec.classpathScope=test -Dexec.args="-cp %classpath org.openjdk.jmh.Main"
--->
 </project>

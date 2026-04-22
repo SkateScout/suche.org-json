@@ -5,7 +5,6 @@ import java.io.InputStream;
 import java.lang.reflect.Array;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -116,63 +115,15 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		stack.push(type, obj, meta, targetIdx, targetType);
 	}
 
-	private Object allocateArrayBuilder(final Class<?> arrayType) {
-		return Array.newInstance(arrayType.componentType(), 10);
-	}
-
-	private void pushArrayState(final Class<?> targetType) throws IOException {
-		pos++;
-		if     (targetType != null && targetType.isArray())                   pushState(TYPE_ARRAY, allocateArrayBuilder(targetType), null, 0, targetType  );
-		else if(targetType != null && Set.class.isAssignableFrom(targetType)) pushState(TYPE_COL  , new HashSet<>()                 , null, 0, Object.class);
-		else                                                                  pushState(TYPE_COL  , takeArray(10)                   , null, 0, Object.class);
-	}
 
 	Object finalResult = null;
 
-	private Object parsePrimitiveInline(final byte b, final Class<?> type) throws IOException {
-		return switch (b) {
-		case '"' -> { pos++; yield parseStringValue(); }
-		case 't' -> parseTrue();
-		case 'f' -> parseFalse();
-		case 'n' -> parseNull();
-		default  -> parseNumber(type);
-		};
-	}
-
-	@SuppressWarnings("unchecked")
-	private void applyValueToCurrentState(final Object value) throws IOException {
+	private void applyValueToCurrentState(final Object value) {
 		if (stack.depth < 0) return;
 		final var c = stack.stack[stack.depth];
-
-		switch (c.type) {
-		case TYPE_OBJECT -> {
-			if (c.targetIdx >= 0) {
-				try { ((ObjectMeta) c.meta).set(this, c.obj, c.targetIdx, value); }
-				catch (final RuntimeException e) {
-					e.printStackTrace(System.out);
-					throw e; }
-				catch (final Throwable        e) { throw new RuntimeException(e); }
-			}
-		}
-		case TYPE_COL    -> {
-			if (c.obj instanceof Object[] array) {
-				if (c.targetIdx >= array.length) {
-					final var newArray = takeArray(array.length * 2);
-					System.arraycopy(array, 0, newArray, 0, array.length);
-					returnArray(array);
-					c.obj = newArray;
-					array = newArray;
-				}
-				array[c.targetIdx] = value;
-				c.targetIdx++;
-			} else {
-				final var col = (java.util.Collection<Object>) c.obj;
-				if (col.size() >= maxCollectionSize) throw new IllegalStateException();
-				col.add(value);
-			}
-		}
-		case TYPE_ARRAY  -> appendToArrayBuilder(c, value);
-		default          -> { }
+		if (c.targetIdx >= 0 || c.type != TYPE_OBJECT) {
+			((ObjectMeta) c.meta).set(this, c.obj, c.targetIdx, value);
+			if (c.type != TYPE_OBJECT) c.targetIdx++;
 		}
 	}
 
@@ -191,28 +142,6 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		}
 	}
 
-	private Object buildFinalArray(final Object builder, final Class<?> arrayType) {
-		final var c = stack.stack[stack.depth];
-		final var finalArray = Array.newInstance(arrayType.componentType(), c.targetIdx);
-		System.arraycopy(builder, 0, finalArray, 0, c.targetIdx);
-		return finalArray;
-	}
-
-	private void appendToArrayBuilder(final CTX c, final Object value) {
-		var array = c.obj;
-		final var len = Array.getLength(array);
-
-		if (c.targetIdx == len) {
-			final var newArray = Array.newInstance(c.targetType.componentType(), len * 2);
-			System.arraycopy(array, 0, newArray, 0, len);
-			c.obj = newArray;
-			array = newArray;
-		}
-
-		Array.set(array, c.targetIdx, value);
-		c.targetIdx++;
-	}
-
 	private void consumeCommaIfPresent() throws IOException {
 		if (pos < limit && buffer[pos] == (byte) ',') { pos++; return; }
 		skipWhitespace();
@@ -228,7 +157,6 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				final var b = buffer[pos];
 				if (b == 0x20 || b == 0x09 || b == 0x0A || b == 0x0D) skipWhitespace();
 			} else skipWhitespace();
-
 			final var c = stack.stack[stack.depth];
 			final var shouldContinue = switch (c.type) {
 			case TYPE_OBJECT           -> {
@@ -239,29 +167,22 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				}
 				final var meta = (ObjectMeta) c.meta;
 				expect((byte) '"');
-				final var key = parseStringKey();
+				c.targetIdx = parseStringKeyAsIndex(c.obj, (ObjectMeta) c.meta);
 				if (pos < limit && buffer[pos] == (byte) ':') pos++;
 				else { skipWhitespace(); expect((byte) ':'); }
-				c.targetIdx = meta.prepareKey(c.obj, key);
 				if (c.targetIdx < 0) {
 					skipWhitespace();
 					skipValue();
 					consumeCommaIfPresent();
 					yield true;
 				}
-				targetType = (c.targetIdx >= 0 ? meta.type(c.targetIdx) : null);
+				targetType = meta.type(c.targetIdx);
 				yield false;
 			}
 			case TYPE_ARRAY, TYPE_COL  ->  {
 				if (peek() == (byte) ']') {
 					read();
-					if (c.type == TYPE_ARRAY) {
-						finalResult = buildFinalArray(c.obj, c.targetType);
-					} else if (c.obj instanceof final Object[] array) {
-						finalResult = new CompactList<>(Arrays.copyOf(array, c.targetIdx));
-						returnArray(array);
-					} else finalResult = c.obj;
-					popAndApply(finalResult);
+					popAndApply(((ObjectMeta) c.meta).end(this, c.obj));
 					yield true;
 				}
 				targetType = (c.type == TYPE_ARRAY ? c.targetType.componentType() : c.targetType);
@@ -269,36 +190,49 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			}
 			default                    -> throw new IllegalStateException();
 			};
-
 			if (shouldContinue) continue;
+
+
 			if (pos >= limit || buffer[pos] <= ' ') skipWhitespace();
 			if (pos >= limit) throw new IllegalStateException("Unexpected EOF");
 			final var b = buffer[pos];
 
-			if (c.type == TYPE_OBJECT && targetType != null && targetType.isPrimitive() && c.targetIdx >= 0) {
-				final var meta = (ObjectMeta) c.meta;
-				if (b == 'n') {
-					parseNull();
-					if      (targetType == boolean.class)                             meta.setBoolean(this, c.obj, c.targetIdx, false);
-					else if (targetType == double.class || targetType == float.class) meta.setDouble (this, c.obj, c.targetIdx, 0.0);
-					else                                                              meta.setLong   (this, c.obj, c.targetIdx, 0L);
-				} else if (b == 't' || b == 'f')                                      meta.setBoolean(this, c.obj, c.targetIdx, parseBooleanPrimitive());
-				else   if (b == '-' || (b >= '0' && b <= '9')) {
-					if (targetType == double.class || targetType == float.class) meta.setDouble(this, c.obj, c.targetIdx, parseDoublePrimitive());
-					else                                                         meta.setLong  (this, c.obj, c.targetIdx, parseLongPrimitive());
-				} else {
-					Object v;
-					if (b == '"') {
-						if(!engine.skipInvalid()) throw new IllegalStateException("Receive STRING instead of "+targetType.getCanonicalName()+" for "+meta.components()[c.targetIdx].name()+" in "+c.targetType.getCanonicalName());
-						pos++;
-						v = parseStringValue();
-					} else v = parsePrimitiveInline(b, targetType);
-					applyValue(v);
+			if (c.targetIdx >= 0 && c.meta instanceof final ObjectMeta meta) {
+				switch(b) {
+				case '-','0','1','2','3','4','5','6','7','8','9' -> {
+					parseNumericPrimitive(meta, c.obj, c.targetIdx, targetType);
+					if (c.type != TYPE_OBJECT) c.targetIdx++;
+					consumeCommaIfPresent();
 					continue;
-
 				}
-				consumeCommaIfPresent();
-				continue;
+				case 'n' -> {
+					parseNull();
+					if (!engine.config().skipDefaultValues()) {
+						if      (targetType == boolean.class)                             meta.setBoolean(this, c.obj, c.targetIdx, false);
+						else if (targetType == double.class || targetType == float.class) meta.setDouble (this, c.obj, c.targetIdx, 0.0);
+						else if (targetType != null && targetType.isPrimitive())          meta.setLong   (this, c.obj, c.targetIdx, 0L);
+						else                                                              meta.set       (this, c.obj, c.targetIdx, null);
+					}
+					if (c.type != TYPE_OBJECT) c.targetIdx++;
+					consumeCommaIfPresent();
+					continue;
+				}
+				case 't', 'f' -> {
+					final var val = parseBooleanPrimitive();
+					if (targetType == boolean.class) meta.setBoolean(this, c.obj, c.targetIdx, val);
+					else                             meta.set       (this, c.obj, c.targetIdx, Boolean.valueOf(val));
+					if (c.type != TYPE_OBJECT) c.targetIdx++;
+					consumeCommaIfPresent();
+					continue;
+				}
+				case '"' -> {
+					pos++;
+					meta.set(this, c.obj, c.targetIdx, parseStringValue());
+					if (c.type != TYPE_OBJECT) c.targetIdx++;
+					consumeCommaIfPresent();
+					continue;
+				}
+				}
 			}
 			switch (b) {
 			case '{' -> {
@@ -307,12 +241,25 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				final var meta = (t == Map.class) ? defaultMapMeta : metaOf(t);
 				pushState(TYPE_OBJECT, meta.start(this), meta, -1, t);
 			}
-			case '[' -> pushArrayState(targetType);
-			case '"' -> { pos++; applyValue(parseStringValue()); }
-			case 't' -> applyValue(parseTrue());
-			case 'f' -> applyValue(parseFalse());
-			case 'n' -> applyValue(parseNull());
-			default  -> applyValue(parseNumber(targetType));
+			case '[' -> {
+				if (targetType != null && targetType.isArray() && targetType.componentType().isPrimitive()) {
+					final var result = parsePrimitiveArray(targetType.componentType());
+					final var parentState = stack.stack[stack.depth];
+					((ObjectMeta) parentState.meta).set(this, parentState.obj, parentState.targetIdx, result);
+					if (parentState.type != TYPE_OBJECT) parentState.targetIdx++;
+					consumeCommaIfPresent();
+				} else {
+					pos++;
+					final var isArray  = targetType != null && targetType.isArray();
+					final var isSet    = targetType != null && Set.class.isAssignableFrom(targetType);
+					final var metaType = isArray ? ObjectMeta.TYPE_OBJ_ARRAY : (isSet ? ObjectMeta.TYPE_SET : ObjectMeta.TYPE_COLLECTION);
+					final var compType = isArray ? targetType.componentType() : (targetType != null && !isSet ? targetType : Object.class);
+					final var meta = getDynamicMeta(compType, metaType);
+
+					pushState(isArray ? TYPE_ARRAY : TYPE_COL, meta.start(this), meta, 0, compType);
+				}
+			}
+			default -> throw new IllegalStateException("Unexpected character: " + (char)b);
 			}
 		}
 		return finalResult;
@@ -338,10 +285,11 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 	@SuppressWarnings("unchecked")
 	public <T> T[] readRecords(final Class<T> targetClass) throws IOException {
 		skipWhitespace();
+		final var meta = getDynamicMeta(targetClass, ObjectMeta.TYPE_OBJ_ARRAY);
 		expect((byte) '[');
 		try {
 			return (T[]) (engine.maxRecursiveDepth() <= 0 ?
-					runStateEngine(TYPE_ARRAY, allocateArrayBuilder(targetClass), null, 0, targetClass)
+					runStateEngine(TYPE_ARRAY, meta.start(this), meta, 0, targetClass)
 					: parseArrayRecursive(targetClass, 0));
 		} catch(final IOException | RuntimeException e) { throw e;
 		} catch(final Throwable e) { throw new RuntimeException(e); }
@@ -351,7 +299,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 	public <V> Map<String, V> readMap(final Class<V> valueClass) throws IOException {
 		skipWhitespace();
 		expect((byte) '{');
-		final var meta = new ObjectMeta(valueClass);
+		final var meta = new ObjectMeta(engine, valueClass);
 		try {
 			return (Map<String, V>) (engine.maxRecursiveDepth() <= 0 ?
 					runStateEngine(TYPE_OBJECT, meta.start(this), meta, -1, valueClass)
@@ -365,9 +313,10 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 	public <T> List<T> readList(final Class<T> elementClass) throws IOException {
 		skipWhitespace();
 		expect((byte) '[');
+		final var meta = getDynamicMeta(elementClass, ObjectMeta.TYPE_COLLECTION);
 		try {
 			return (List<T>) (engine.maxRecursiveDepth() <= 0 ?
-					runStateEngine(TYPE_COL, takeArray(10), null, 0, elementClass)
+					runStateEngine(TYPE_COL, takeArray(10), meta, 0, elementClass)
 					: parseArrayRecursive(elementClass, 0));
 		} catch(final IOException | RuntimeException e) { throw e;
 		} catch(final Throwable e) { throw new RuntimeException(e); }
@@ -377,51 +326,110 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 	public <T> Set<T> readSet(final Class<T> elementClass) throws IOException {
 		skipWhitespace();
 		expect((byte) '[');
+		final var meta = getDynamicMeta(elementClass, ObjectMeta.TYPE_SET);
 		try {
 			return (Set<T>)  (engine.maxRecursiveDepth() <= 0 ?
-					runStateEngine(TYPE_COL, new HashSet<>(), null, 0, elementClass)
-					: parseCollectionRecursive(new HashSet<>(), elementClass, 0));
+					runStateEngine(TYPE_COL, meta.start(this), meta, 0, elementClass)
+					: parseArrayRecursive(elementClass, 0));
 		} catch(final IOException | RuntimeException e) { throw e;
 		} catch(final Throwable e) { throw new RuntimeException(e); }
 	}
-
 	// ========================================================================
 	// RECURSIVE FAST-PATH ENGINE (Mit Hybrid-Fallback zur State-Machine)
 	// ========================================================================
 
-	private Object parseValueRecursive(final Class<?> type, final int recursionDeep) throws Throwable {
-		skipWhitespace();
-		if (pos >= limit) throw new IllegalStateException("Unexpected EOF");
-		final var b = buffer[pos];
-
-		// --- Change to state engine parser
-		if (recursionDeep >= this.maxDepth) {
-			if (b == '{') {
-				pos++;
-				final var t = type == null ? Map.class : type;
-				final var meta = (t == Map.class) ? defaultMapMeta : metaOf(type);
-				return runStateEngine(TYPE_OBJECT, meta.start(this), meta, -1, t);
-			}
-			if (b == '[') {
-				pos++;
-				if (type != null && Set.class.isAssignableFrom(type)) {
-					return runStateEngine(TYPE_COL, new HashSet<>(), null, 0, Object.class);
+	private Object parsePrimitiveArray(final Class<?> compType) throws IOException {
+		pos++;
+		if (compType == double.class) {
+			var builder = new double[16];
+			var idx = 0;
+			while (true) {
+				skipWhitespace();
+				if (pos < limit && buffer[pos] == (byte) ']') { pos++; return java.util.Arrays.copyOf(builder, idx); }
+				if (idx == builder.length) {
+					final var newArr = new double[builder.length * 2];
+					System.arraycopy(builder, 0, newArr, 0, builder.length);
+					builder = newArr;
 				}
-				final var compType = (type != null && type.isArray()) ? type.componentType() : type;
-				final var startObj   = (type != null && type.isArray()) ? allocateArrayBuilder(type) : takeArray(10);
-				return runStateEngine((type != null && type.isArray()) ? TYPE_ARRAY : TYPE_COL, startObj, null, 0, compType);
+				builder[idx++] = parseDoublePrimitive();
+				consumeCommaIfPresent();
+			}
+		} else if (compType == int.class) {
+			var builder = new int[16];
+			var idx = 0;
+			while (true) {
+				skipWhitespace();
+				if (pos < limit && buffer[pos] == (byte) ']') { pos++; return java.util.Arrays.copyOf(builder, idx); }
+				if (idx == builder.length) {
+					final var newArr = new int[builder.length * 2];
+					System.arraycopy(builder, 0, newArr, 0, builder.length);
+					builder = newArr;
+				}
+				builder[idx++] = (int) parseLongPrimitive();
+				consumeCommaIfPresent();
+			}
+		} else if (compType == long.class) {
+			var builder = new long[16];
+			var idx = 0;
+			while (true) {
+				skipWhitespace();
+				if (pos < limit && buffer[pos] == (byte) ']') { pos++; return java.util.Arrays.copyOf(builder, idx); }
+				if (idx == builder.length) {
+					final var newArr = new long[builder.length * 2];
+					System.arraycopy(builder, 0, newArr, 0, builder.length);
+					builder = newArr;
+				}
+				builder[idx++] = parseLongPrimitive();
+				consumeCommaIfPresent();
+			}
+		} else if (compType == boolean.class) {
+			var builder = new boolean[16];
+			var idx = 0;
+			while (true) {
+				skipWhitespace();
+				if (pos < limit && buffer[pos] == (byte) ']') { pos++; return java.util.Arrays.copyOf(builder, idx); }
+				if (idx == builder.length) {
+					final var newArr = new boolean[builder.length * 2];
+					System.arraycopy(builder, 0, newArr, 0, builder.length);
+					builder = newArr;
+				}
+				builder[idx++] = parseBooleanPrimitive();
+				consumeCommaIfPresent();
+			}
+		} else if (compType == float.class) {
+			var builder = new float[16];
+			var idx = 0;
+			while (true) {
+				skipWhitespace();
+				if (pos < limit && buffer[pos] == (byte) ']') { pos++; return java.util.Arrays.copyOf(builder, idx); }
+				if (idx == builder.length) {
+					final var newArr = new float[builder.length * 2];
+					System.arraycopy(builder, 0, newArr, 0, builder.length);
+					builder = newArr;
+				}
+				builder[idx++] = (float) parseDoublePrimitive();
+				consumeCommaIfPresent();
+			}
+		} else {
+			var builder = java.lang.reflect.Array.newInstance(compType, 16);
+			var idx = 0;
+			while (true) {
+				skipWhitespace();
+				if (pos < limit && buffer[pos] == (byte) ']') {
+					pos++;
+					final var finalArray = java.lang.reflect.Array.newInstance(compType, idx);
+					System.arraycopy(builder, 0, finalArray, 0, idx);
+					return finalArray;
+				}
+				if (idx == Array.getLength(builder)) {
+					final var newArr = java.lang.reflect.Array.newInstance(compType, idx * 2);
+					System.arraycopy(builder, 0, newArr, 0, idx);
+					builder = newArr;
+				}
+				Array.set(builder, idx++, parsePrimitiveInline(buffer[pos], compType));
+				consumeCommaIfPresent();
 			}
 		}
-		switch (b) {
-		case '{': pos++; return parseRecordRecursive(metaOf(type != null ? type : Map.class), recursionDeep);
-		case '[': pos++; if (type != null && Set.class.isAssignableFrom(type))  return parseCollectionRecursive(new HashSet<>(), Object.class, recursionDeep); return parseArrayRecursive(type, recursionDeep);
-		case '"': pos++; return parseStringValue();
-		case 't': return parseTrue();
-		case 'f': return parseFalse();
-		case 'n': return parseNull();
-		default: break;
-		}
-		return parseNumber(type);
 	}
 
 	private Object parseRecordRecursive(final ObjectMeta meta, final int recursionDeep) throws Throwable {
@@ -430,111 +438,159 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			skipWhitespace();
 			if (pos < limit && buffer[pos] == (byte) '}') { pos++; return meta.end(this, context); }
 			expect((byte) '"');
-			final var key = parseStringKey();
+			final var targetIdx = parseStringKeyAsIndex(context, meta);
 			if (pos < limit && buffer[pos] == (byte) ':') pos++;
 			else { skipWhitespace(); expect((byte) ':'); }
-			final var targetIdx = meta.prepareKey(context, key);
 			if (targetIdx < 0) { skipWhitespace(); skipValue(); consumeCommaIfPresent(); continue; }
-			final var type = targetIdx >= 0 ? meta.type(targetIdx) : null;
+			final var type = meta.type(targetIdx);
 			skipWhitespace();
+			final Object value;
 			final var b = buffer[pos];
-			if (type != null && type.isPrimitive()) {
-				if (b == '"') throw new IllegalArgumentException("Type mismatch: Expected primitive number/boolean, got String at pos " + pos);
-				if (b == '{' || b == '[') throw new IllegalArgumentException("Type mismatch: Expected primitive, got Object/Array at pos " + pos);
-				if (type == int.class || type == long.class || type == short.class || type == byte.class) {
-					meta.setLong(this, context, targetIdx, parseLongPrimitive());
-				} else if (type == double.class || type == float.class) {
-					meta.setDouble(this, context, targetIdx, parseDoublePrimitive());
-				} else if (type == boolean.class) {
-					meta.setBoolean(this, context, targetIdx, parseBooleanPrimitive());
-				} else {
-					meta.set(this, context, targetIdx, parsePrimitiveInline(b, type));
+			switch (b) {
+			case '-','0','1','2','3','4','5','6','7','8','9' -> parseNumericPrimitive(meta, context, targetIdx, type);
+			case 'n' -> {
+				parseNull();
+				if (!engine.config().skipDefaultValues()) {
+					if      (type == boolean.class)                       meta.setBoolean(this, context, targetIdx, false);
+					else if (type == double.class || type == float.class) meta.setDouble (this, context, targetIdx, 0.0);
+					else if (type != null && type.isPrimitive())          meta.setLong   (this, context, targetIdx, 0L);
+					else                                                  meta.set       (this, context, targetIdx, null);
 				}
-			} else {
-
-				final Object value;
+			}
+			case 't' -> {
+				parseTruePrimitive();
+				if (type == boolean.class) meta.setBoolean(this, context, targetIdx, true);
+				else                       meta.set       (this, context, targetIdx, Boolean.TRUE);
+			}
+			case 'f' -> {
+				parseFalsePrimitive();
+				if (type == boolean.class) meta.setBoolean(this, context, targetIdx, false);
+				else                       meta.set       (this, context, targetIdx, Boolean.FALSE);
+			}
+			case '"' -> {
+				pos++;
+				meta.set(this, context, targetIdx, parseStringValue());
+			}
+			case '{' -> {
 				if (recursionDeep >= this.maxDepth) {
-					// State-Fallback
-					if (b == '{') {
-						pos++;
-						final var t = type == null ? Map.class : type;
-						final var fallbackMeta = t == Map.class ? defaultMapMeta : metaOf(t);
-						value = runStateEngine(TYPE_OBJECT, fallbackMeta.start(this), fallbackMeta, -1, t);
-					} else if (b == '[') {
-						pos++;
-						if (type != null && Set.class.isAssignableFrom(type)) {
-							value = runStateEngine(TYPE_COL, new HashSet<>(), null, 0, Object.class);
-						} else {
-							final var compType = (type != null && type.isArray()) ? type.componentType() : type;
-							final var startObj = (type != null && type.isArray()) ? allocateArrayBuilder(type) : takeArray(10);
-							value = runStateEngine((type != null && type.isArray()) ? TYPE_ARRAY : TYPE_COL, startObj, null, 0, compType);
-						}
+					pos++;
+					final var t = type == null ? Map.class : type;
+					final var fallbackMeta = t == Map.class ? defaultMapMeta : metaOf(t);
+					value = runStateEngine(TYPE_OBJECT, fallbackMeta.start(this), fallbackMeta, -1, t);
+				} else {
+					pos++;
+					value = parseRecordRecursive(type == null || type == Map.class ? defaultMapMeta : metaOf(type), recursionDeep + 1);
+				}
+				meta.set(this, context, targetIdx, value);
+			}
+			case '[' -> {
+				if (recursionDeep >= this.maxDepth) {
+					pos++;
+					if (type != null && type.isArray() && type.componentType().isPrimitive()) {
+						value = parsePrimitiveArray(type.componentType());
 					} else {
-						value = parsePrimitiveInline(b, type);
+
+						final var isArray  = type != null && type.isArray();
+						final var isSet    = type != null && Set.class.isAssignableFrom(type);
+						final var metaType = isArray ? ObjectMeta.TYPE_OBJ_ARRAY : (isSet ? ObjectMeta.TYPE_SET : ObjectMeta.TYPE_COLLECTION);
+						final var compType = isArray ? type.componentType() : (type != null && !isSet ? type : Object.class);
+						final var subMeta = getDynamicMeta(compType, metaType);
+						value = runStateEngine(isArray ? TYPE_ARRAY : TYPE_COL, subMeta.start(this), subMeta, 0, compType);
 					}
 				} else {
-					switch (b) {
-					case '{' -> { pos++; value = parseRecordRecursive(type == null || type == Map.class ? defaultMapMeta : metaOf(type), recursionDeep + 1); }
-					case '[' -> { pos++; value = (type != null && Set.class.isAssignableFrom(type)) ? parseCollectionRecursive(new HashSet<>(), Object.class, recursionDeep + 1) : parseArrayRecursive(type, recursionDeep + 1); }
-					default  -> { value = parsePrimitiveInline(b, type); }
-					}
+					pos++;
+					value = parseArrayRecursive(type, recursionDeep + 1);
 				}
-				if (targetIdx >= 0) meta.set(this, context, targetIdx, value);
+				meta.set(this, context, targetIdx, value);
+			}
+			default -> throw new IllegalStateException(); // NOT number/boolean/string/array/object
 			}
 			consumeCommaIfPresent();
 		}
+	}
+
+	private Object parsePrimitiveInline(final byte b, final Class<?> type) throws IOException {
+		return switch (b) {
+		case '"' -> { pos++; yield parseStringValue(); }
+		case 't' -> parseTrue();
+		case 'f' -> parseFalse();
+		case 'n' -> parseNull();
+		default  -> parseNumber(type);
+		};
 	}
 
 	private Object parseArrayRecursive(final Class<?> targetType, final int recursionDeep) throws Throwable {
 		final var isArray = targetType != null && targetType.isArray();
 		final var compType = isArray ? targetType.componentType() : (targetType != null ? targetType : Object.class);
-		var builder = isArray ? allocateArrayBuilder(targetType) : takeArray(10);
+		if (isArray && compType.isPrimitive()) return parsePrimitiveArray(compType);
+		final var meta = getDynamicMeta(compType, ObjectMeta.TYPE_OBJ_ARRAY);
+		final var context = meta.start(this);
 		var idx = 0;
 		while (true) {
 			skipWhitespace();
 			if (pos < limit && buffer[pos] == (byte) ']') {
 				pos++;
-				if (isArray) {
-					final var finalArray = Array.newInstance(compType, idx);
-					System.arraycopy(builder, 0, finalArray, 0, idx);
-					return finalArray;
-				}
-				final var array = (Object[]) builder;
-				final var list = new CompactList<>(java.util.Arrays.copyOf(array, idx));
-				returnArray(array);
-				return list;
+				return meta.end(this, context); // Elegante Rückgabe über Meta!
 			}
-			final var value = parseValueRecursive(compType, recursionDeep + 1);
-			if (isArray) {
-				if (idx == Array.getLength(builder)) {
-					final var newArray = Array.newInstance(compType, idx * 2);
-					System.arraycopy(builder, 0, newArray, 0, idx);
-					builder = newArray;
-				}
-				Array.set(builder, idx++, value);
-			} else {
-				var array = (Object[]) builder;
-				if (idx == array.length) {
-					final var newArray = takeArray(array.length * 2);
-					System.arraycopy(array, 0, newArray, 0, array.length);
-					returnArray(array);
-					builder = newArray;
-					array = newArray;
-				}
-				array[idx++] = value;
-			}
-			consumeCommaIfPresent();
-		}
-	}
 
-	private Object parseCollectionRecursive(final java.util.Collection<Object> builder, final Class<?> compType, final int recursionDeep) throws Throwable {
-		while (true) {
-			skipWhitespace();
-			if (pos < limit && buffer[pos] == (byte) ']') {
-				pos++;
-				return builder;
+			final var b = buffer[pos];
+			switch (b) {
+			case '-','0','1','2','3','4','5','6','7','8','9' -> parseNumericPrimitive(meta, context, idx++, compType);
+			case 'n' -> {
+				parseNull();
+				if (!engine.config().skipDefaultValues()) {
+					if      (compType == boolean.class)                             meta.setBoolean(this, context, idx, false);
+					else if (compType == double.class || compType == float.class)   meta.setDouble (this, context, idx, 0.0);
+					else if (compType != null && compType.isPrimitive())            meta.setLong   (this, context, idx, 0L);
+					else                                                            meta.set       (this, context, idx, null);
+				}
+				idx++;
 			}
-			builder.add(parseValueRecursive(compType, recursionDeep + 1));
+			case 't','f' -> {
+				final var val = parseBooleanPrimitive();
+				if (compType == boolean.class) meta.setBoolean(this, context, idx, val);
+				else                           meta.set       (this, context, idx, Boolean.valueOf(val));
+				idx++;
+			}
+			case '"' -> {
+				pos++;
+				meta.set(this, context, idx++, parseStringValue());
+			}
+			default -> {
+				final Object val;
+				if (recursionDeep >= this.maxDepth) {
+					if (b == '{') {
+						pos++;
+						final var t = compType == null ? Map.class : compType;
+						final var fallbackMeta = t == Map.class ? defaultMapMeta : metaOf(t);
+						val = runStateEngine(TYPE_OBJECT, fallbackMeta.start(this), fallbackMeta, -1, t);
+					} else if (b == '[') {
+						pos++;
+						if (compType != null && compType.isArray() && compType.componentType().isPrimitive()) {
+							val = parsePrimitiveArray(compType.componentType());
+						} else {
+							final var isSubArray = compType != null && compType.isArray();
+							final var subCompType = isSubArray ? compType.componentType() : (compType != null ? compType : Object.class);
+							final var subMeta = getDynamicMeta(subCompType, ObjectMeta.TYPE_OBJ_ARRAY);
+							val = runStateEngine(isSubArray ? TYPE_ARRAY : TYPE_COL, subMeta.start(this), subMeta, 0, subCompType);
+						}
+					} else {
+						val = parsePrimitiveInline(b, compType);
+					}
+				} else // Reguläre Rekursion
+					if (b == '{') {
+						pos++;
+						val = parseRecordRecursive(compType == null || compType == Map.class ? defaultMapMeta : metaOf(compType), recursionDeep + 1);
+					} else if (b == '[') {
+						pos++;
+						val = parseArrayRecursive(compType, recursionDeep + 1);
+					} else {
+						val = parsePrimitiveInline(b, compType);
+					}
+				meta.set(this, context, idx++, val);
+				break;
+			}
+			}
 			consumeCommaIfPresent();
 		}
 	}
