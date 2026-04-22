@@ -25,11 +25,11 @@ sealed class BufferedStream  implements MetaPool permits JsonInputStream {
 	private final Object[][]     arrayPool       = new Object[32][];
 	private int                  arrayPoolSize   = 0;
 
-	private final ParseContext[] contextPool     = new ParseContext[32];
-	private int                  contextPoolSize = 0;
+	private final ParseContext[][] ctxPools     = new ParseContext[4][32];
+	private final int[]            ctxPoolSizes = new int[4];
 
-	private final long[][]       longArrayPool     = new long[32][];
-	private int                  longArrayPoolSize = 0;
+	private final long[][]         longPool     = new long[32][];
+	private int                    longPoolSize = 0;
 
 	protected InternalEngine engine;
 	InputStream in;
@@ -86,14 +86,35 @@ sealed class BufferedStream  implements MetaPool permits JsonInputStream {
 		}
 	}
 
+	private static int getBucket(final int capacity) {
+		if (capacity <= 16)  return 0;
+		if (capacity <= 64)  return 1;
+		if (capacity <= 256) return 2;
+		return 3;
+	}
+
+	@Override public long[] takeLongArray(final int minCapacity) {
+		if (longPoolSize > 0) {
+			final var arr = longPool[--longPoolSize];
+			if (arr.length >= minCapacity) return arr;
+		}
+		return new long[Math.max(16, minCapacity)];
+	}
+
+	@Override public void returnLongArray(final long[] arr) {
+		if (arr.length > 2048) return; // Zu große Arrays dem GC überlassen
+		if (longPoolSize < longPool.length) longPool[longPoolSize++] = arr;
+	}
+
 	@Override public ParseContext takeContext(final int minCapacity) {
-		if (contextPoolSize > 0) {
-			final var ctx = contextPool[--contextPoolSize];
+		final var b = getBucket(minCapacity);
+		if (ctxPoolSizes[b] > 0) {
+			final var ctx = ctxPools[b][--ctxPoolSizes[b]];
 			if (ctx.objs == null || ctx.objs.length < minCapacity) {
 				if (ctx.objs != null) returnArray(ctx.objs);
 				if (ctx.prims != null) returnLongArray(ctx.prims);
 				ctx.objs = takeArray(minCapacity);
-				ctx.prims = takeLongArray(ctx.objs.length);
+				ctx.prims = takeLongArray(ctx.objs.length); // GC Zero!
 			}
 			ctx.cnt = 0;
 			ctx.currentKey = null;
@@ -101,33 +122,22 @@ sealed class BufferedStream  implements MetaPool permits JsonInputStream {
 		}
 		final var ctx = new ParseContext();
 		ctx.objs = takeArray(Math.max(16, minCapacity));
-		ctx.prims = takeLongArray(ctx.objs.length);
+		ctx.prims = takeLongArray(ctx.objs.length); // GC Zero!
 		return ctx;
 	}
 
-	@Override public long[] takeLongArray(final int minCapacity) {
-		if (longArrayPoolSize > 0) {
-			final var arr = longArrayPool[--longArrayPoolSize];
-			if (arr.length >= minCapacity) return arr;
-		}
-		return new long[Math.max(16, minCapacity)];
-	}
-
-	@Override public void returnLongArray(final long[] arr) {
-		if (arr.length > 1024) return;
-		if (longArrayPoolSize < longArrayPool.length) longArrayPool[longArrayPoolSize++] = arr;
-	}
-
 	@Override public void returnContext(final ParseContext ctx) {
-		if (contextPoolSize < contextPool.length) {
+		if (ctx.objs == null) return;
+		final var b = getBucket(ctx.objs.length); // Nach ECHTER Array-Länge einsortieren
+		if (ctxPoolSizes[b] < 32) {
 			if (ctx.cnt > 0) {
-				if (ctx.objs != null) Arrays.fill(ctx.objs, 0, ctx.cnt, null);
-				if (ctx.prims != null) Arrays.fill(ctx.prims, 0, ctx.cnt, 0L);
+				Arrays.fill(ctx.objs, 0, ctx.cnt, null);
+				Arrays.fill(ctx.prims, 0, ctx.cnt, 0L);
 			}
-			contextPool[contextPoolSize++] = ctx;
+			ctxPools[b][ctxPoolSizes[b]++] = ctx;
 		} else {
-			if (ctx.objs != null) returnArray(ctx.objs);
-			if (ctx.prims != null) returnLongArray(ctx.prims);
+			returnArray(ctx.objs);
+			returnLongArray(ctx.prims);
 		}
 	}
 

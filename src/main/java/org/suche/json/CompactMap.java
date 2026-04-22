@@ -102,22 +102,37 @@ public final class CompactMap<K, V> extends AbstractMap<K, V> {
 		throw new NullPointerException("Key["+key+"] unknown");
 	}
 
-	public int       getInteger(final Object key) { return (int  ) getLong(key); }
-	public short     getShort  (final Object key) { return (short) getLong(key); }
-	public byte      getByte   (final Object key) { return (byte ) getLong(key); }
-	public boolean   getBoolean(final Object key) { return (getLong(key) != 0); }
-	public char      getChar   (final Object key) { return (char ) getLong(key); }
+	public int       getInteger(final Object key) { return (int  )                        getLong(key); }
+	public short     getShort  (final Object key) { return (short)                        getLong(key); }
+	public byte      getByte   (final Object key) { return (byte )                        getLong(key); }
+	public boolean   getBoolean(final Object key) { return (                              getLong(key) != 0); }
+	public char      getChar   (final Object key) { return (char )                        getLong(key); }
 	public double    getDouble (final Object key) { return        Double.longBitsToDouble(getLong(key)); }
 	public float     getFloat  (final Object key) { return (float)Double.longBitsToDouble(getLong(key)); }
 
-	public long      optLong   (final Object key, final long    fallback) { throw new UnsupportedOperationException(); }
-	public int       optInteger(final Object key, final int     fallback) { throw new UnsupportedOperationException(); }
-	public short     optShort  (final Object key, final short   fallback) { throw new UnsupportedOperationException(); }
-	public byte      optByte   (final Object key, final byte    fallback) { throw new UnsupportedOperationException(); }
-	public boolean   optBoolean(final Object key, final boolean fallback) { throw new UnsupportedOperationException(); }
-	public char      optChar   (final Object key, final char    fallback) { throw new UnsupportedOperationException(); }
-	public double    optDouble (final Object key, final double  fallback) { throw new UnsupportedOperationException(); }
-	public float     optFloat  (final Object key, final float   fallback) { throw new UnsupportedOperationException(); }
+	public long      optLong   (final Object key, final long    fallback) {
+		for (var i = 0; i < data.length - 1; i += 2) if (key.equals(data[i])) {
+			if(data[i+1] == PRIMITIVE.LONG  ) return prims[i >> 1];
+			if(data[i+1] != PRIMITIVE.DOUBLE) return (long)Double.longBitsToDouble(prims[i >> 1]);
+		}
+		return fallback;
+	}
+
+
+
+	public int       optInteger(final Object key, final int     fallback) { return (int  ) optLong  (key, fallback); }
+	public short     optShort  (final Object key, final short   fallback) { return (short) optLong  (key, fallback); }
+	public byte      optByte   (final Object key, final byte    fallback) { return (byte ) optLong  (key, fallback); }
+	public boolean   optBoolean(final Object key, final boolean fallback) { return (       optLong  (key, fallback?1:0) != 0); }
+	public char      optChar   (final Object key, final char    fallback) { return (char ) optLong  (key, fallback); }
+	public float     optFloat  (final Object key, final float   fallback) { return (float) optDouble(key, fallback); }
+	public double    optDouble (final Object key, final double  fallback) {
+		for (var i = 0; i < data.length - 1; i += 2) if (key.equals(data[i])) {
+			if(data[i+1] == PRIMITIVE.LONG  ) return prims[i >> 1];
+			if(data[i+1] != PRIMITIVE.DOUBLE) return (long)Double.longBitsToDouble(prims[i >> 1]);
+		}
+		return fallback;
+	}
 
 	public Long      optLong   (final Object key) { throw new UnsupportedOperationException(); }
 	public Integer   optInteger(final Object key) { throw new UnsupportedOperationException(); }
