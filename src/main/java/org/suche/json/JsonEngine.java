@@ -8,11 +8,10 @@ import java.nio.charset.StandardCharsets;
 import java.util.AbstractMap;
 import java.util.Collection;
 import java.util.HashMap;
-import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.function.UnaryOperator;
 
 import org.suche.json.JsonOutputStream.Flags;
 import org.suche.json.JsonOutputStream.TimeFormat;
@@ -25,7 +24,7 @@ public sealed interface JsonEngine permits InternalEngine {
 	JsonOutputStream jsonOutputStream(final OutputStream out, final TimeFormat timeFormat, final int flags);
 	JsonOutputStream jsonOutputStream(final OutputStream out);
 
-	<C> void registerTransformer(final Class<C> c, final Function<C,Object> f);
+	<C> void registerTransformer(final Class<C> c, final UnaryOperator<Object> f);
 	void maxRecursiveDepth(int v);
 
 	void skipInvalid(final boolean v);
@@ -42,8 +41,8 @@ sealed interface InternalEngine extends JsonEngine permits EngineImpl {
 	MetaConfig       config   ();
 	MethodHandle     getFilter(final Class<?> c);
 	KeyValueObject[] ofComplex( final Class<?> c);
-	Map<Class<?>, Function<Object,Object>> transformers();
-	boolean                                hasCoreTransformer();
+	UnaryOperator<Object> transformer(Class<?> c);
+	boolean                 hasCoreTransformer();
 	int maxRecursiveDepth();
 }
 
@@ -51,15 +50,29 @@ final class EngineImpl implements InternalEngine {
 	private static final RuntimeException                       E_DEFEKT1          = new RuntimeException("DEFEKT-1", null, false, false) { };
 	private static final int                                    MOG_IGNORE         = Modifier.INTERFACE | Modifier.ABSTRACT;
 	static         final ObjectMeta                             DEFECT             = new ObjectMeta();
-	private        final Map<Class<?>, ObjectMeta      >        metaObjectCache    = new ConcurrentHashMap<>();
-	private        final Map<Class<?>, MethodHandle    >        filterCache        = new ConcurrentHashMap<>();
-	private        final Map<Class<?>, Object          >        buildLocks         = new ConcurrentHashMap<>();
-	private        final Map<Class<?>, KeyValueObject[]>        kvCache            = new ConcurrentHashMap<>();
-	private        final Map<Class<?>, Function<Object,Object>> transformers       = new ConcurrentHashMap<>();
+
+	private static class TypeRecord {
+		final Class<?>          clazz;
+		final Object            mutex  = new Object();
+		ObjectMeta              metaObject ;
+		KeyValueObject[]        kv         ;
+		MethodHandle            filter     ;
+		UnaryOperator<Object> transformer;
+		@Override public String toString() { return clazz.getCanonicalName(); }
+		public TypeRecord(final Class<?> clazz) { this.clazz = clazz; }
+	}
+
 	private              boolean                                hasCoreTransformer = false;
 	private              int                                    maxRecursiveDepth = 128;
 	private              boolean                                skipInvalid = false;
 	private              boolean                                failOnUnknownProperties = true;
+
+	private final ConcurrentHashMap<Class<?>, TypeRecord> typeRecordCache = new ConcurrentHashMap<>();
+
+	private TypeRecord getTypeRecord(final Class<?> c) {
+		return (typeRecordCache.get(c) instanceof final TypeRecord t  ? t  : typeRecordCache.computeIfAbsent(c, TypeRecord::new));
+
+	}
 
 	@Override public void maxRecursiveDepth(final int v) { this.maxRecursiveDepth = v; }
 	@Override public int maxRecursiveDepth() { return maxRecursiveDepth; }
@@ -75,21 +88,23 @@ final class EngineImpl implements InternalEngine {
 
 	final MetaConfig cfg;
 
+	void putMeta(final Class<?> c, final ObjectMeta m) { getTypeRecord(c).metaObject = m; }
+
 	public EngineImpl(final MetaConfig cfg) {
 		this.cfg = cfg;
-		metaObjectCache.put(Object       .class, ObjectMeta.GENERIC_MAP);
-		metaObjectCache.put(java.util.Map.class, ObjectMeta.GENERIC_MAP);
-		metaObjectCache.put(CompactMap   .class, ObjectMeta.GENERIC_MAP);
-		metaObjectCache.put(AbstractMap  .class, ObjectMeta.GENERIC_MAP);
-		metaObjectCache.put(String       .class, ObjectMeta.NULL);
-		metaObjectCache.put(Boolean      .class, ObjectMeta.NULL);
-		metaObjectCache.put(CompactMap   .class, ObjectMeta.NULL);
-		metaObjectCache.put(Byte         .class, ObjectMeta.NULL);
-		metaObjectCache.put(Short        .class, ObjectMeta.NULL);
-		metaObjectCache.put(Integer      .class, ObjectMeta.NULL);
-		metaObjectCache.put(Long         .class, ObjectMeta.NULL);
-		metaObjectCache.put(Float        .class, ObjectMeta.NULL);
-		metaObjectCache.put(Double       .class, ObjectMeta.NULL);
+		putMeta(Object       .class, ObjectMeta.GENERIC_MAP);
+		putMeta(java.util.Map.class, ObjectMeta.GENERIC_MAP);
+		putMeta(CompactMap   .class, ObjectMeta.GENERIC_MAP);
+		putMeta(AbstractMap  .class, ObjectMeta.GENERIC_MAP);
+		putMeta(String       .class, ObjectMeta.NULL);
+		putMeta(Boolean      .class, ObjectMeta.NULL);
+		putMeta(CompactMap   .class, ObjectMeta.NULL);
+		putMeta(Byte         .class, ObjectMeta.NULL);
+		putMeta(Short        .class, ObjectMeta.NULL);
+		putMeta(Integer      .class, ObjectMeta.NULL);
+		putMeta(Long         .class, ObjectMeta.NULL);
+		putMeta(Float        .class, ObjectMeta.NULL);
+		putMeta(Double       .class, ObjectMeta.NULL);
 	}
 
 	@Override public JsonOutputStream jsonOutputStream(final OutputStream out, final TimeFormat timeFormat, final Flags... flags)  {
@@ -102,17 +117,24 @@ final class EngineImpl implements InternalEngine {
 
 	@Override public JsonOutputStream jsonOutputStream(final OutputStream out) { return JsonOutputStream.of(this, out, null, 0); }
 
-	@Override public Map<Class<?>, Function<Object,Object>> transformers      () { return transformers      ; }
+	@Override public UnaryOperator<Object> transformer(final Class<?> c) { return getTypeRecord(c).transformer; }
 	@Override public boolean                                hasCoreTransformer() { return hasCoreTransformer; }
 
-	@Override public <C> void registerTransformer(final Class<C> c, final Function<C,Object> f) {
-		transformers.put(c, obj -> f.apply(c.cast(obj)));
+	@SuppressWarnings("unchecked")
+	@Override public <C> void registerTransformer(final Class<C> c, final UnaryOperator<Object> f) {
+		getTypeRecord(c).transformer = f;
 		if (c.getClassLoader() == null || c.isArray()) hasCoreTransformer = true;
 	}
 
 	@Override public JsonInputStream jsonInputStream(final InputStream is) { return JsonInputStream.of(is, this); }
 	@Override public MetaConfig      config         () { return cfg; }
-	@Override public MethodHandle    getFilter(final Class<?> c) { return filterCache.computeIfAbsent(c, Meta::newFilter); }
+	@Override public MethodHandle    getFilter(final Class<?> c) {
+		final var t = getTypeRecord(c);
+		var m = t.filter;
+		// TODO null sentil with some dummy MH
+		if(m == null) m = Meta.newFilter(c);
+		return m;
+	}
 
 	private ObjectMeta createMeta(final Class<?> c) {
 		if (c.isPrimitive() || c.isArray()) return ObjectMeta.NULL;
@@ -125,64 +147,84 @@ final class EngineImpl implements InternalEngine {
 			if (Modifier.isAbstract (modifiers)) System.err.println("ObjectMeta.of("+c.getCanonicalName()+") => Skip Abstract");
 			return ObjectMeta.NULL;
 		}
-
-		final var mutex = buildLocks.computeIfAbsent(c, _->new Object());
-		try {
-			synchronized (mutex) {
-				if (metaObjectCache.get(c) instanceof final ObjectMeta r) {
-					if (r == ObjectMeta.DEFECT_FIRST || r == DEFECT) throw ObjectMeta.E_DEFEKT2;
-					return r == ObjectMeta.NULL ? null : r;
-				}
-				final ObjectMeta r;
-				if     (c.isRecord()) r = ObjectMeta.ofRecord(this, c.asSubclass(Record.class));
-				else if(c.isEnum  ()) r = ObjectMeta.ofEnum  (this, c.asSubclass(Enum  .class));
-				else                  r = ObjectMeta.ofPojo  (this, c);
-				metaObjectCache.put(c, r);
-				return r;
+		final var t = getTypeRecord(c);
+		synchronized (t.mutex) {
+			if (t.metaObject instanceof final ObjectMeta r) {
+				if (r == ObjectMeta.DEFECT_FIRST || r == DEFECT) throw ObjectMeta.E_DEFEKT2;
+				return r == ObjectMeta.NULL ? null : r;
 			}
-		} finally { buildLocks.remove(c, mutex);
+			final ObjectMeta r;
+			if     (c.isRecord()) r = ObjectMeta.ofRecord(this, c.asSubclass(Record.class));
+			else if(c.isEnum  ()) r = ObjectMeta.ofEnum  (this, c.asSubclass(Enum  .class));
+			else                  r = ObjectMeta.ofPojo  (this, c);
+			// Java Language Specification (JLS §17.5) - Safe Publication => volatile not required
+			/*
+		     + --- DIE MAGISCHE BARRIER ---
+             + Exakt das, was die JVM am Ende eines final-Konstruktors macht!
+             + Zwingt die CPU, die Inhalte von 'temp' in den Speicher zu flushen.
+             + > VarHandle.storeStoreFence(); // oder VarHandle.releaseFence();
+             + 2. Publikation (Store)
+             + Wegen der Fence davor, ist garantiert, dass jeder Thread,
+             + der isReady == true sieht, auch zwingend "A" und "B" im Array sieht.
+             + > this.isReady = true;
+			 */
+			t.metaObject = r;
+			return r;
 		}
 	}
 
 	@Override public ObjectMeta metaOf(final Class<?> clazz) {
 		if (clazz == null) return null;
-		if (metaObjectCache.get(clazz) instanceof final ObjectMeta r) {
+		final var t = getTypeRecord(clazz);
+		if (t.metaObject instanceof final ObjectMeta r) {
 			if (r == ObjectMeta.DEFECT) throw E_DEFEKT1;
-			if (r == ObjectMeta.DEFECT_FIRST) { metaObjectCache.put(clazz, ObjectMeta.DEFECT); throw new IllegalArgumentException("Clazz: " + clazz.getCanonicalName()); }
+			if (r == ObjectMeta.DEFECT_FIRST) { t.metaObject = ObjectMeta.DEFECT; throw new IllegalArgumentException("Clazz: " + clazz.getCanonicalName()); }
 			return r == ObjectMeta.NULL ? null : r;
 		}
-		final var r = createMeta(clazz);
-		if (r == ObjectMeta.NULL || r == null) { metaObjectCache.putIfAbsent(clazz, ObjectMeta.NULL); return null; }
-		if (r == ObjectMeta.DEFECT_FIRST)  { metaObjectCache.put(clazz, ObjectMeta.DEFECT); throw new IllegalArgumentException("Clazz: " + clazz.getCanonicalName()); }
-		metaObjectCache.putIfAbsent(clazz, r);
-		return r;
+		synchronized (t.mutex) {
+			if (t.metaObject instanceof final ObjectMeta r) {
+				if (r == ObjectMeta.DEFECT_FIRST || r == DEFECT) throw ObjectMeta.E_DEFEKT2;
+				return r == ObjectMeta.NULL ? null : r;
+			}
+			final var r = createMeta(clazz);
+			if (r == ObjectMeta.NULL || r == null) { t.metaObject = ObjectMeta.NULL; return null; }
+			if (r == ObjectMeta.DEFECT_FIRST)  { t.metaObject = ObjectMeta.DEFECT; throw new IllegalArgumentException("Clazz: " + clazz.getCanonicalName()); }
+			t.metaObject =r;
+			return r;
+		}
 	}
 
 	private static boolean skipClass(final String cls) { return (cls.startsWith("java.") || cls.startsWith("javax.") || cls.startsWith("jdk.") || cls.startsWith("sun.")); }
 
 	@Override
 	public KeyValueObject[] ofComplex( final Class<?> c) {
-		if(kvCache.get(c) instanceof final KeyValueObject[] r) return r == KeyValueObject.NULL ? null : r;
-		if (c.getClassLoader() == null || skipClass(c.getName())) { kvCache.put(c, KeyValueObject.NULL); return null; }
-		final var emitClass = cfg.emitClassName();
-		KeyValueObject[] rp = null;
-		if(Record.class.isAssignableFrom(c))            rp =  KeyValueObject.ofRecord(c.asSubclass(Record.class), cfg);
-		else for(final var p : AUTO_POJO) if(p.test(c)) rp =  KeyValueObject.registerComplex(c, cfg);
-		if(rp == null) {
-			final var once = new HashMap<>();
-			for(final var e : kvCache.entrySet()) if(e.getKey().isAssignableFrom(c)) for(final var fld : e.getValue()) once.put(new String(fld.jsonKeyBytes(), StandardCharsets.UTF_8), fld);
-			if(once.isEmpty() && !emitClass) { kvCache.put(c, KeyValueObject.NULL); return null; }
-			rp = once.values().toArray(KeyValueObject.NULL);
+		final var t = getTypeRecord(c);
+
+		if(t.kv instanceof final KeyValueObject[] r) return r == KeyValueObject.NULL ? null : r;
+		if (c.getClassLoader() == null || skipClass(c.getName())) { t.kv =KeyValueObject.NULL; return null; }
+		synchronized (t.mutex) {
+			final var emitClass = cfg.emitClassName();
+			KeyValueObject[] rp = null;
+			if(Record.class.isAssignableFrom(c))            rp =  KeyValueObject.ofRecord(c.asSubclass(Record.class), cfg);
+			else for(final var p : AUTO_POJO) if(p.test(c)) rp =  KeyValueObject.registerComplex(c, cfg);
+			if(rp == null) {
+				final var once = new HashMap<>();
+				for(final var e : typeRecordCache.entrySet()) if(e.getKey().isAssignableFrom(c))
+					for(final var fld : e.getValue().kv) once.put(new String(fld.jsonKeyBytes(), StandardCharsets.UTF_8), fld);
+				if(once.isEmpty() && !emitClass) { t.kv = KeyValueObject.NULL; return null; }
+				rp = once.values().toArray(KeyValueObject.NULL);
+			}
+			if (rp.length == 0 && !emitClass) throw new IllegalArgumentException("Class "+c.getCanonicalName()+" without getter or fields");
+			if(cfg.emitClassName()) {
+				final var className = c.getSimpleName();
+				final var re = new KeyValueObject[rp.length + 1];
+				re[0] = new KeyValueObject(KeyValueObject.CLASS_NAME, 0, _ -> className, null, null, null, null);
+				System.arraycopy(rp, 0, re, 1, rp.length);
+				rp = re;
+			}
+			t.kv = rp;
 		}
-		if (rp.length == 0 && !emitClass) throw new IllegalArgumentException("Class "+c.getCanonicalName()+" without getter or fields");
-		if(cfg.emitClassName()) {
-			final var className = c.getSimpleName();
-			final var re = new KeyValueObject[rp.length + 1];
-			re[0] = new KeyValueObject(KeyValueObject.CLASS_NAME, 0, _ -> className, null, null, null, null);
-			System.arraycopy(rp, 0, re, 1, rp.length);
-			rp = re;
-		}
-		kvCache.put(c, rp);
-		return rp;
+		final var r = t.kv;
+		return r == KeyValueObject.NULL ? null : r;
 	}
 }

@@ -34,12 +34,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 		jvmArgsAppend = {
 				"-XX:+UnlockDiagnosticVMOptions",
 				"-XX:+LogCompilation",
-				"-XX:LogFile=jit_metafactory.log",
-				"--add-exports", "org.suche.json/org.suche.json=ALL-UNNAMED",
-				"--add-opens",   "org.suche.json/org.suche.json=ALL-UNNAMED"
-		}
-		)
+				"-XX:LogFile=jit_metafactory.log"
+		})
 public class JsonDeserializationBenchmark {
+	// 	, "--add-exports", "org.suche.json/org.suche.json=ALL-UNNAMED"
+	// 	, "--add-opens",   "org.suche.json/org.suche.json=ALL-UNNAMED"
 
 	public record CitmCatalog(
 			Map<String, Object> events,
@@ -77,6 +76,13 @@ public class JsonDeserializationBenchmark {
 			myEngine.maxRecursiveDepth(maxRecursion);
 		}
 	}
+	@Benchmark
+	public void benchmarkMyEngine(final Blackhole bh, final EngineState state) throws Exception {
+		try (var is = state.myEngine.jsonInputStream(new ByteArrayInputStream(jsonData))) {
+			final var parsedTree = is.readObject(dest);
+			bh.consume(parsedTree);
+		}
+	}
 
 	@Benchmark
 	public void benchmarkJackson(final Blackhole bh) throws Exception {
@@ -90,11 +96,4 @@ public class JsonDeserializationBenchmark {
 		bh.consume(parsedTree);
 	}
 
-	@Benchmark
-	public void benchmarkMyEngine(final Blackhole bh, final EngineState state) throws Exception {
-		try (var is = state.myEngine.jsonInputStream(new ByteArrayInputStream(jsonData))) {
-			final var parsedTree = is.readObject(dest);
-			bh.consume(parsedTree);
-		}
-	}
 }

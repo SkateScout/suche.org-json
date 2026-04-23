@@ -8,7 +8,7 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Set;
 
-public final class CompactMap<K, V> extends AbstractMap<K, V> {
+public final class CompactMap<K, V> extends AbstractMap<K, V> implements ConextBacked<V> {
 	public static final class PRIMITIVE extends Number {
 		private static final long serialVersionUID = 1L;
 		private PRIMITIVE() { }
@@ -21,15 +21,22 @@ public final class CompactMap<K, V> extends AbstractMap<K, V> {
 		@Override public double doubleValue() { throw new UnsupportedOperationException("Unresolved lazy primitive"); }
 	}
 
+	@Override public Object rawValueAt(final int logicalIdx) { return data[(logicalIdx << 1) + 1]; }
+	@Override public long  [] prims     () { return prims     ; }
+	@Override public byte     singleType() { return singleType; }
+
+
 	private final Object[] data;
-	final long[]   prims;
+	private final long[]   prims;
+	private final byte     singleType;
 	private Set<Map.Entry<K, V>> entrySet;
 
 	Object[] getRawData() { return data; }
 
-	CompactMap(final Object[] data, final long[] prims) {
-		this.data = data;
-		this.prims = prims;
+	CompactMap(final byte singleType, final Object[] data, final long[] prims) {
+		this.singleType = singleType;
+		this.data       = data;
+		this.prims      = prims;
 	}
 
 	@Override public int size() { return data.length >> 1; }
@@ -49,7 +56,7 @@ public final class CompactMap<K, V> extends AbstractMap<K, V> {
 	}
 
 	@Override public boolean containsKey(final Object key) {
-		for (var i = 0; i < data.length; i += 2) if (key.equals(data[i])) return true;
+		for (var i = 0; i < data.length; i += 2) if (key == data[i] || key.equals(data[i])) return true;
 		return false;
 	}
 
@@ -101,53 +108,35 @@ public final class CompactMap<K, V> extends AbstractMap<K, V> {
 		return Arrays.deepEquals(data, other.data) && Arrays.equals(prims, other.prims);
 	}
 
-
-
-	public long      getLong   (final Object key) {
-		for (var i = 0; i < data.length - 1; i += 2) if (key.equals(data[i])) {
-			if(data[i+1] == PRIMITIVE.LONG  ) return prims[i >> 1];
-			if(data[i+1] != PRIMITIVE.DOUBLE) return (long)Double.longBitsToDouble(prims[i >> 1]);
-			throw new NullPointerException("Key["+key+"] nonPrimitive");
-		}
-		throw new NullPointerException("Key["+key+"] unknown");
+	public int idx(final Object key) {
+		for (var i = 0; i < data.length - 1; i += 2) if (key == data[i] || key.equals(data[i])) return(i >> 1);
+		return -1;
 	}
 
-	public int       getInteger(final Object key) { return (int  )                        getLong(key); }
-	public short     getShort  (final Object key) { return (short)                        getLong(key); }
-	public byte      getByte   (final Object key) { return (byte )                        getLong(key); }
-	public boolean   getBoolean(final Object key) { return (                              getLong(key) != 0); }
-	public char      getChar   (final Object key) { return (char )                        getLong(key); }
-	public double    getDouble (final Object key) { return        Double.longBitsToDouble(getLong(key)); }
-	public float     getFloat  (final Object key) { return (float)Double.longBitsToDouble(getLong(key)); }
+	public long      getLong   (final Object key) { return getLong   (idx(key)); }
+	public int       getInteger(final Object key) { return getInteger(idx(key)); }
+	public short     getShort  (final Object key) { return getShort  (idx(key)); }
+	public byte      getByte   (final Object key) { return getByte   (idx(key)); }
+	public boolean   getBoolean(final Object key) { return getBoolean(idx(key)); }
+	public char      getChar   (final Object key) { return getChar   (idx(key)); }
+	public double    getDouble (final Object key) { return getDouble (idx(key)); }
+	public float     getFloat  (final Object key) { return getFloat  (idx(key)); }
 
-	public long      optLong   (final Object key, final long    fallback) {
-		for (var i = 0; i < data.length - 1; i += 2) if (key.equals(data[i])) {
-			if(data[i+1] == PRIMITIVE.LONG  ) return prims[i >> 1];
-			if(data[i+1] != PRIMITIVE.DOUBLE) return (long)Double.longBitsToDouble(prims[i >> 1]);
-		}
-		return fallback;
-	}
+	public long      optLong   (final Object key, final long    fallback) { return optLong   (idx(key), fallback); }
+	public int       optInteger(final Object key, final int     fallback) { return optInteger(idx(key), fallback); }
+	public short     optShort  (final Object key, final short   fallback) { return optShort  (idx(key), fallback); }
+	public byte      optByte   (final Object key, final byte    fallback) { return optByte   (idx(key), fallback); }
+	public boolean   optBoolean(final Object key, final boolean fallback) { return optBoolean(idx(key), fallback); }
+	public char      optChar   (final Object key, final char    fallback) { return optChar   (idx(key), fallback); }
+	public double    optDouble (final Object key, final float   fallback) { return optDouble (idx(key), fallback); }
+	public float     optFloat  (final Object key, final double  fallback) { return optFloat  (idx(key), fallback); }
 
-	public int       optInteger(final Object key, final int     fallback) { return (int  ) optLong  (key, fallback); }
-	public short     optShort  (final Object key, final short   fallback) { return (short) optLong  (key, fallback); }
-	public byte      optByte   (final Object key, final byte    fallback) { return (byte ) optLong  (key, fallback); }
-	public boolean   optBoolean(final Object key, final boolean fallback) { return (       optLong  (key, fallback?1:0) != 0); }
-	public char      optChar   (final Object key, final char    fallback) { return (char ) optLong  (key, fallback); }
-	public float     optFloat  (final Object key, final float   fallback) { return (float) optDouble(key, fallback); }
-	public double    optDouble (final Object key, final double  fallback) {
-		for (var i = 0; i < data.length - 1; i += 2) if (key.equals(data[i])) {
-			if(data[i+1] == PRIMITIVE.LONG  ) return prims[i >> 1];
-			if(data[i+1] != PRIMITIVE.DOUBLE) return (long)Double.longBitsToDouble(prims[i >> 1]);
-		}
-		return fallback;
-	}
-
-	public Long      optLong   (final Object key) { throw new UnsupportedOperationException(); }
-	public Integer   optInteger(final Object key) { throw new UnsupportedOperationException(); }
-	public Short     optShort  (final Object key) { throw new UnsupportedOperationException(); }
-	public Byte      optByte   (final Object key) { throw new UnsupportedOperationException(); }
-	public Boolean   optBoolean(final Object key) { throw new UnsupportedOperationException(); }
-	public Character optChar   (final Object key) { throw new UnsupportedOperationException(); }
-	public Double    optDouble (final Object key) { throw new UnsupportedOperationException(); }
-	public Float     optFloat  (final Object key) { throw new UnsupportedOperationException(); }
+	public Long      optLong   (final Object key) { return optLong   (idx(key)); }
+	public Integer   optInteger(final Object key) { return optInteger(idx(key)); }
+	public Short     optShort  (final Object key) { return optShort  (idx(key)); }
+	public Byte      optByte   (final Object key) { return optByte   (idx(key)); }
+	public Boolean   optBoolean(final Object key) { return optBoolean(idx(key)); }
+	public Character optChar   (final Object key) { return optChar   (idx(key)); }
+	public Double    optDouble (final Object key) { return optDouble (idx(key)); }
+	public Float     optFloat  (final Object key) { return optFloat  (idx(key)); }
 }

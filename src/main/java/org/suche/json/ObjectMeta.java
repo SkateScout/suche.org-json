@@ -12,6 +12,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.function.Supplier;
 
+import org.suche.annotation.NonNull;
 import org.suche.json.CompactMap.PRIMITIVE;
 import org.suche.json.ConstructorGenerator.ObjectArrayFactory;
 import org.suche.json.MetaPool.ParseContext;
@@ -49,6 +50,16 @@ public final class ObjectMeta {
 	final Class<?>[]   permitted     ;
 	final Object[][]   enumConstants ;
 	final boolean skipDefaultValues;
+	private final int[] lastSeenSizeByDepth = new int[64];
+
+	private int startSize(final int depth) {
+		final var size = depth < 64 && depth >= 0 ? lastSeenSizeByDepth[depth] : 16;
+		if(size <   1) return 2;
+		if(size > 512) return 512;
+		return size;
+	}
+
+	private void lastSize(final int depth, final int size) { if(depth >= 0 && depth < 64) lastSeenSizeByDepth[depth] = size; }
 
 	record ComponentMeta(String name, Class<?> type) {
 		public ComponentMeta {
@@ -312,30 +323,19 @@ public final class ObjectMeta {
 
 	private static Object typeDefault(final Class<?> t) { return (t == boolean.class ? Boolean.FALSE : (t == char.class ? '\0' : 0)); }
 
-	private static void grow(final MetaPool s, final ParseContext ctx, final int requiredCapacity) {
-		var newSize = ctx.objs.length * 2;
-		if (newSize == 0) newSize = 16;
-		while (newSize <= requiredCapacity) newSize *= 2;
-
-		final var newObjs = s.takeArray(newSize);
-		System.arraycopy(ctx.objs, 0, newObjs, 0, ctx.cnt); // Nur bis cnt kopieren!
-		s.returnArray(ctx.objs);
-		ctx.objs = newObjs;
-
-		if (ctx.prims != null) {
-			final var newPrims = s.takeLongArray(newSize);
-			System.arraycopy(ctx.prims, 0, newPrims, 0, ctx.cnt); // Nur bis cnt kopieren!
-			s.returnLongArray(ctx.prims);
-			ctx.prims = newPrims;
-		}
-	}
-
-	Object start(final MetaPool s) {
+	Object start(@NonNull final MetaPool s) {
 		return switch (metaType) {
-		case TYPE_MAP, TYPE_OBJ_ARRAY, TYPE_COLLECTION -> s.takeContext(16);
+		case TYPE_MAP, TYPE_OBJ_ARRAY, TYPE_COLLECTION -> s.takeContext(startSize(s.depth()), TYPE_MAP==metaType);
 		case TYPE_INSTANTIATOR -> {
-			final var ctx = s.takeContext(types.length);
-			ctx.cnt = types.length; // CRITICAL: Erlaubt korrektes Arrays.fill beim Zurückgeben
+			final var ctx = s.takeContext(types.length, false);
+			// objs MUSS geholt werden, da die Factory es in der Signatur erwartet
+			if (ctx.objs == null) ctx.objs = s.takeArray(types.length);
+			// prims NUR holen, wenn das POJO wirklich primitive Felder hat!
+			var needsPrims = false;
+			for (final var t : types) if (t.isPrimitive()) { needsPrims = true; break; }
+			if (needsPrims && ctx.prims == null) ctx.prims = s.takeLongArray(types.length);
+
+			ctx.cnt = types.length;
 			yield ctx;
 		}
 		case TYPE_SET -> new HashSet<>();
@@ -343,90 +343,78 @@ public final class ObjectMeta {
 		};
 	}
 
+	void primKeyValue(final Object context, final MetaPool s, final PRIMITIVE type, final long value) {
+		final var ctx = (ParseContext) context;
+		final var valIdx = (ctx.cnt >> 1);
+		if (ctx.objs == null || ctx.cnt + 1 >= ctx.objs.length)
+			ctx.ensureObjs(s, ctx.objs == null ? Math.max(16, startSize(s.depth()) << 1) : ctx.cnt + 2);
+		if (ctx.prims == null || valIdx >= ctx.prims.length) ctx.ensurePrims(s, Math.max(valIdx + 1, ctx.objs.length >> 1));
+		ctx.objs[ctx.cnt++] = ctx.currentKey;
+		ctx.objs[ctx.cnt++] = type;
+		ctx.prims[valIdx] = value;
+		ctx.currentKey = null;
+	}
+
+	void primIdxValue(final Object context, final MetaPool s, PRIMITIVE t, byte type, long value, final int index) {
+		final var ctx = (ParseContext) context;
+		if (ctx.singleType == MetaPool.T_EMPTY) ctx.singleType = type;
+		else if (ctx.singleType == MetaPool.T_LONG && type == MetaPool.T_DOUBLE) {
+			final var d = Double.longBitsToDouble(value);
+			if(d == ((long)d)) {
+				t     = PRIMITIVE.LONG;
+				type  = MetaPool.T_LONG;
+				value = (long) d;
+			} else  ctx.upgradeToDouble();
+		}
+		final var reqCap = Math.max(index + 1, startSize(s.depth()));
+		if (ctx.singleType == MetaPool.T_MIXED) {
+			ctx.ensureObjs(s, reqCap);
+			ctx.ensurePrims(s, reqCap);
+			ctx.objs [index] = t;
+			ctx.prims[index] = value;
+		} else {
+			ctx.ensurePrims(s, reqCap);
+			final var doubleToLong = (ctx.singleType == MetaPool.T_DOUBLE && type == MetaPool.T_LONG);
+			ctx.prims[index] = doubleToLong ? Double.doubleToRawLongBits(value) : value;
+		}
+		if (index >= ctx.cnt) ctx.cnt = index + 1;
+	}
+
 	@SuppressWarnings("unchecked")
 	void setLong(final MetaPool s, final Object context, final int index, final long v) {
 		if (skipDefaultValues && v == 0L) return;
-
 		switch (metaType) {
-		case TYPE_INSTANTIATOR -> ((ParseContext) context).prims[index] = v;
-		case TYPE_MAP -> {
-			final var ctx = (ParseContext) context;
-			if (ctx.cnt + 1 >= ctx.objs.length) grow(s, ctx, ctx.cnt + 1);
-			final var valIdx = ctx.cnt >> 1;
-			ctx.objs[ctx.cnt++] = ctx.currentKey;
-			ctx.objs[ctx.cnt++] = PRIMITIVE.LONG;
-			ctx.prims[valIdx] = v;
-			ctx.currentKey = null;
-		}
-		case TYPE_OBJ_ARRAY, TYPE_COLLECTION -> {
-			final var ctx = (ParseContext) context;
-			if (index >= ctx.objs.length) grow(s, ctx, index);
-			ctx.objs[index] = v;
-			if (index >= ctx.cnt) ctx.cnt = index + 1;
-		}
-		case TYPE_SET -> ((Collection<Object>) context).add(v);
-		default -> set(s, context, index, Long.valueOf(v));
+		case TYPE_INSTANTIATOR               -> ((ParseContext) context).prims[index] = v;
+		case TYPE_MAP                        -> primKeyValue(context, s, PRIMITIVE.LONG, v);
+		case TYPE_OBJ_ARRAY, TYPE_COLLECTION -> primIdxValue(context, s, PRIMITIVE.LONG, MetaPool.T_LONG, v, index);
+		case TYPE_SET                        -> ((Collection<Object>) context).add(v);
+		default                              -> set(s, context, index, Long.valueOf(v));
 		}
 	}
 
 	@SuppressWarnings("unchecked")
 	void setDouble(final MetaPool s, final Object context, final int index, final double v)  {
 		if (skipDefaultValues && v == 0.0) return;
-
 		switch (metaType) {
-		case TYPE_INSTANTIATOR -> ((ParseContext) context).prims[index] = Double.doubleToRawLongBits(v);
-		case TYPE_MAP -> {
-			final var ctx = (ParseContext) context;
-			if (ctx.cnt + 1 >= ctx.objs.length) grow(s, ctx, ctx.cnt + 1);
-			final var valIdx = ctx.cnt >> 1;
-			ctx.objs[ctx.cnt++] = ctx.currentKey;
-			ctx.objs[ctx.cnt++] = PRIMITIVE.DOUBLE;
-			ctx.prims[valIdx] = Double.doubleToRawLongBits(v);
-			ctx.currentKey = null;
-		}
-		case TYPE_OBJ_ARRAY, TYPE_COLLECTION -> {
-			final var ctx = (ParseContext) context;
-			if (index >= ctx.objs.length) grow(s, ctx, index);
-			ctx.objs[index] = v;
-			if (index >= ctx.cnt) ctx.cnt = index + 1;
-		}
-		case TYPE_SET -> ((Collection<Object>) context).add(v);
-		default -> set(s, context, index, Double.valueOf(v));
-		}
-	}
-
-	@SuppressWarnings("unchecked")
-	void setBoolean(final MetaPool s, final Object context, final int index, final boolean v) {
-		if (skipDefaultValues && !v) return;
-		switch (metaType) {
-		case TYPE_INSTANTIATOR -> ((ParseContext) context).prims[index] = v ? 1L : 0L;
-		case TYPE_MAP -> {
-			final var ctx = (ParseContext) context;
-			if (ctx.cnt + 1 >= ctx.objs.length) grow(s, ctx, ctx.cnt + 1);
-			ctx.objs[ctx.cnt++] = ctx.currentKey;
-			ctx.objs[ctx.cnt++] = v; // Singleton Reference (Zero Allocation)
-			ctx.currentKey = null;
-		}
-		case TYPE_OBJ_ARRAY, TYPE_COLLECTION -> {
-			final var ctx = (ParseContext) context;
-			if (index >= ctx.objs.length) grow(s, ctx, index);
-			ctx.objs[index] = v;
-			if (index >= ctx.cnt) ctx.cnt = index + 1;
-		}
-		case TYPE_SET -> ((Collection<Object>) context).add(v);
-		default -> set(s, context, index, Boolean.valueOf(v));
+		case TYPE_INSTANTIATOR               -> ((ParseContext) context).prims[index] = Double.doubleToRawLongBits(v);
+		case TYPE_MAP                        -> primKeyValue(context, s, PRIMITIVE.DOUBLE, Double.doubleToRawLongBits(v));
+		case TYPE_OBJ_ARRAY, TYPE_COLLECTION -> primIdxValue(context, s, PRIMITIVE.DOUBLE, MetaPool.T_DOUBLE,  Double.doubleToRawLongBits(v), index);
+		case TYPE_SET                        -> ((Collection<Object>) context).add(v);
+		default                              -> set(s,                context, index, Double.valueOf(v));
 		}
 	}
 
 	@SuppressWarnings("unchecked")
 	void set(final MetaPool s, final Object context, final int index, Object value) {
+		final var type = type(index);
+		if(type == boolean.class && value != null) {
+			setLong(s, context, index, ((Boolean)value) ? 1 : 0);
+			return;
+		}
 		if (value == null) {
-			if (skipDefaultValues) return;
-			final var type = type(index);
-			if (type.isPrimitive()) value = typeDefault(type);
+			if (skipDefaultValues || !type.isPrimitive()) return;
+			value = typeDefault(type);
 		} else if (skipDefaultValues && ((value instanceof final Number n  && n.doubleValue() == 0.0) || (value instanceof final Boolean b && !b.booleanValue()))) return;
-
-		if (value == null) return;
 
 		if (this.enumConstants != null && this.enumConstants[index] != null) value = Meta.resolveEnum(this.enumConstants[index], value);
 
@@ -434,19 +422,22 @@ public final class ObjectMeta {
 		case TYPE_INSTANTIATOR -> ((ParseContext) context).objs[index] = value;
 		case TYPE_MAP -> {
 			final var ctx = (ParseContext) context;
-			if (ctx.cnt + 1 >= ctx.objs.length) grow(s, ctx, ctx.cnt + 1);
+			final var objSize = ctx.cnt + 2;
+			if(ctx.objs == null || objSize > ctx.objs.length) ctx.ensureObjs (s, Math.max(objSize, startSize(s.depth())));
 			ctx.objs[ctx.cnt++] = ctx.currentKey;
 			ctx.objs[ctx.cnt++] = value;
 			ctx.currentKey = null;
 		}
 		case TYPE_OBJ_ARRAY, TYPE_COLLECTION -> {
 			final var ctx = (ParseContext) context;
-			if (index >= ctx.objs.length) grow(s, ctx, index);
+			final var reqCap = Math.max(index + 1, startSize(s.depth()));
+			ctx.upgradeToMixed(s, reqCap);
+			if (ctx.objs == null || index >= ctx.objs.length) ctx.ensureObjs(s, reqCap);
 			ctx.objs[index] = value;
 			if (index >= ctx.cnt) ctx.cnt = index + 1;
 		}
 		case TYPE_SET -> ((Collection<Object>) context).add(value);
-		default -> throw new IllegalArgumentException("Type: " + metaType);
+		default -> throw new IllegalArgumentException();
 		}
 	}
 
@@ -455,7 +446,6 @@ public final class ObjectMeta {
 		return switch (metaType) {
 		case TYPE_INSTANTIATOR -> {
 			final var ctx = (ParseContext) context;
-			// Dein ConstructorGenerator baut das Objekt nun komplett fertig (inkl. Setter)!
 			final var result = factory.create(ctx.objs, ctx.prims);
 			s.returnContext(ctx);
 			yield result;
@@ -463,29 +453,51 @@ public final class ObjectMeta {
 		case TYPE_MAP -> {
 			final var ctx = (ParseContext) context;
 			if (skipDefaultValues && ctx.cnt == 0) { s.returnContext(ctx); yield null; }
-			final var data = Arrays.copyOf(ctx.objs, ctx.cnt);
+			if(ctx.objs  == null) yield null; // No data -> no key -> no prims => empty => null
+			final var data  = Arrays.copyOf(ctx.objs, ctx.cnt);
 			final var prims = ctx.prims == null ? null : Arrays.copyOf(ctx.prims, ctx.cnt >> 1);
 			s.returnContext(ctx);
-			yield new CompactMap<>(data, prims);
+			yield new CompactMap<>(ctx.singleType, data, prims);
 		}
 		case TYPE_OBJ_ARRAY -> {
 			final var ctx = (ParseContext) context;
 			if (skipDefaultValues && ctx.cnt == 0) { s.returnContext(ctx); yield null; }
+			lastSize(s.depth(), ctx.cnt);
 			final var result = java.lang.reflect.Array.newInstance(types[0], ctx.cnt);
-			System.arraycopy(ctx.objs, 0, result, 0, ctx.cnt);
+			if (ctx.objs != null) {
+				System.arraycopy(ctx.objs, 0, result, 0, ctx.cnt);
+			} else if (ctx.prims != null) {
+				// Primitive Werte in Ziel-Array boxen (z.B. für Double[] vs double[])
+				if (ctx.singleType == MetaPool.T_DOUBLE) {
+					for (var i = 0; i < ctx.cnt; i++) java.lang.reflect.Array.set(result, i, Double.longBitsToDouble(ctx.prims[i]));
+				} else if (ctx.singleType == MetaPool.T_LONG) {
+					for (var i = 0; i < ctx.cnt; i++) java.lang.reflect.Array.set(result, i, ctx.prims[i]);
+				}
+			}
 			s.returnContext(ctx);
 			yield result;
 		}
 		case TYPE_COLLECTION -> {
 			final var ctx = (ParseContext) context;
 			if (skipDefaultValues && ctx.cnt == 0) { s.returnContext(ctx); yield null; }
-			final var data = Arrays.copyOf(ctx.objs, ctx.cnt);
+			lastSize(s.depth(), ctx.cnt);
+			final Object[] data;
+			final long[] primsData;
+			if (ctx.singleType == MetaPool.T_MIXED || ctx.singleType == MetaPool.T_EMPTY) {
+				data = ctx.objs == null ? new Object[0] : Arrays.copyOf(ctx.objs, ctx.cnt);
+				primsData = ctx.prims == null ? null : Arrays.copyOf(ctx.prims, ctx.cnt);
+			} else {
+				data = new Object[ctx.cnt];
+				if (ctx.singleType == MetaPool.T_LONG) Arrays.fill(data, PRIMITIVE.LONG);
+				else Arrays.fill(data, PRIMITIVE.DOUBLE);
+				primsData = Arrays.copyOf(ctx.prims, ctx.cnt);
+			}
 			s.returnContext(ctx);
-			yield new CompactList<>(data);
+			yield new CompactList<>(ctx.singleType,data, primsData);
 		}
 		case TYPE_SET -> skipDefaultValues && ((Collection<Object>) context).isEmpty() ? null : context;
 		case TYPE_SEALED -> SealedUnionMapper.end(s, context, baseType, permitted, keys, types);
-		default -> throw new IllegalArgumentException("Type: " + metaType);
+		default -> throw new IllegalArgumentException();
 		};
 	}
 }

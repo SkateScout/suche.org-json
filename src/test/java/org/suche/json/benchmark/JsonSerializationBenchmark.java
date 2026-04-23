@@ -19,9 +19,9 @@ import org.openjdk.jmh.infra.Blackhole;
 import org.suche.json.JsonEngine;
 import org.suche.json.MetaConfig;
 
+import com.alibaba.fastjson2.JSON;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.alibaba.fastjson2.JSON;
 
 @State(Scope.Benchmark)
 @BenchmarkMode(Mode.Throughput)
@@ -33,11 +33,10 @@ jvmArgsAppend = {
 		"-XX:+UnlockDiagnosticVMOptions",
 		"-XX:+LogCompilation",
 		"-XX:LogFile=jit_metafactory.log",
-		"--add-exports", "org.suche.json/org.suche.json=ALL-UNNAMED",
-		"--add-opens",   "org.suche.json/org.suche.json=ALL-UNNAMED"
-}
-		)
+})
 public class JsonSerializationBenchmark {
+	// "--add-exports", "org.suche.json/org.suche.json=ALL-UNNAMED",
+	// "--add-opens",   "org.suche.json/org.suche.json=ALL-UNNAMED"
 	private ObjectMapper jacksonMapper;
 	private JsonEngine myEngine;
 	private Object testData;
@@ -71,7 +70,7 @@ public class JsonSerializationBenchmark {
 
 	@Benchmark
 	public void benchmarkFastjson2(final Blackhole bh) {
-		final byte[] bytes = JSON.toJSONBytes(testData);
+		final var bytes = JSON.toJSONBytes(testData);
 		bh.consume(bytes);
 	}
 

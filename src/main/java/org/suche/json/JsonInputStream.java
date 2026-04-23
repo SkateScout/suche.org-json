@@ -9,29 +9,30 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.suche.json.ObjectMeta.ComponentMeta;
+
 public final class JsonInputStream extends BufferedStream implements AutoCloseable, MetaPool {
 	private static final byte TYPE_OBJECT = 1;
 	private static final byte TYPE_ARRAY  = 2;
 	private static final byte TYPE_COL    = 3;
 	private static final ObjectPool<JsonInputStream> STREAM_POOL = new ObjectPool<>(64, JsonInputStream::new);
-	private static final ObjectPool<CtxStack>        STACK_POOL  = new ObjectPool<>(64, CtxStack::new);
 
-	static final class CTX {
+	static final class CTX  {
 		byte     type;
 		Object   obj;
 		Object   meta;
 		int      targetIdx;
 		Class<?> targetType;
 
-		void set(final byte type, final Object obj, final Object meta, final int targetIdx, final Class<?> targetType) {
-			this.type       = type;
-			this.obj        = obj;
-			this.meta       = meta;
-			this.targetIdx  = targetIdx;
-			this.targetType = targetType;
+		void set(final byte pType, final Object pObj, final Object pMeta, final int pTargetIdx, final Class<?> pTargetType) {
+			this.type       = pType;
+			this.obj        = pObj;
+			this.meta       = pMeta;
+			this.targetIdx  = pTargetIdx;
+			this.targetType = pTargetType;
 		}
 
-		void clear() {
+		public void clean() {
 			this.obj        = null;
 			this.meta       = null;
 			this.targetType = null;
@@ -39,13 +40,11 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 	}
 
 	static final class CtxStack {
-		CTX[] stack;
-		int depth = -1;
+		private final CTX[] stack64 = new CTX[64];
+		CTX[] stack = stack64;
+		int   depth = -1;
 
-		CtxStack() {
-			stack = new CTX[64];
-			for (var i = 0; i < 64; i++) stack[i] = new CTX();
-		}
+		CtxStack() { for (var i = 0; i < 64; i++) stack[i] = new CTX(); }
 
 		void push(final byte type, final Object obj, final Object meta, final int targetIdx, final Class<?> targetType) {
 			if (++depth >= stack.length) {
@@ -57,70 +56,87 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		}
 
 		void clear() {
-			for (var i = 0; i <= depth; i++) stack[i].clear();
+			for (var i = 0; i <= depth; i++) stack[i].clean();
+			if (stack.length > 64) stack = stack64;
 			depth = -1;
 		}
 	}
 
 	private ObjectMeta defaultMapMeta;
-	private CtxStack stack;
+	private final CtxStack engineStack = new CtxStack();
+
+	private Class<?>   lastResolvedClass;
+	private ObjectMeta lastResolvedMeta;
+	private int        lastArraySize = 16;
 
 	private JsonInputStream() {}
 
 	static JsonInputStream of(final InputStream in, final InternalEngine engine) {
 		final var s = STREAM_POOL.acquire();
 		s.init(in, engine);
-		s.stack = STACK_POOL.acquire();
-		s.stack.depth = -1;
+		s.engineStack.depth = -1;
+		s.lastArraySize = 16;
 		s.defaultMapMeta = engine.metaOf(Map.class);
 		return s;
 	}
 
 	@Override public void close() throws IOException {
-		if (stack != null) {
-			stack.clear();
-			STACK_POOL.release(stack);
-			stack = null;
-		}
-		depth = -1;
+		engineStack.clear();
+		depth             = -1;
+		lastResolvedClass = null;
+		lastResolvedMeta  = null;
 		if (internPool != null) internPool.clear();
-		onceInternal.clear();
+		Arrays.fill(onceInternal, 0, onceInternalSize, null);
+		onceInternalSize = 0;
 		final var oldIn = this.in;
 		this.in = null;
 		STREAM_POOL.release(this);
 		if (oldIn != null) oldIn.close();
 	}
 
+	private void internalComponentKeys(final ComponentMeta[] components) {
+		for(final var e : components) {
+			final var src = e.name().getBytes(StandardCharsets.UTF_8);
+			var hash = 0;
+			var isAscii = true;
+			for (final byte b : src) {
+				hash = 31 * hash + b;
+				if(b < 0) isAscii = false;
+			}
+			internBytes(src, 0, src.length, hash, isAscii);
+		}
+	}
+
 	ObjectMeta metaOf(final Class<?> clazz) {
+		if(clazz == lastResolvedClass) return lastResolvedMeta;
+
 		if(engine.metaOf(clazz) instanceof final ObjectMeta r) {
+			this.lastResolvedClass = clazz;
+			this.lastResolvedMeta  = r;
+
 			if(r .components() == null || r.components().length == 0) return r;
-			if(onceInternal.add(r))
-				for(final var e : r.components()) {
-					final var src = e.name().getBytes(StandardCharsets.UTF_8);
-					var hash = 0;
-					var isAscii = true;
-					for (final byte b : src) {
-						hash = 31 * hash + b;
-						if(b<0) isAscii = false;
-					}
-					internBytes(src, 0, src.length, hash, isAscii);
-				}
+			final var arr  = this.onceInternal;
+			final var size = this.onceInternalSize;
+			for (var i = 0; i < size; i++) if (arr[i] == r) return r;
+			if (size < arr.length) {
+				arr[this.onceInternalSize++] = r;
+				internalComponentKeys(r.components());
+			}
 			return r;
 		}
 		throw new IllegalStateException("metaOf("+clazz.getCanonicalName()+")=null");
 	}
 
 	private void pushState(final byte type, final Object obj, final Object meta, final int targetIdx, final Class<?> targetType) {
-		if (stack.depth + 1 >= maxDepth) throw new IllegalStateException();
-		stack.push(type, obj, meta, targetIdx, targetType);
+		if (engineStack.depth + 1 >= maxDepth) throw new IllegalStateException();
+		engineStack.push(type, obj, meta, targetIdx, targetType);
 	}
-
 
 	Object finalResult = null;
 
 	private void applyValueToCurrentState(final Object value) {
-		if (stack.depth < 0) return;
-		final var c = stack.stack[stack.depth];
+		if (engineStack.depth < 0) return;
+		final var c = engineStack.stack[engineStack.depth];
 		if (c.targetIdx >= 0 || c.type != TYPE_OBJECT) {
 			((ObjectMeta) c.meta).set(this, c.obj, c.targetIdx, value);
 			if (c.type != TYPE_OBJECT) c.targetIdx++;
@@ -133,13 +149,11 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 	}
 
 	private void popAndApply(final Object result) throws IOException {
-		stack.stack[stack.depth].clear();
-		stack.depth--;
-		if (stack.depth >= 0) {
+		engineStack.stack[engineStack.depth].clean();
+		engineStack.depth--;
+		if (engineStack.depth >= 0) {
 			applyValue(result);
-		} else {
-			this.finalResult = result;
-		}
+		} else this.finalResult = result;
 	}
 
 	private void consumeCommaIfPresent() throws IOException {
@@ -152,12 +166,12 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		pushState(startType, startObj, startMeta, startIdx, startTarget);
 		Class<?> targetType = null;
 		finalResult = null;
-		while (stack.depth >= 0) {
+		while (engineStack.depth >= 0) {
 			if (pos < limit) {
 				final var b = buffer[pos];
 				if (b == 0x20 || b == 0x09 || b == 0x0A || b == 0x0D) skipWhitespace();
 			} else skipWhitespace();
-			final var c = stack.stack[stack.depth];
+			final var c = engineStack.stack[engineStack.depth];
 			final var shouldContinue = switch (c.type) {
 			case TYPE_OBJECT           -> {
 				if (peek() == (byte) '}') {
@@ -208,7 +222,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				case 'n' -> {
 					parseNull();
 					if (!engine.config().skipDefaultValues()) {
-						if      (targetType == boolean.class)                             meta.setBoolean(this, c.obj, c.targetIdx, false);
+						if      (targetType == boolean.class)                             meta.set       (this, c.obj, c.targetIdx, Boolean.FALSE);
 						else if (targetType == double.class || targetType == float.class) meta.setDouble (this, c.obj, c.targetIdx, 0.0);
 						else if (targetType != null && targetType.isPrimitive())          meta.setLong   (this, c.obj, c.targetIdx, 0L);
 						else                                                              meta.set       (this, c.obj, c.targetIdx, null);
@@ -218,9 +232,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 					continue;
 				}
 				case 't', 'f' -> {
-					final var val = parseBooleanPrimitive();
-					if (targetType == boolean.class) meta.setBoolean(this, c.obj, c.targetIdx, val);
-					else                             meta.set       (this, c.obj, c.targetIdx, Boolean.valueOf(val));
+					meta.set       (this, c.obj, c.targetIdx, parseBooleanPrimitive()); // there exists only two boolean Objects
 					if (c.type != TYPE_OBJECT) c.targetIdx++;
 					consumeCommaIfPresent();
 					continue;
@@ -248,7 +260,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 					pushState(TYPE_COL, genericCollectionMeta.start(this), genericCollectionMeta, 0, Object.class);
 				} else if (targetType.isArray() && targetType.componentType().isPrimitive()) {
 					final var result = parsePrimitiveArray(targetType.componentType());
-					final var parentState = stack.stack[stack.depth];
+					final var parentState = engineStack.stack[engineStack.depth];
 					((ObjectMeta) parentState.meta).set(this, parentState.obj, parentState.targetIdx, result);
 					if (parentState.type != TYPE_OBJECT) parentState.targetIdx++;
 					consumeCommaIfPresent();
@@ -341,98 +353,121 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 	// RECURSIVE FAST-PATH ENGINE (Mit Hybrid-Fallback zur State-Machine)
 	// ========================================================================
 
-	private Object parsePrimitiveArray(final Class<?> compType) throws IOException {
+	private double[] parseDoubleArray(double[] builder) throws IOException {
 		pos++;
-		if (compType == double.class) {
-			var builder = new double[16];
-			var idx = 0;
-			while (true) {
-				skipWhitespace();
-				if (pos < limit && buffer[pos] == (byte) ']') { pos++; return java.util.Arrays.copyOf(builder, idx); }
-				if (idx == builder.length) {
-					final var newArr = new double[builder.length * 2];
-					System.arraycopy(builder, 0, newArr, 0, builder.length);
-					builder = newArr;
-				}
-				builder[idx++] = parseDoublePrimitive();
-				consumeCommaIfPresent();
+		var idx = 0;
+		while (true) {
+			skipWhitespace();
+			if (pos < limit && buffer[pos] == (byte) ']') { pos++; lastArraySize = idx; return builder; }
+			if (idx == builder.length) {
+				final var newArr = new double[builder.length * 2];
+				System.arraycopy(builder, 0, newArr, 0, builder.length);
+				builder = newArr;
 			}
-		} else if (compType == int.class) {
-			var builder = new int[16];
-			var idx = 0;
-			while (true) {
-				skipWhitespace();
-				if (pos < limit && buffer[pos] == (byte) ']') { pos++; return java.util.Arrays.copyOf(builder, idx); }
-				if (idx == builder.length) {
-					final var newArr = new int[builder.length * 2];
-					System.arraycopy(builder, 0, newArr, 0, builder.length);
-					builder = newArr;
-				}
-				builder[idx++] = (int) parseLongPrimitive();
-				consumeCommaIfPresent();
-			}
-		} else if (compType == long.class) {
-			var builder = new long[16];
-			var idx = 0;
-			while (true) {
-				skipWhitespace();
-				if (pos < limit && buffer[pos] == (byte) ']') { pos++; return java.util.Arrays.copyOf(builder, idx); }
-				if (idx == builder.length) {
-					final var newArr = new long[builder.length * 2];
-					System.arraycopy(builder, 0, newArr, 0, builder.length);
-					builder = newArr;
-				}
-				builder[idx++] = parseLongPrimitive();
-				consumeCommaIfPresent();
-			}
-		} else if (compType == boolean.class) {
-			var builder = new boolean[16];
-			var idx = 0;
-			while (true) {
-				skipWhitespace();
-				if (pos < limit && buffer[pos] == (byte) ']') { pos++; return java.util.Arrays.copyOf(builder, idx); }
-				if (idx == builder.length) {
-					final var newArr = new boolean[builder.length * 2];
-					System.arraycopy(builder, 0, newArr, 0, builder.length);
-					builder = newArr;
-				}
-				builder[idx++] = parseBooleanPrimitive();
-				consumeCommaIfPresent();
-			}
-		} else if (compType == float.class) {
-			var builder = new float[16];
-			var idx = 0;
-			while (true) {
-				skipWhitespace();
-				if (pos < limit && buffer[pos] == (byte) ']') { pos++; return java.util.Arrays.copyOf(builder, idx); }
-				if (idx == builder.length) {
-					final var newArr = new float[builder.length * 2];
-					System.arraycopy(builder, 0, newArr, 0, builder.length);
-					builder = newArr;
-				}
-				builder[idx++] = (float) parseDoublePrimitive();
-				consumeCommaIfPresent();
-			}
-		} else {
-			var builder = java.lang.reflect.Array.newInstance(compType, 16);
-			var idx = 0;
-			while (true) {
-				skipWhitespace();
-				if (pos < limit && buffer[pos] == (byte) ']') {
-					pos++;
-					final var finalArray = java.lang.reflect.Array.newInstance(compType, idx);
-					System.arraycopy(builder, 0, finalArray, 0, idx);
-					return finalArray;
-				}
-				if (idx == Array.getLength(builder)) {
-					final var newArr = java.lang.reflect.Array.newInstance(compType, idx * 2);
-					System.arraycopy(builder, 0, newArr, 0, idx);
-					builder = newArr;
-				}
-				Array.set(builder, idx++, parsePrimitiveInline(buffer[pos], compType));
-				consumeCommaIfPresent();
-			}
+			builder[idx++] = parseDoublePrimitive();
+			consumeCommaIfPresent();
 		}
+	}
+
+	private int[] parseIntArray   (int[] builder) throws IOException {
+		pos++;
+		var idx = 0;
+		while (true) {
+			skipWhitespace();
+			if (pos < limit && buffer[pos] == (byte) ']') { pos++; lastArraySize = idx; return builder; }
+			if (idx == builder.length) {
+				final var newArr = new int[builder.length * 2];
+				System.arraycopy(builder, 0, newArr, 0, builder.length);
+				builder = newArr;
+			}
+			builder[idx++] = (int) parseLongPrimitive();
+			consumeCommaIfPresent();
+		}
+	}
+
+	private long[] parseLongArray(long[] builder) throws IOException {
+		pos++;
+		var idx = 0;
+		while (true) {
+			skipWhitespace();
+			if (pos < limit && buffer[pos] == (byte) ']') { pos++; lastArraySize = idx; return builder; }
+			if (idx == builder.length) {
+				final var newArr = new long[builder.length * 2];
+				System.arraycopy(builder, 0, newArr, 0, builder.length);
+				builder = newArr;
+			}
+			builder[idx++] = parseLongPrimitive();
+			consumeCommaIfPresent();
+		}
+	}
+
+	private boolean[] parseBooleanArray(boolean[] builder) throws IOException {
+		pos++;
+		var idx = 0;
+		while (true) {
+			skipWhitespace();
+			if (pos < limit && buffer[pos] == (byte) ']') { pos++; lastArraySize = idx; return builder; }
+			if (idx == builder.length) {
+				final var newArr = new boolean[builder.length * 2];
+				System.arraycopy(builder, 0, newArr, 0, builder.length);
+				builder = newArr;
+			}
+			builder[idx++] = parseBooleanPrimitive();
+			consumeCommaIfPresent();
+		}
+	}
+
+	private float[] parseFloatArray(float[] builder) throws IOException {
+		pos++;
+		var idx = 0;
+		while (true) {
+			skipWhitespace();
+			if (pos < limit && buffer[pos] == (byte) ']') { pos++; lastArraySize = idx; return builder; }
+			if (idx == builder.length) {
+				final var newArr = new float[builder.length * 2];
+				System.arraycopy(builder, 0, newArr, 0, builder.length);
+				builder = newArr;
+			}
+			builder[idx++] = (float) parseDoublePrimitive();
+			consumeCommaIfPresent();
+		}
+	}
+
+	private Object parseDefaultArray(Object builder, final Class<?> compType) throws IOException {
+		pos++;
+		var idx = 0;
+		while (true) {
+			skipWhitespace();
+			if (pos < limit && buffer[pos] == (byte) ']') { pos++; lastArraySize = idx; return builder; }
+			if (idx == Array.getLength(builder)) {
+				final var newArr = java.lang.reflect.Array.newInstance(compType, idx * 2);
+				System.arraycopy(builder, 0, newArr, 0, idx);
+				builder = newArr;
+			}
+			Array.set(builder, idx++, parsePrimitiveInline(buffer[pos], compType));
+			consumeCommaIfPresent();
+		}
+	}
+
+	private Object parsePrimitiveArray(final Class<?> compType) throws IOException {
+		final var startSize = (lastArraySize > 1 && lastArraySize < 64) ? lastArraySize : 16;
+		pos++;
+		final var builder = Array.newInstance(compType, startSize);
+		final Object arr;
+		if      (compType == double .class) arr = parseDoubleArray ((double [])builder);
+		else if (compType == long   .class) arr = parseLongArray   ((long   [])builder);
+		else if (compType == int    .class) arr = parseIntArray    ((int    [])builder);
+		else if (compType == boolean.class) arr = parseBooleanArray((boolean[])builder);
+		else if (compType == float  .class) arr = parseFloatArray  ((float  [])builder);
+		else                                arr = parseDefaultArray(           builder, compType);
+		final var curSize = Array.getLength(arr);
+		if(curSize != lastArraySize) {
+			final var ret = Array.newInstance(compType, 16);
+			System.arraycopy(arr, 0, ret, 0, lastArraySize);
+			return ret;
+		}
+		lastArraySize = Array.getLength(arr);
+		return arr;
 	}
 
 	private Object parseRecordRecursive(final ObjectMeta meta, final int recursionDeep) throws Throwable {
@@ -454,7 +489,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			case 'n' -> {
 				parseNull();
 				if (!engine.config().skipDefaultValues()) {
-					if      (type == boolean.class)                       meta.setBoolean(this, context, targetIdx, false);
+					if      (type == boolean.class)                       meta.set       (this, context, targetIdx, false);
 					else if (type == double.class || type == float.class) meta.setDouble (this, context, targetIdx, 0.0);
 					else if (type != null && type.isPrimitive())          meta.setLong   (this, context, targetIdx, 0L);
 					else                                                  meta.set       (this, context, targetIdx, null);
@@ -462,13 +497,11 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			}
 			case 't' -> {
 				parseTruePrimitive();
-				if (type == boolean.class) meta.setBoolean(this, context, targetIdx, true);
-				else                       meta.set       (this, context, targetIdx, Boolean.TRUE);
+				meta.set(this, context, targetIdx, Boolean.TRUE);
 			}
 			case 'f' -> {
 				parseFalsePrimitive();
-				if (type == boolean.class) meta.setBoolean(this, context, targetIdx, false);
-				else                       meta.set       (this, context, targetIdx, Boolean.FALSE);
+				meta.set(this, context, targetIdx, Boolean.FALSE);
 			}
 			case '"' -> {
 				pos++;
@@ -521,7 +554,10 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 
 	private Object parsePrimitiveInline(final byte b, final Class<?> type) throws IOException {
 		return switch (b) {
-		case '"' -> { pos++; yield parseStringValue(); }
+		case '"' -> {
+			pos++;
+			yield parseStringValue();
+		}
 		case 't' -> parseTrue();
 		case 'f' -> parseFalse();
 		case 'n' -> parseNull();
@@ -529,7 +565,10 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		};
 	}
 
+	@Override public int depth() { return depth; }
+
 	private Object parseArrayRecursive(final Class<?> targetType, final int recursionDeep) throws Throwable {
+		depth = recursionDeep;
 		final ObjectMeta meta;
 		final Class<?> compType;
 
@@ -562,19 +601,14 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			case 'n' -> {
 				parseNull();
 				if (!engine.config().skipDefaultValues()) {
-					if      (compType == boolean.class)                             meta.setBoolean(this, context, idx, false);
+					if      (compType == boolean.class)                             meta.set       (this, context, idx, false);
 					else if (compType == double.class || compType == float.class)   meta.setDouble (this, context, idx, 0.0);
 					else if (compType != null && compType.isPrimitive())            meta.setLong   (this, context, idx, 0L);
 					else                                                            meta.set       (this, context, idx, null);
 				}
 				idx++;
 			}
-			case 't','f' -> {
-				final var val = parseBooleanPrimitive();
-				if (compType == boolean.class) meta.setBoolean(this, context, idx, val);
-				else                           meta.set       (this, context, idx, Boolean.valueOf(val));
-				idx++;
-			}
+			case 't','f' -> meta.set(this, context, idx++, parseBooleanPrimitive());
 			case '"' -> {
 				pos++;
 				meta.set(this, context, idx++, parseStringValue());
@@ -615,11 +649,12 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 					} else if (b == '[') {
 						pos++;
 						val = parseArrayRecursive(compType == Object.class ? null : compType, recursionDeep + 1);
+						depth = recursionDeep;
 					} else {
 						val = parsePrimitiveInline(b, compType);
+
 					}
 				meta.set(this, context, idx++, val);
-				break;
 			}
 			}
 			consumeCommaIfPresent();

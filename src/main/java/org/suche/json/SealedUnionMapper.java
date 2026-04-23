@@ -12,6 +12,54 @@ import java.util.Map;
 import java.util.Set;
 
 final class SealedUnionMapper {
+	static final class SealedContext {
+		Object[]   raw;
+		long[]     prims;
+		byte       singleType; // <-- NEU
+		ObjectMeta meta;
+		Object     context;
+		int        idx;
+		int        len;
+		boolean    isList;
+		Class<?>   compType;
+		int        parentTargetIdx;
+
+		void seti(final Object[] raw, final long[] prims, final byte singleType, final ObjectMeta meta, final Object context, final Class<?> compType, final int parentTargetIdx) {
+			this.raw             = raw             ;
+			this.prims           = prims           ;
+			this.singleType      = singleType      ; // <-- NEU
+			this.meta            = meta            ;
+			this.context         = context         ;
+			this.idx             = 0               ;
+			this.len             = raw.length      ;
+			this.isList          = null != compType;
+			this.compType        = compType        ;
+			this.parentTargetIdx = parentTargetIdx ;
+		}
+
+		void clear() { raw = null; prims = null; meta = null; context = null; compType = null; }
+	}
+
+	static final class SealedStack {
+		SealedContext[] stack;
+		int depth ;
+		SealedStack() { stack = new SealedContext[64]; for (var i = 0; i < 64; i++) stack[i] = new SealedContext(); }
+		void ensureCapacity(final int requestedDepth) {
+			if (requestedDepth >= stack.length) {
+				final var oldLen = stack.length;
+				stack = Arrays.copyOf(stack, requestedDepth * 2);
+				for (var i = oldLen; i < stack.length; i++) stack[i] = new SealedContext();
+			}
+		}
+		SealedStack init() { depth = -1; return this; }
+
+		void push(final Object[] raw, final long[] prims, final byte singleType, final ObjectMeta meta, final Object context, final Class<?> compType, final int parentTargetIdx) {
+			depth++;
+			ensureCapacity(depth);
+			stack[depth].seti(raw, prims, singleType, meta, context, compType, parentTargetIdx);
+		}
+	}
+
 	static final String CLASS_KEY = "__class__";
 	static final String ENUM_KEY  = "__enum__";
 
@@ -97,7 +145,7 @@ final class SealedUnionMapper {
 		final var targetClass = resolvePermittedSubclass(baseType, permitted, className);
 		final var engine      = s.engine();
 		final var targetMeta  = engine.metaOf(targetClass);
-		final var targetCtx   = s.takeContext(targetMeta.components.length);
+		final var targetCtx   = s.takeContext(targetMeta.components.length, true);
 		targetCtx.cnt         = targetMeta.components.length;
 		final var targetObj   = targetCtx.objs;
 		final var targetPrim  = targetCtx.prims;
@@ -170,53 +218,7 @@ final class SealedUnionMapper {
 		return engine.metaOf(concreteClass);
 	}
 
-	static final class CTX {
-		Object[]   raw;
-		long[]     prims;
-		ObjectMeta meta;
-		Object     context;
-		int        idx;
-		int        len;
-		boolean    isList;
-		Class<?>   compType;
-		int        parentTargetIdx;
-
-		void seti(final Object[] raw, final long[] prims, final ObjectMeta meta, final Object context, final Class<?> compType, final int parentTargetIdx) {
-			this.raw             = raw             ;
-			this.prims           = prims           ;
-			this.meta            = meta            ;
-			this.context         = context         ;
-			this.idx             = 0               ;
-			this.len             = raw.length      ;
-			this.isList          = null != compType;
-			this.compType        = compType        ;
-			this.parentTargetIdx = parentTargetIdx ;
-		}
-
-		void clear() { raw = null; prims = null; meta = null; context = null; compType = null; }
-	}
-
-	static final class CtxStack {
-		CTX[] stack;
-		int depth ;
-		CtxStack() { stack = new CTX[64]; for (var i = 0; i < 64; i++) stack[i] = new CTX(); }
-		void ensureCapacity(final int requestedDepth) {
-			if (requestedDepth >= stack.length) {
-				final var oldLen = stack.length;
-				stack = Arrays.copyOf(stack, requestedDepth * 2);
-				for (var i = oldLen; i < stack.length; i++) stack[i] = new CTX();
-			}
-		}
-		CtxStack init() { depth = -1; return this; }
-
-		void push(final Object[] raw, final long[] prims, final ObjectMeta meta, final Object context, final Class<?> compType, final int parentTargetIdx) {
-			depth++;
-			ensureCapacity(depth);
-			stack[depth].seti(raw, prims, meta, context, compType, parentTargetIdx);
-		}
-	}
-
-	private static final org.suche.json.ObjectPool<CtxStack> REVISION_POOL = new org.suche.json.ObjectPool<>(64, CtxStack::new);
+	private static final ObjectPool<SealedStack> REVISION_POOL = new org.suche.json.ObjectPool<>(64, SealedStack::new);
 
 	private static Object applyLateBindingIterative(final MetaPool s, final Object rootVal, final Class<?> rootExpected) throws Throwable {
 		if (!(rootVal instanceof CompactMap) && !(rootVal instanceof CompactList)) return coercePrimitive(rootVal, rootExpected);
@@ -225,34 +227,49 @@ final class SealedUnionMapper {
 		final var engine = s.engine();
 		try {
 			if (rootVal instanceof final CompactMap<?, ?> m) {
-				final var raw = m.getRawData();
-				final var prims = m.prims;
-				final var meta = getMeta(engine, raw, rootExpected);
+				final var raw   = m.getRawData();
+				final var prims = m.prims();
+				final var singleType = m.singleType();
+				final var meta  = getMeta(engine, raw, rootExpected);
 				if (meta == null || meta == ObjectMeta.GENERIC_MAP || meta == ObjectMeta.NULL) return rootVal;
-				stack.push(raw, prims, meta, meta.start(s), null, -1);
+				stack.push(raw, prims, singleType, meta, meta.start(s), null, -1);
 			} else if (rootVal instanceof final CompactList<?> l) {
 				final var raw = l.getRawData();
+				final var prims = l.prims();
+				final var singleType = l.singleType();
 				final var context = Array.newInstance(rootExpected.componentType(), raw.length);
-				stack.push(raw, null, null, context, rootExpected.componentType(), -1);
+				stack.push(raw, prims, singleType, null, context, rootExpected.componentType(), -1);
 			}
 			while (stack.depth >= 0) {
 				final var c = stack.stack[stack.depth];
 				if (c.isList) {
 					if (c.idx < c.len) {
-						final var val = c.raw[c.idx];
+						var val = c.raw[c.idx];
 						final var currentIdx = c.idx++;
+
+						// LAZY PRIMITIVES AUFLÖSEN (LISTE)
+						if (c.singleType == MetaPool.T_LONG) {
+							val = c.prims[currentIdx];
+						} else if (c.singleType == MetaPool.T_DOUBLE) {
+							val = Double.longBitsToDouble(c.prims[currentIdx]);
+						} else if (val == CompactMap.PRIMITIVE.LONG) val = c.prims[currentIdx];
+						else if (val == CompactMap.PRIMITIVE.DOUBLE) val = Double.longBitsToDouble(c.prims[currentIdx]);
+
 						if (val instanceof final CompactMap<?, ?> m && c.compType != Object.class && c.compType != java.util.Map.class) {
 							final var childRaw = m.getRawData();
-							final var childPrims = m.prims;
+							final var childPrims = m.prims();
+							final var childSingleType = m.singleType();
 							final var childMeta = getMeta(engine, childRaw, c.compType);
 							if (childMeta == null || childMeta == ObjectMeta.GENERIC_MAP || childMeta == ObjectMeta.NULL) {
 								Array.set(c.context, currentIdx, m);
 							} else {
-								stack.push(childRaw, childPrims, childMeta, childMeta.start(s), null, currentIdx);
+								stack.push(childRaw, childPrims, childSingleType, childMeta, childMeta.start(s), null, currentIdx);
 							}
 						} else if (val instanceof final CompactList<?> l && c.compType.isArray()) {
 							final var childRaw = l.getRawData();
-							stack.push(childRaw, null, null, Array.newInstance(c.compType.componentType(), childRaw.length), c.compType.componentType(), currentIdx);
+							final var childPrims = l.prims();
+							final var childSingleType = l.singleType();
+							stack.push(childRaw, childPrims, childSingleType, null, Array.newInstance(c.compType.componentType(), childRaw.length), c.compType.componentType(), currentIdx);
 						} else {
 							Array.set(c.context, currentIdx, coercePrimitive(val, c.compType));
 						}
@@ -272,35 +289,43 @@ final class SealedUnionMapper {
 						final var key = (String) c.raw[c.idx];
 						var val = c.raw[c.idx + 1];
 
-						// LAZY PRIMITIVES AUFLÖSEN
-						if (val == CompactMap.PRIMITIVE.LONG)        val = c.prims[(c.idx + 1) >> 1];
-						else if (val == CompactMap.PRIMITIVE.DOUBLE) val = Double.longBitsToDouble(c.prims[(c.idx + 1) >> 1]);
+						// LAZY PRIMITIVES AUFLÖSEN (MAP)
+						final var logicalIdx = c.idx >> 1; // Sicherer Bit-Shift für Value-Index
+					if (c.singleType == MetaPool.T_LONG) {
+						val = c.prims[logicalIdx];
+					} else if (c.singleType == MetaPool.T_DOUBLE) {
+						val = Double.longBitsToDouble(c.prims[logicalIdx]);
+					} else if (val == CompactMap.PRIMITIVE.LONG) val = c.prims[logicalIdx];
+					else if (val == CompactMap.PRIMITIVE.DOUBLE) val = Double.longBitsToDouble(c.prims[logicalIdx]);
 
-						c.idx += 2;
+					c.idx += 2;
 
-						if (CLASS_KEY.equals(key)) continue;
-						final var targetIdx = c.meta.prepareKey(c.context, key);
-						if (targetIdx >= 0) {
-							final Class<?> expectedType = c.meta.type(targetIdx);
-							if (val instanceof final CompactMap<?, ?> m && expectedType != Object.class && expectedType != java.util.Map.class) {
-								final var childRaw = m.getRawData();
-								final var childPrims = m.prims;
-								final var childMeta = getMeta(engine, childRaw, expectedType);
-								if ((childMeta != null) && (childMeta != ObjectMeta.GENERIC_MAP) && (childMeta != ObjectMeta.NULL)) {
-									stack.push(childRaw, childPrims, childMeta, childMeta.start(s), null, targetIdx);
-									pushed = true;
-									break;
-								}
-								c.meta.set(s, c.context, targetIdx, val);
-							} else if (val instanceof final CompactList<?> l && expectedType.isArray()) {
-								final var childRaw = l.getRawData();
-								stack.push(childRaw, null, null, Array.newInstance(expectedType.componentType(), childRaw.length), expectedType.componentType(), targetIdx);
+					if (CLASS_KEY.equals(key)) continue;
+					final var targetIdx = c.meta.prepareKey(c.context, key);
+					if (targetIdx >= 0) {
+						final Class<?> expectedType = c.meta.type(targetIdx);
+						if (val instanceof final CompactMap<?, ?> m && expectedType != Object.class && expectedType != java.util.Map.class) {
+							final var childRaw = m.getRawData();
+							final var childPrims = m.prims();
+							final var childSingleType = m.singleType();
+							final var childMeta = getMeta(engine, childRaw, expectedType);
+							if ((childMeta != null) && (childMeta != ObjectMeta.GENERIC_MAP) && (childMeta != ObjectMeta.NULL)) {
+								stack.push(childRaw, childPrims, childSingleType, childMeta, childMeta.start(s), null, targetIdx);
 								pushed = true;
 								break;
-							} else {
-								c.meta.set(s, c.context, targetIdx, coercePrimitive(val, expectedType));
 							}
+							c.meta.set(s, c.context, targetIdx, val);
+						} else if (val instanceof final CompactList<?> l && expectedType.isArray()) {
+							final var childRaw = l.getRawData();
+							final var childPrims = l.prims();
+							final var childSingleType = l.singleType();
+							stack.push(childRaw, childPrims, childSingleType, null, Array.newInstance(expectedType.componentType(), childRaw.length), expectedType.componentType(), targetIdx);
+							pushed = true;
+							break;
+						} else {
+							c.meta.set(s, c.context, targetIdx, coercePrimitive(val, expectedType));
 						}
+					}
 					}
 
 					if (!pushed && c.idx >= c.len) {

@@ -53,10 +53,8 @@
 					<source>26</source>
 					<target>26</target>
 					<compilerArgs>
-						<arg>--add-exports</arg>
-						<arg>org.suche.json/org.suche.json=ALL-UNNAMED</arg>
+						<arg>-Xlint:unchecked</arg>
 					</compilerArgs>
-
 					<annotationProcessorPaths>
 						<path>
 							<groupId>org.openjdk.jmh</groupId>

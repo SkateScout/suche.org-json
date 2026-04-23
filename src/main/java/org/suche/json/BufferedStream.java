@@ -4,10 +4,11 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
-import java.util.HashSet;
 import java.util.Map;
 
-sealed class BufferedStream  implements MetaPool permits JsonInputStream {
+import org.suche.annotation.NonNull;
+
+sealed abstract class BufferedStream  implements MetaPool permits JsonInputStream {
 	private static final int BUFFER_SIZE = 128*1024;
 	private static final double[] POW10 = { 1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18 };
 	private static final long[] POW10_L = {
@@ -15,21 +16,21 @@ sealed class BufferedStream  implements MetaPool permits JsonInputStream {
 			1000000000L, 10000000000L, 100000000000L, 1000000000000L, 10000000000000L,
 			100000000000000L, 1000000000000000L, 10000000000000000L, 100000000000000000L, 1000000000000000000L
 	};
-
+	private static final int POOL_SIZE = 128;
 	Map<Object, Object> internPool;
 	byte[]                       strBuf          = new byte[1024];
 	private byte[][]             stringPoolKeys;
 	private String[]             stringPoolVals;
 	private int                  stringPoolSize;
 	final byte[]                 buffer          = new byte[BUFFER_SIZE];
-	private final Object[][]     arrayPool       = new Object[32][];
+	private final Object[][]     arrayPool       = new Object[POOL_SIZE][];
 	private int                  arrayPoolSize   = 0;
 
-	private final ParseContext[][] ctxPools     = new ParseContext[4][32];
-	private final int[]            ctxPoolSizes = new int[4];
-
-	private final long[][]         longPool     = new long[32][];
+	private final long[][]         longPool     = new long[POOL_SIZE][];
 	private int                    longPoolSize = 0;
+
+	private final ParseContext[] ctxPool     = new ParseContext[POOL_SIZE];
+	private int                  ctxPoolSize = 0;
 
 	protected InternalEngine engine;
 	InputStream in;
@@ -69,18 +70,22 @@ sealed class BufferedStream  implements MetaPool permits JsonInputStream {
 		return m;
 	}
 
+	final Object[] onceInternal = new Object[32];
+	int            onceInternalSize = 0;
+
 	final void init(final InputStream i, final InternalEngine c) {
 		final var cfg          = c.config();
-		this.engine            = c;
 		this.maxDepth          = cfg.maxDepth();
 		this.maxCollectionSize = cfg.maxCollectionSize();
 		this.maxStringLength   = cfg.maxStringLength();
 		this.maxCollectionSize = cfg.maxCollectionSize();
+
+		this.engine            = c;
 		this.in                = i;
 		this.pos               = 0;
 		this.limit             = 0;
 		this.depth             = -1;
-		onceInternal.clear();
+		onceInternalSize = 0;
 		if (cfg.enableDeduplication()) {
 			if (this.internPool     == null) {
 				this.internPool     = new java.util.HashMap<>();
@@ -99,77 +104,145 @@ sealed class BufferedStream  implements MetaPool permits JsonInputStream {
 		}
 	}
 
-	private static int getBucket(final int capacity) {
-		if (capacity <= 16)  return 0;
-		if (capacity <= 64)  return 1;
-		if (capacity <= 256) return 2;
-		return 3;
+	@Override public Object[] takeArray(final int exactCapacity) {
+		var bestIdx = -1;
+		var bestLen = Integer.MAX_VALUE;
+
+		for (var i = arrayPoolSize - 1; i >= 0; i--) {
+			final var len = arrayPool[i].length;
+			if (len == exactCapacity) { // Perfect match, early exit
+				bestIdx = i;
+				break;
+			}
+			if (len > exactCapacity && len < bestLen) { // Best fit approach
+				bestLen = len;
+				bestIdx = i;
+			}
+		}
+
+		if (bestIdx >= 0) {
+			final var arr = arrayPool[bestIdx];
+			arrayPool[bestIdx] = arrayPool[--arrayPoolSize];
+			arrayPool[arrayPoolSize] = null; // Prevent memory leak
+			return arr;
+		}
+		return new Object[exactCapacity];
 	}
 
-	@Override public long[] takeLongArray(final int minCapacity) {
-		if (longPoolSize > 0) {
-			final var arr = longPool[--longPoolSize];
-			if (arr.length >= minCapacity) return arr;
+	@Override public long[] takeLongArray(final int exactCapacity) {
+		var bestIdx = -1;
+		var bestLen = Integer.MAX_VALUE;
+
+		for (var i = longPoolSize - 1; i >= 0; i--) {
+			final var len = longPool[i].length;
+			if (len == exactCapacity) { // Perfect match, early exit
+				bestIdx = i;
+				break;
+			}
+			if (len > exactCapacity && len < bestLen) { // Best fit approach
+				bestLen = len;
+				bestIdx = i;
+			}
 		}
-		return new long[Math.max(16, minCapacity)];
+
+		if (bestIdx >= 0) {
+			final var arr = longPool[bestIdx];
+			longPool[bestIdx] = longPool[--longPoolSize];
+			longPool[longPoolSize] = null; // Prevent memory leak
+			return arr;
+		}
+		return new long[exactCapacity];
 	}
 
 	@Override public void returnLongArray(final long[] arr) {
+		if(arr == null) throw new IllegalStateException();
 		if (arr.length > 2048) return; // Zu große Arrays dem GC überlassen
 		if (longPoolSize < longPool.length) longPool[longPoolSize++] = arr;
 	}
 
-	@Override public ParseContext takeContext(final int minCapacity) {
-		final var b = getBucket(minCapacity);
-		if (ctxPoolSizes[b] > 0) {
-			final var ctx = ctxPools[b][--ctxPoolSizes[b]];
-			if (ctx.objs == null || ctx.objs.length < minCapacity) {
-				if (ctx.objs != null) returnArray(ctx.objs);
-				if (ctx.prims != null) returnLongArray(ctx.prims);
-				ctx.objs = takeArray(minCapacity);
-				ctx.prims = takeLongArray(ctx.objs.length); // GC Zero!
-			}
-			ctx.cnt = 0;
-			ctx.currentKey = null;
-			return ctx;
+	@Override public ParseContext takeContext(final int ignoredCapacity, final boolean map) {
+		// Wir ignorieren die Capacity hier, da Arrays lazy in ObjectMeta allokiert werden
+		final ParseContext ctx;
+		if (ctxPoolSize > 0) {
+			ctx = ctxPool[--ctxPoolSize];
+		} else {
+			ctx = new ParseContext();
 		}
-		final var ctx = new ParseContext();
-		ctx.objs = takeArray(Math.max(16, minCapacity));
-		ctx.prims = takeLongArray(ctx.objs.length); // GC Zero!
+
+		// Context zu 100% nackt ausliefern
+		ctx.cnt = 0;
+		ctx.singleType = MetaPool.T_EMPTY;
+		ctx.currentKey = null;
+		ctx.objs  = null;
+		ctx.prims = null;
+		ctx.map = map ? 1 : 0;
 		return ctx;
 	}
 
-	@Override public void returnContext(final ParseContext ctx) {
-		if (ctx.objs == null) return;
-		final var b = getBucket(ctx.objs.length); // Nach ECHTER Array-Länge einsortieren
-		if (ctxPoolSizes[b] < 32) {
-			if (ctx.cnt > 0) {
-				Arrays.fill(ctx.objs, 0, ctx.cnt, null);
-				Arrays.fill(ctx.prims, 0, ctx.cnt, 0L);
-			}
-			ctxPools[b][ctxPoolSizes[b]++] = ctx;
-		} else {
+	@Override public void returnContext(final @NonNull ParseContext ctx) {
+		if (ctx.objs != null) {
 			returnArray(ctx.objs);
+			ctx.objs = null;
+		}
+		if (ctx.prims != null) {
 			returnLongArray(ctx.prims);
+			ctx.prims = null;
 		}
-	}
-
-	@Override public Object[] takeArray(final int minCapacity) {
-		if (arrayPoolSize > 0) {
-			final var arr = arrayPool[--arrayPoolSize];
-			if (arr.length >= minCapacity) return arr;
-		}
-		return new Object[Math.max(16, minCapacity)];
+		if (ctxPoolSize < ctxPool.length) ctxPool[ctxPoolSize++] = ctx;
 	}
 
 	@Override public void     returnArray(final Object[] arr) {
-		if (arr.length > 1024) return; // Large arrays for GC to avoid large Arrays.fill
+		if (arr.length > 1024) return;
 		if (arrayPoolSize < arrayPool.length) { Arrays.fill(arr, null); arrayPool[arrayPoolSize++] = arr; }
 	}
 
-	@Override public InternalEngine engine() { return engine; }
 
-	final HashSet<Object> onceInternal = new HashSet<>();
+	@Override
+	public final String internBytes(final byte[] src, final int start, final int len, final int hash, final boolean isAscii) {
+		// Strings over 36 Zeichen (Text, long URLs) are not pooled.
+		if (stringPoolKeys == null || len > 36) return new String(src, start, len, isAscii ? StandardCharsets.ISO_8859_1 : StandardCharsets.UTF_8);
+		final var keys = this.stringPoolKeys;
+		final var mask = keys.length - 1;
+		var idx = hash & mask;
+		while (true) {
+			final var k = keys[idx];
+			if (k == null) break;
+			if (k.length == len && Arrays.equals(k, 0, len, src, start, start + len)) return stringPoolVals[idx];
+			idx = (idx + 1) & mask;
+		}
+		return internBytesSlow(src, start, len, isAscii, mask, idx);
+	}
+
+	private String internBytesSlow(final byte[] src, final int start, final int len, final boolean isAscii, int mask, final int idx) {
+		if (stringPoolSize >= maxCollectionSize) return new String(src, start, len, isAscii ? StandardCharsets.ISO_8859_1 : StandardCharsets.UTF_8);
+
+		final var s = new String(src, start, len, isAscii ? StandardCharsets.ISO_8859_1 : StandardCharsets.UTF_8);
+		stringPoolKeys[idx] = java.util.Arrays.copyOfRange(src, start, start + len);
+		stringPoolVals[idx] = s;
+
+		if (++stringPoolSize > stringPoolKeys.length * 0.75f) {
+			final var oldK = stringPoolKeys;
+			final var oldV = stringPoolVals;
+			stringPoolKeys = new byte[oldK.length << 1][];
+			stringPoolVals = new String[oldV.length << 1];
+			mask = stringPoolKeys.length - 1;
+			for (var i = 0; i < oldK.length; i++) {
+				final var k = oldK[i];
+				if (k != null) {
+					var h = 0;
+					for (final byte b : k) h = 31 * h + b;
+					var newIdx = h & mask;
+					while (stringPoolKeys[newIdx] != null) newIdx = (newIdx + 1) & mask;
+					stringPoolKeys[newIdx] = k;
+					stringPoolVals[newIdx] = oldV[i];
+				}
+			}
+		}
+		return s;
+	}
+
+
+	@Override public InternalEngine engine() { return engine; }
 
 	final void ensure(final int n) throws IOException {
 		final var remaining = limit - pos;
@@ -197,19 +270,19 @@ sealed class BufferedStream  implements MetaPool permits JsonInputStream {
 	private boolean isFloat    = false;
 
 	private final void parseNumberCore() throws IOException {
-		var l_intDigitCount = 0;
-		var l_fracDigits    = 0;
-		var l_numberVal     = 0L;
-		var l_isNegative    = false;
-		var l_parsedExp     = 0;
-		var l_virtualExp    = 0;
-		var l_expNeg        = false;
+		var lIntDigitCount = 0;
+		var lFracDigits    = 0;
+		var lNumberVal     = 0L;
+		var lIsNegative    = false;
+		var lParsedExp     = 0;
+		var lVirtualExp    = 0;
+		var lExpNeg        = false;
 		// 1. Initial bounds check and sign
 		ensure(64);
 		final var limitSafe = limit; // Local copy for performance
 
 		if (pos < limitSafe && buffer[pos] == '-') {
-			l_isNegative = true;
+			lIsNegative = true;
 			pos++;
 		}
 
@@ -220,16 +293,16 @@ sealed class BufferedStream  implements MetaPool permits JsonInputStream {
 			// Unsigned check: catches everything outside '0'-'9' (including '.' and 'e')
 			if (d < 0 || d > 9) break;
 
-			if (++l_intDigitCount <= 18) {
-				l_numberVal = l_numberVal * 10L + d;
+			if (++lIntDigitCount <= 18) {
+				lNumberVal = lNumberVal * 10L + d;
 			} else {
 				// Prevent long overflow, shift the virtual decimal point
-				l_virtualExp++;
+				lVirtualExp++;
 			}
 			pos++;
 		}
 
-		if (l_intDigitCount == 0) throw new IllegalStateException("Missing integer digits");
+		if (lIntDigitCount == 0) throw new IllegalStateException("Missing integer digits");
 
 		// 3. MICRO-LOOP 2: Fractional Part (After the dot)
 		if (pos < limitSafe && buffer[pos] == '.') {
@@ -238,14 +311,14 @@ sealed class BufferedStream  implements MetaPool permits JsonInputStream {
 				final var d = buffer[pos] - '0';
 				if (d < 0 || d > 9) break;
 
-				if (l_intDigitCount + l_fracDigits < 18) {
-					l_fracDigits++;
-					l_numberVal = l_numberVal * 10L + d;
+				if (lIntDigitCount + lFracDigits < 18) {
+					lFracDigits++;
+					lNumberVal = lNumberVal * 10L + d;
 				}
 				// Extra digits beyond 18 total significance are silently ignored
 				pos++;
 			}
-			if (l_fracDigits == 0 && l_intDigitCount <= 18) {
+			if (lFracDigits == 0 && lIntDigitCount <= 18) {
 				// Edge case: "123." without trailing digits
 				throw new IllegalStateException("Missing fractional digits");
 			}
@@ -256,31 +329,31 @@ sealed class BufferedStream  implements MetaPool permits JsonInputStream {
 			pos++; // Skip 'e'
 			if (pos < limitSafe) {
 				final var sign = buffer[pos];
-				if (sign == '-') { l_expNeg = true; pos++; }
+				if (sign == '-') { lExpNeg = true; pos++; }
 				else if (sign == '+') { pos++; }
 			}
 			var expDigits = 0;
 			while (pos < limitSafe) {
 				final var d = buffer[pos] - '0';
 				if (d < 0 || d > 9) break;
-				l_parsedExp = l_parsedExp * 10 + d;
+				lParsedExp = lParsedExp * 10 + d;
 				expDigits++;
 				pos++;
 			}
 			if (expDigits == 0) throw new IllegalStateException("Missing exponent digits");
 		}
-		this.totalExp = (l_expNeg ? -l_parsedExp : l_parsedExp) + l_virtualExp - l_fracDigits;
+		this.totalExp = (lExpNeg ? -lParsedExp : lParsedExp) + lVirtualExp - lFracDigits;
 
 		// Normalize: Fast-path for positive exponents.
 		// If the padded number securely fits into 18 digits, apply the exponent directly.
-		final var sigDigits = l_intDigitCount + l_fracDigits;
+		final var sigDigits = lIntDigitCount + lFracDigits;
 		if (this.totalExp > 0 && sigDigits + this.totalExp <= 18) {
-			l_numberVal *= POW10_L[this.totalExp];
+			lNumberVal *= POW10_L[this.totalExp];
 			this.totalExp = 0; // Exponent is completely absorbed
 		}
 
-		this.numberVal  = l_numberVal;
-		this.isNegative = l_isNegative;
+		this.numberVal  = lNumberVal;
+		this.isNegative = lIsNegative;
 
 		// The value is strictly a float ONLY if an unresolved exponent remains
 		this.isFloat    = (this.totalExp != 0);
@@ -583,49 +656,6 @@ sealed class BufferedStream  implements MetaPool permits JsonInputStream {
 			lPos++;
 		}
 		return parseStringSlow(start, lPos, true);
-	}
-
-	@Override
-	public final String internBytes(final byte[] src, final int start, final int len, final int hash, final boolean isAscii) {
-		if (stringPoolKeys == null) return new String(src, start, len, isAscii ? StandardCharsets.ISO_8859_1 : StandardCharsets.UTF_8);
-		final var keys = this.stringPoolKeys;
-		final var mask = keys.length - 1;
-		var idx = hash & mask;
-		while (true) {
-			final var k = keys[idx];
-			if (k == null) break;
-			if (k.length == len && Arrays.equals(k, 0, len, src, start, start + len)) return stringPoolVals[idx];
-			idx = (idx + 1) & mask;
-		}
-		return internBytesSlow(src, start, len, isAscii, mask, idx);
-	}
-
-	private String internBytesSlow(final byte[] src, final int start, final int len, final boolean isAscii, int mask, final int idx) {
-		if (stringPoolSize >= maxCollectionSize) return new String(src, start, len, isAscii ? StandardCharsets.ISO_8859_1 : StandardCharsets.UTF_8);
-
-		final var s = new String(src, start, len, isAscii ? StandardCharsets.ISO_8859_1 : StandardCharsets.UTF_8);
-		stringPoolKeys[idx] = java.util.Arrays.copyOfRange(src, start, start + len);
-		stringPoolVals[idx] = s;
-
-		if (++stringPoolSize > stringPoolKeys.length * 0.75f) {
-			final var oldK = stringPoolKeys;
-			final var oldV = stringPoolVals;
-			stringPoolKeys = new byte[oldK.length << 1][];
-			stringPoolVals = new String[oldV.length << 1];
-			mask = stringPoolKeys.length - 1;
-			for (var i = 0; i < oldK.length; i++) {
-				final var k = oldK[i];
-				if (k != null) {
-					var h = 0;
-					for (final byte b : k) h = 31 * h + b;
-					var newIdx = h & mask;
-					while (stringPoolKeys[newIdx] != null) newIdx = (newIdx + 1) & mask;
-					stringPoolKeys[newIdx] = k;
-					stringPoolVals[newIdx] = oldV[i];
-				}
-			}
-		}
-		return s;
 	}
 
 	// Bit 9 (\t), 10 (\n), 13 (\r), 32 (Space)

@@ -59,6 +59,7 @@ final class Meta {
 		return new KeyValueObject(key, 0, obj -> { try { return mh.invokeExact(obj); } catch (final Throwable x) { throw new RuntimeException(x); } }, null, null, null, null);
 	}
 
+	@ SuppressWarnings("unchecked")
 	static KeyValueObject createFastGetter(final byte[] key, final Method m, final Filter filter) throws Throwable {
 		try { m.setAccessible(true); } catch (final Exception ignored) {}
 		final var handle = lookup.unreflect(m);
@@ -142,6 +143,7 @@ final class Meta {
 	}
 
 
+	@ SuppressWarnings("unchecked")
 	static Supplier<Object> asSupplier(final Class<?> type, final MethodHandle ctorHandle) {
 		try {
 			return (Supplier<Object>) LambdaMetafactory.metafactory(lookup, "get", MT_SUPPLIER, MT_OBJECT, ctorHandle, MethodType.methodType(type)).getTarget().invokeExact();

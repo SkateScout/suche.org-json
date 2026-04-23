@@ -16,14 +16,11 @@ import java.util.Collection;
 import java.util.Date;
 import java.util.Iterator;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Function;
 import java.util.function.Supplier;
 
 public final class JsonOutputStream implements AutoCloseable {
 	private static final int    BUFFER_SIZE = 128 * 1024;
 	private static final ObjectPool<JsonOutputStream> STREAM_POOL = new ObjectPool<>(64, JsonOutputStream::new);
-	private static final ObjectPool<CtxStack>         STACK_POOL  = new ObjectPool<>(64, CtxStack::new);
 	static         final byte[] NULL_BYTES  = {'n','u','l','l'};
 	private static final byte[] TRUE_BYTES  = {'t','r','u','e'};
 	private static final byte[] FALSE_BYTES = {'f','a','l','s','e'};
@@ -65,9 +62,10 @@ public final class JsonOutputStream implements AutoCloseable {
 	}
 
 	static final class CtxStack {
-		CTX[] stack;
+		private final CTX[] stack64 = new CTX[64];
+		CTX[] stack  = stack64;
 		int depth = -1;
-		CtxStack() { stack = new CTX[64]; for (var i = 0; i < 64; i++) stack[i] = new CTX(); }
+		CtxStack() { for (var i = 0; i < 64; i++) stack[i] = new CTX(); }
 
 		void push(final byte type, final Object obj, final Object meta, final int len) {
 			if (++depth >= stack.length) {
@@ -80,10 +78,10 @@ public final class JsonOutputStream implements AutoCloseable {
 
 		void clear() {
 			for (var i = 0; i <= depth; i++) stack[i].clear();
+			stack = stack64;
 			depth = -1;
 		}
 	}
-
 
 	private static final class MapDumper implements java.util.function.BiConsumer<Object, Object> {
 		Object[] target;
@@ -92,12 +90,11 @@ public final class JsonOutputStream implements AutoCloseable {
 	}
 
 	private final byte[] buffer = new byte[BUFFER_SIZE];
-	private Map<Class<?>, Function<Object,Object>> transformers      ;
 	private boolean                                hasCoreTransformer;
 	private final MapDumper mapDumper = new MapDumper();
 	private int          pos = 0;
 	private OutputStream out;
-	private CtxStack     stack;
+	private final CtxStack  stack = new CtxStack();
 	private TimeFormat   timeFormat;
 	private boolean skipNull, skipFalse, skipEmpty;
 	private int          fractionalLimit;
@@ -135,29 +132,20 @@ public final class JsonOutputStream implements AutoCloseable {
 	}
 
 	private final Object DEFAULTOBJ   = new Object();
-	private static final Map<Class<?>, Object> COMPLEX_CACHE = new ConcurrentHashMap<>();
 
 	private void init0(final InternalEngine engine, final OutputStream out, final TimeFormat timeFormat) {
 		this.engine             = engine;
 		this.out                = out;
 		this.pos                = 0;
 		this.timeFormat         = timeFormat==null ? TimeFormatDefault.EPOCH_MILLIS : timeFormat;
-		this.stack              = STACK_POOL.acquire();
 		this.stack.depth        = -1;
-		this.transformers       = engine.transformers      ();
 		this.hasCoreTransformer = engine.hasCoreTransformer();
 	}
 
 	@Override public void close() throws IOException {
-		this.transformers       = null;
-		if (stack != null) {
-			stack.clear();
-			STACK_POOL.release(stack);
-			stack = null;
-		}
-		try {
-			flushBuffer();
-		} finally {
+		stack.clear();
+		try { flushBuffer(); }
+		finally {
 			this.out = null;
 			STREAM_POOL.release(this);
 		}
@@ -215,7 +203,7 @@ public final class JsonOutputStream implements AutoCloseable {
 
 	private Object transform(final Object val) {
 		if (val == null || !hasCoreTransformer) return val;
-		final var f = transformers.get(val.getClass());
+		final var f = engine.transformer(val.getClass());
 		return f != null ? f.apply(val) : val;
 	}
 
@@ -646,7 +634,7 @@ public final class JsonOutputStream implements AutoCloseable {
 	private void handleValue(final Object val) throws IOException {
 		if(null == val) { write(NULL_BYTES); return; }
 		if(handleSimple(val)) return;
-		final var h = COMPLEX_CACHE.computeIfAbsent(val.getClass(), k -> (engine.ofComplex(k) instanceof final KeyValueObject[] kv ? kv : DEFAULTOBJ));
+		final var h = (engine.ofComplex(val.getClass()) instanceof final KeyValueObject[] kv ? kv : DEFAULTOBJ);
 		if (h instanceof final KeyValueObject[] parts) push((byte)'{', TYPE_RECORD, val, parts, parts.length);
 		else  									       writeEscapedString(val.toString());
 	}
