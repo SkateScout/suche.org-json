@@ -493,56 +493,6 @@ sealed class BufferedStream  implements MetaPool permits JsonInputStream {
 		this.escapedParsedLen = dstLen;
 	}
 
-	final int parseStringKeyAsIndex(final Object context, final ObjectMeta meta) throws IOException {
-		var lPos = pos;
-		final var start = lPos;
-		final var buf = buffer;
-		var hash = 0; // Hash wird on-the-fly berechnet
-
-		while (lPos < limit) {
-			final var b = buf[lPos];
-			if (b == '"') {
-				final var len = lPos - start;
-				pos = lPos + 1;
-				// Zuerst Byte-Lookup in der Tabelle (für POJOs)
-				final var idx = meta.prepareKey(hash, buf, start, len);
-				if (idx != -1) return idx;
-
-				// Nur wenn unbekannt oder MAP, String aus dem Pool holen
-				final var key = internBytes(buf, start, len, hash, true);
-				return meta.prepareKey(context, key);
-			}
-			if (b == '\\' || b < 0) break;
-			hash = 31 * hash + b; // Fused Hashing
-			lPos++;
-		}
-		// Slow path handles escapes and UTF-8 decoding.
-		final var key = parseStringSlow(start, lPos, true);
-		return meta.prepareKey(context, key);
-	}
-
-	final String parseStringValue() throws IOException {
-		var       lPos   = pos;
-		final var lLimit = limit;
-		final var start  = lPos;
-		final var buf    = buffer;
-		var       hash   = 0; // Hash wird on-the-fly berechnet
-
-		// MICRO-LOOP: Pure ASCII fast-path
-		while (lPos < lLimit) {
-			final var b = buf[lPos];
-			if (b == '"') {
-				pos = lPos + 1;
-				// FIX: Nutzt jetzt den echten Hash und dedupliziert Werte extrem aggressiv!
-				return internBytes(buf, start, lPos - start, hash, true);
-			}
-			if (b == '\\' || b < 0) break;
-			hash = 31 * hash + b; // Fused Hashing
-			lPos++;
-		}
-		return parseStringSlow(start, lPos, true);
-	}
-
 	private String parseStringSlow(final int start, final int lPos, boolean isAscii) throws IOException {
 		var parsedLen = lPos - start;
 		if (parsedLen > strBuf.length) expandStrBuf(parsedLen);
@@ -586,28 +536,65 @@ sealed class BufferedStream  implements MetaPool permits JsonInputStream {
 			strBuf[parsedLen++] = b;
 			if (b < 0) isAscii = false;
 		}
-
-		// Hash nach Escaping sauber über den temporären Buffer berechnen
 		var hash = 0;
 		for (var i = 0; i < parsedLen; i++) hash = 31 * hash + strBuf[i];
 		return internBytes(strBuf, 0, parsedLen, hash, isAscii);
 	}
 
+	final int parseStringKeyAsIndex(final Object context, final ObjectMeta meta) throws IOException {
+		var lPos = pos;
+		final var start = lPos;
+		final var buf = buffer;
+		var hash = 0;
+
+		while (lPos < limit) {
+			final var b = buf[lPos];
+			if (b == '"') {
+				final var len = lPos - start;
+				pos = lPos + 1;
+				final var idx = meta.prepareKey(hash, buf, start, len);
+				if (idx != -1) return idx;
+				final var key = internBytes(buf, start, len, hash, true);
+				return meta.prepareKey(context, key);
+			}
+			if (b == '\\' || b < 0) break;
+			hash = 31 * hash + b;
+			lPos++;
+		}
+		final var key = parseStringSlow(start, lPos, true);
+		return meta.prepareKey(context, key);
+	}
+
+	final String parseStringValue() throws IOException {
+		var       lPos   = pos;
+		final var lLimit = limit;
+		final var start  = lPos;
+		final var buf    = buffer;
+		var       hash   = 0;
+
+		while (lPos < lLimit) {
+			final var b = buf[lPos];
+			if (b == '"') {
+				pos = lPos + 1;
+				return internBytes(buf, start, lPos - start, hash, true);
+			}
+			if (b == '\\' || b < 0) break;
+			hash = 31 * hash + b;
+			lPos++;
+		}
+		return parseStringSlow(start, lPos, true);
+	}
+
 	@Override
 	public final String internBytes(final byte[] src, final int start, final int len, final int hash, final boolean isAscii) {
 		if (stringPoolKeys == null) return new String(src, start, len, isAscii ? StandardCharsets.ISO_8859_1 : StandardCharsets.UTF_8);
-
 		final var keys = this.stringPoolKeys;
 		final var mask = keys.length - 1;
 		var idx = hash & mask;
-
-		// Hyper-optimierter Linear Probe ohne instanceof
 		while (true) {
 			final var k = keys[idx];
 			if (k == null) break;
-			if (k.length == len && Arrays.equals(k, 0, len, src, start, start + len)) {
-				return stringPoolVals[idx];
-			}
+			if (k.length == len && Arrays.equals(k, 0, len, src, start, start + len)) return stringPoolVals[idx];
 			idx = (idx + 1) & mask;
 		}
 		return internBytesSlow(src, start, len, isAscii, mask, idx);

@@ -86,12 +86,22 @@ public final class CompactMap<K, V> extends AbstractMap<K, V> {
 		}
 	}
 
+	@Override
+	public int hashCode() {
+		final var prime = 31;
+		var result = super.hashCode();
+		result = prime * result + Arrays.deepHashCode(data);
+		return prime * result + Arrays.hashCode(prims);
+	}
+
 	@Override public boolean equals(final Object obj) {
 		if (this == obj) return true;
 		if ((obj == null) || !super.equals(obj) || (getClass() != obj.getClass())) return false;
 		final var other = (CompactMap<?,?>) obj;
-		return Arrays.deepEquals(data, other.data);
+		return Arrays.deepEquals(data, other.data) && Arrays.equals(prims, other.prims);
 	}
+
+
 
 	public long      getLong   (final Object key) {
 		for (var i = 0; i < data.length - 1; i += 2) if (key.equals(data[i])) {
@@ -117,8 +127,6 @@ public final class CompactMap<K, V> extends AbstractMap<K, V> {
 		}
 		return fallback;
 	}
-
-
 
 	public int       optInteger(final Object key, final int     fallback) { return (int  ) optLong  (key, fallback); }
 	public short     optShort  (final Object key, final short   fallback) { return (short) optLong  (key, fallback); }
