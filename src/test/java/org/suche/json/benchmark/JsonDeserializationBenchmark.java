@@ -84,13 +84,13 @@ public class JsonDeserializationBenchmark {
 		}
 	}
 
-	// @Benchmark
+	@Benchmark
 	public void benchmarkJackson(final Blackhole bh) throws Exception {
 		final var parsedTree = jacksonMapper.readValue(jsonData, dest);
 		bh.consume(parsedTree);
 	}
 
-	// @Benchmark
+	@Benchmark
 	public void benchmarkFastjson2(final Blackhole bh) {
 		final var parsedTree = JSON.parseObject(jsonData, dest);
 		bh.consume(parsedTree);
