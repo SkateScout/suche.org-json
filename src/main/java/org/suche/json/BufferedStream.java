@@ -6,8 +6,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Map;
 
-import org.suche.annotation.NonNull;
-
 sealed abstract class BufferedStream  implements MetaPool permits JsonInputStream {
 	private static final int BUFFER_SIZE = 128*1024;
 	private static final double[] POW10 = { 1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18 };
@@ -17,17 +15,30 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 			100000000000000L, 1000000000000000L, 10000000000000000L, 100000000000000000L, 1000000000000000000L
 	};
 	private static final int POOL_SIZE = 128;
+	private static final int POOL_RETURN_LIMIT = 2048;
+
 	Map<Object, Object> internPool;
 	byte[]                       strBuf          = new byte[1024];
 	private byte[][]             stringPoolKeys;
 	private String[]             stringPoolVals;
 	private int                  stringPoolSize;
 	final byte[]                 buffer          = new byte[BUFFER_SIZE];
-	private final Object[][]     arrayPool       = new Object[POOL_SIZE][];
-	private int                  arrayPoolSize   = 0;
 
-	private final long[][]         longPool     = new long[POOL_SIZE][];
-	private int                    longPoolSize = 0;
+	// --- NEU: DIE 4 SLAB BUCKETS (0: <=16, 1: <=128, 2: <=512, 3: <=2048) ---
+	private final Object[][][] arraySlabs    = new Object[4][32][];
+	private final int[]        arraySlabSize = new int[4];
+
+	private final long[][][]   longSlabs     = new long[4][32][];
+	private final int[]        longSlabSize  = new int[4];
+
+	// Branchless-optimierte Bucket-Berechnung
+	private static int getBucket(final int capacity) {
+		if (capacity <= 16)   return 0;
+		if (capacity <= 128)  return 1;
+		if (capacity <= 512)  return 2;
+		if (capacity <= 2048) return 3;
+		return -1; // Zu groß, geht an den GC
+	}
 
 	private final ParseContext[] ctxPool     = new ParseContext[POOL_SIZE];
 	private int                  ctxPoolSize = 0;
@@ -104,60 +115,66 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		}
 	}
 
+
 	@Override public Object[] takeArray(final int exactCapacity) {
-		var bestIdx = -1;
-		var bestLen = Integer.MAX_VALUE;
-
-		for (var i = arrayPoolSize - 1; i >= 0; i--) {
-			final var len = arrayPool[i].length;
-			if (len == exactCapacity) { // Perfect match, early exit
-				bestIdx = i;
-				break;
+		final var b = getBucket(exactCapacity);
+		if (b >= 0) {
+			final var size = arraySlabSize[b];
+			if (size > 0) {
+				final var lastIdx = size - 1;
+				arraySlabSize[b] = lastIdx;
+				final var arr = arraySlabs[b][lastIdx];
+				arraySlabs[b][lastIdx] = null; // Memory-Leak Schutz
+				return arr;
 			}
-			if (len > exactCapacity && len < bestLen) { // Best fit approach
-				bestLen = len;
-				bestIdx = i;
-			}
-		}
-
-		if (bestIdx >= 0) {
-			final var arr = arrayPool[bestIdx];
-			arrayPool[bestIdx] = arrayPool[--arrayPoolSize];
-			arrayPool[arrayPoolSize] = null; // Prevent memory leak
-			return arr;
+			// Bucket ist leer -> Allokiere direkt die Bucket-Maximalgröße!
+			final var slabCap = (b == 0) ? 16 : (b == 1) ? 128 : (b == 2) ? 512 : 2048;
+			return new Object[Math.max(exactCapacity, slabCap)];
 		}
 		return new Object[exactCapacity];
 	}
 
 	@Override public long[] takeLongArray(final int exactCapacity) {
-		var bestIdx = -1;
-		var bestLen = Integer.MAX_VALUE;
-
-		for (var i = longPoolSize - 1; i >= 0; i--) {
-			final var len = longPool[i].length;
-			if (len == exactCapacity) { // Perfect match, early exit
-				bestIdx = i;
-				break;
+		final var b = getBucket(exactCapacity);
+		if (b >= 0) {
+			final var size = longSlabSize[b];
+			if (size > 0) {
+				final var lastIdx = size - 1;
+				longSlabSize[b] = lastIdx;
+				final var arr = longSlabs[b][lastIdx];
+				longSlabs[b][lastIdx] = null;
+				return arr;
 			}
-			if (len > exactCapacity && len < bestLen) { // Best fit approach
-				bestLen = len;
-				bestIdx = i;
-			}
-		}
-
-		if (bestIdx >= 0) {
-			final var arr = longPool[bestIdx];
-			longPool[bestIdx] = longPool[--longPoolSize];
-			longPool[longPoolSize] = null; // Prevent memory leak
-			return arr;
+			final var slabCap = (b == 0) ? 16 : (b == 1) ? 128 : (b == 2) ? 512 : 2048;
+			return new long[Math.max(exactCapacity, slabCap)];
 		}
 		return new long[exactCapacity];
 	}
 
+	// WICHTIG: Die Signatur im MetaPool Interface muss lauten: void returnArray(Object[] arr, int useCount);
+	@Override public void returnArray(final Object[] arr, final int useCount) {
+		final var b = getBucket(arr.length);
+		if (b >= 0) {
+			final var size = arraySlabSize[b];
+			if (size < 32) {
+				// Nutzt native C2 Intrinsics: Löscht NUR die tatsächlich benutzten Elemente!
+				if (useCount > 0) Arrays.fill(arr, 0, Math.min(useCount, arr.length), null);
+				arraySlabs[b][size] = arr;
+				arraySlabSize[b] = size + 1;
+			}
+		}
+	}
+
 	@Override public void returnLongArray(final long[] arr) {
-		if(arr == null) throw new IllegalStateException();
-		if (arr.length > 2048) return; // Zu große Arrays dem GC überlassen
-		if (longPoolSize < longPool.length) longPool[longPoolSize++] = arr;
+		final var b = getBucket(arr.length);
+		if (b >= 0) {
+			final var size = longSlabSize[b];
+			if (size < 32) {
+				// Primitives MÜSSEN für den GC nicht gelöscht werden -> 0 Overhead
+				longSlabs[b][size] = arr;
+				longSlabSize[b] = size + 1;
+			}
+		}
 	}
 
 	@Override public ParseContext takeContext(final int ignoredCapacity, final boolean map) {
@@ -179,9 +196,9 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		return ctx;
 	}
 
-	@Override public void returnContext(final @NonNull ParseContext ctx) {
+	@Override public void returnContext(final ParseContext ctx) {
 		if (ctx.objs != null) {
-			returnArray(ctx.objs);
+			returnArray(ctx.objs, ctx.cnt<<ctx.map);
 			ctx.objs = null;
 		}
 		if (ctx.prims != null) {
@@ -190,12 +207,6 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		}
 		if (ctxPoolSize < ctxPool.length) ctxPool[ctxPoolSize++] = ctx;
 	}
-
-	@Override public void     returnArray(final Object[] arr) {
-		if (arr.length > 1024) return;
-		if (arrayPoolSize < arrayPool.length) { Arrays.fill(arr, null); arrayPool[arrayPoolSize++] = arr; }
-	}
-
 
 	@Override
 	public final String internBytes(final byte[] src, final int start, final int len, final int hash, final boolean isAscii) {
@@ -240,7 +251,6 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		}
 		return s;
 	}
-
 
 	@Override public InternalEngine engine() { return engine; }
 

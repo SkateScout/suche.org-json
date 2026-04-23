@@ -45,7 +45,7 @@ interface MetaPool {
 			if (objs != null) {
 				final var copyLen = Math.min(cnt, objs.length);
 				if (copyLen > 0) System.arraycopy(objs, 0, arr, 0, copyLen);
-				s.returnArray(objs);
+				s.returnArray(objs, copyLen);
 			}
 			objs = arr;
 		}
@@ -70,8 +70,8 @@ interface MetaPool {
 	long[]       takeLongArray(int minCapacity);
 	ParseContext takeContext  (int minCapacity, boolean map);
 
-	void         returnArray    (@NonNull Object[] arr);
-	void         returnLongArray(long  [] arr);
+	void         returnArray    (@NonNull Object[] arr, int used);
+	void         returnLongArray(         long  [] arr);
 	void         returnContext  (@NonNull ParseContext ctx);
 
 	int          depth();
