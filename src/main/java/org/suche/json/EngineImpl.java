@@ -2,7 +2,6 @@ package org.suche.json;
 
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.lang.invoke.MethodHandle;
 import java.lang.reflect.Modifier;
 import java.util.Collection;
 import java.util.Map;
@@ -22,15 +21,16 @@ final class EngineImpl implements InternalEngine {
 		final Object mutex = new Object();
 		ObjectMeta metaObject;
 		KeyValueObject[] kv;
-		MethodHandle filter;
+		// MethodHandle filter;
 		UnaryOperator<Object> transformer;
 		int cacheIndex = -1;
 		boolean building = false; // Prevents circular dependency infinite loops
-		public TypeRecord(final Class<?> clazz) { this.clazz = clazz; }
+		public TypeRecord(final Class<?> cls) { this.clazz = cls; }
+		@Override public String toString() { return "TypeRecord [clazz=" + clazz + "]"; }
+
 	}
 
 	private boolean hasCoreTransformer = false;
-	private int maxRecursiveDepth = 128;
 	private boolean skipInvalid = false;
 	private boolean failOnUnknownProperties = true;
 
@@ -43,7 +43,6 @@ final class EngineImpl implements InternalEngine {
 		t.cacheIndex = m.cacheIndex;
 	}
 
-
 	private final ObjectMeta[] metaCache = new ObjectMeta[32768];
 	private int metaCacheSize = ObjectMeta.IDX_CUSTOM_START;
 
@@ -54,8 +53,6 @@ final class EngineImpl implements InternalEngine {
 	final MetaConfig cfg;
 
 	@Override public ObjectMeta[] metaCache() { return metaCache; }
-	@Override public void    maxRecursiveDepth(final int v) { this.maxRecursiveDepth = v; }
-	@Override public int     maxRecursiveDepth() { return maxRecursiveDepth; }
 	@Override public void    skipInvalid(final boolean v) { this.skipInvalid = v; }
 	@Override public boolean skipInvalid() { return skipInvalid; }
 	@Override public void    failOnUnknownProperties(final boolean v) { this.failOnUnknownProperties = v; }
@@ -165,7 +162,17 @@ final class EngineImpl implements InternalEngine {
 	@Override public <C> void registerTransformer(final Class<C> c, final UnaryOperator<Object> f) { getTypeRecord(c).transformer = f; if (c.getClassLoader() == null || c.isArray()) hasCoreTransformer = true; }
 	@Override public JsonInputStream jsonInputStream(final InputStream is) { return JsonInputStream.of(is, this); }
 	@Override public MetaConfig config() { return cfg; }
-	@Override public MethodHandle getFilter(final Class<?> c) { return Meta.newFilter(c); }
+
+	// @Override public MethodHandle getFilter(final Class<?> c) {
+	// 	final var t = getTypeRecord(c);
+	// 	var m = t.filter;
+	// 	if (m == null) {
+	// 		m = Meta.newFilter(c);
+	// 		if (m == null) m = MethodHandles.identity(Object.class);
+	// 		t.filter = m;
+	// 	}
+	// 	return m;
+	// }
 
 	@Override
 	public KeyValueObject[] ofComplex(final Class<?> c) {

@@ -65,16 +65,10 @@ public class JsonDeserializationBenchmark {
 
 	@State(Scope.Thread)
 	public static class EngineState {
-		@Param({"0", "128"})
-		public int maxRecursion;
-
 		public JsonEngine myEngine;
 
 		@Setup(Level.Trial)
-		public void setupEngine() {
-			myEngine = JsonEngine.of(MetaConfig.DEFAULT);
-			myEngine.maxRecursiveDepth(maxRecursion);
-		}
+		public void setupEngine() { myEngine = JsonEngine.of(MetaConfig.DEFAULT); }
 	}
 	@Benchmark
 	public void benchmarkMyEngine(final Blackhole bh, final EngineState state) throws Throwable {

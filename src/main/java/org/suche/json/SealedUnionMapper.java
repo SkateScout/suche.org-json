@@ -134,7 +134,7 @@ final class SealedUnionMapper {
 		unionKeys [0] = CLASS_KEY;
 		unionTypes[0] = String.class;
 		final var cacheIdx = ((EngineImpl) e).registerMeta(null);
-		return new ObjectMeta(e, sealedInterface.getCanonicalName(), subclasses, unionKeys, unionTypes, e.failOnUnknownProperties(), cacheIdx);
+		return new ObjectMeta(e, sealedInterface.getCanonicalName(), subclasses, unionKeys, unionTypes, cacheIdx);
 	}
 
 	static Object end(final MetaPool s, final Object context, final Class<?> baseType, final Class<?>[] permitted, final FastKeyTable keys, final Class<?>[] unionTypes) throws Throwable {

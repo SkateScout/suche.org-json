@@ -2,7 +2,6 @@ package org.suche.json;
 
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.lang.invoke.MethodHandle;
 import java.util.function.Predicate;
 import java.util.function.UnaryOperator;
 
@@ -18,7 +17,6 @@ public sealed interface JsonEngine permits InternalEngine {
 	JsonOutputStream jsonOutputStream(final OutputStream out);
 
 	<C> void registerTransformer(final Class<C> c, final UnaryOperator<Object> f);
-	void maxRecursiveDepth(int v);
 
 	void skipInvalid(final boolean v);
 	boolean skipInvalid();
@@ -32,10 +30,9 @@ public sealed interface JsonEngine permits InternalEngine {
 sealed interface InternalEngine extends JsonEngine permits EngineImpl {
 	ObjectMeta       metaOf   (Class<?> clazz);
 	MetaConfig       config   ();
-	MethodHandle     getFilter(final Class<?> c);
+	// MethodHandle     getFilter(final Class<?> c);
 	KeyValueObject[] ofComplex( final Class<?> c);
 	UnaryOperator<Object> transformer(Class<?> c);
 	boolean                 hasCoreTransformer();
 	ObjectMeta[] metaCache();
-	int maxRecursiveDepth();
 }

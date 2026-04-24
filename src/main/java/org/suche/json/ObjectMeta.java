@@ -21,9 +21,13 @@ import org.suche.json.MetaPool.ParseContext;
 
 interface ObjBooleanConsumer<T> { void accept(T t, boolean value); }
 
-public final class ObjectMeta {
-	public static final int IDX_GENERIC = 0, IDX_MAP = 1, IDX_COLLECTION = 2, IDX_SET = 3, IDX_OBJ_ARRAY = 4;
-	public static final int IDX_CUSTOM_START = 16;
+final class ObjectMeta {
+	static final int IDX_GENERIC = 0, IDX_MAP = 1, IDX_COLLECTION = 2, IDX_SET = 3, IDX_OBJ_ARRAY = 4;
+
+	static final long DESC_COLLECTION = EngineImpl.createTypeDesc(true, false, IDX_COLLECTION);
+	static final long DESC_OBJ_ARRAY  = EngineImpl.createTypeDesc(true, false, IDX_OBJ_ARRAY);
+
+	static final int IDX_CUSTOM_START = 16;
 
 	static final int TYPE_INSTANTIATOR = 1;
 	static final int TYPE_MAP = 2;
@@ -32,7 +36,7 @@ public final class ObjectMeta {
 	static final int TYPE_OBJ_ARRAY = 6;
 	static final int TYPE_COLLECTION = 7;
 	static final int TYPE_SET = 8;
-	public static final int PRIM_INT = 1, PRIM_LONG = 2, PRIM_DOUBLE = 3, PRIM_FLOAT = 4, PRIM_BOOLEAN = 5, PRIM_OTHER = 6;
+	static final int PRIM_INT = 1, PRIM_LONG = 2, PRIM_DOUBLE = 3, PRIM_FLOAT = 4, PRIM_BOOLEAN = 5, PRIM_OTHER = 6;
 
 	private static final MethodHandles.Lookup LOOKUP = MethodHandles.lookup();
 	static final ObjectMeta DEFECT_FIRST = new ObjectMeta(-1);
@@ -88,7 +92,7 @@ public final class ObjectMeta {
 	private void lastSize(final int depth, final int size) { if (depth >= 0 && depth < 64) lastSeenSizeByDepth[depth] = size; }
 
 	record ComponentMeta(String name, Class<?> type) {
-		public ComponentMeta {
+		ComponentMeta {
 			if (name == null) throw new IllegalStateException("Missing name");
 			if (type == null) throw new IllegalStateException("Missing type");
 		}
@@ -142,8 +146,8 @@ public final class ObjectMeta {
 		this.fieldDescriptors = new long[0];
 	}
 
-	private ObjectMeta(final int cacheIndex) {
-		this.cacheIndex = cacheIndex;
+	private ObjectMeta(final int pCacheIndex) {
+		this.cacheIndex = pCacheIndex;
 		this.pojoStart = null;
 		this.failOnUnknown = false;
 		this.className = null;
@@ -164,66 +168,41 @@ public final class ObjectMeta {
 
 	}
 
-	// TODO (1)
-	ObjectMeta(final InternalEngine e, final String className, final Supplier<Object> pojoStart, final FastKeyTable keys, final Class<?>[] types, final ComponentMeta[] components, final Object[][] enums, final int cacheIndex) {
-		this.cacheIndex = cacheIndex;
-		this.className = className;
-		this.pojoStart = pojoStart;
-		this.metaType = null == pojoStart ? TYPE_DEFECT : TYPE_INSTANTIATOR;
-		this.factory = null;
+	private static final ConstructorGenerator.ObjectArrayFactory NO_FACTORY       = null;
+	private static final int                                     NO_FACTORY_PARAM = 0;
+	private static final Supplier<Object>                        NO_POJO_START    = null;
+
+	ObjectMeta(final InternalEngine e, final String pClassName, final Supplier<Object> pStart, final ObjectArrayFactory pFactory, final int pStartCount
+			, final FastKeyTable pKeys, final Class<?>[] pTypes, final ComponentMeta[] pComponents, final Object[][] pEnums, final int pCacheIndex) {
+		this.cacheIndex = pCacheIndex;
+		this.className = pClassName;
+		this.pojoStart = pStart;
+		this.metaType = (pStart == null && pFactory == null) ? TYPE_DEFECT : TYPE_INSTANTIATOR;
+		this.factory = pFactory;
 		this.arrayCreator = null;
-		this.ctorParamCount = 0;
+		this.ctorParamCount = pStartCount;
 		this.permitted = null;
 		this.baseType = null;
-		this.keys = keys;
-		this.types = types;
-		this.components = components;
-		this.enumConstants = enums;
+		this.keys = pKeys;
+		this.types = pTypes;
+		this.components = pComponents;
+		this.enumConstants = pEnums;
 		this.failOnUnknown = e.failOnUnknownProperties();
 		this.skipDefaultValues = e.config().skipDefaultValues();
 		var primFound = false;
-		for (final var t : types) if (t != null && t.isPrimitive()) { primFound = true; break; }
+		for (final var t : pTypes) if (t != null && t.isPrimitive()) { primFound = true; break; }
 		this.needsPrims = primFound;
 		this.componentDescriptor = 0L;
-		if (components != null && components.length > 0) {
-			this.fieldDescriptors = new long[components.length];
-			for (var i = 0; i < components.length; i++) this.fieldDescriptors[i] = resolveDescriptor(e, components[i].type());
+		if (pComponents != null && pComponents.length > 0) {
+			this.fieldDescriptors = new long[pComponents.length];
+			for (var i = 0; i < pComponents.length; i++) this.fieldDescriptors[i] = resolveDescriptor(e, pComponents[i].type());
 		} else {
 			this.fieldDescriptors = new long[0];
 		}
 	}
 
-	// TODO (1) kombine with defect / Instance
-	ObjectMeta(final InternalEngine e, final String className, final ObjectArrayFactory factory, final int ctorParamCount, final FastKeyTable keys, final Class<?>[] types, final ComponentMeta[] components, final Object[][] enums, final int cacheIndex) {
-		this.cacheIndex = cacheIndex;
-		this.className = className;
-		this.metaType = TYPE_INSTANTIATOR;
-		this.pojoStart = null;
-		this.factory = factory;
-		this.arrayCreator = null;
-		this.ctorParamCount = ctorParamCount;
-		this.permitted = null;
-		this.baseType = null;
-		this.keys = keys;
-		this.types = types;
-		this.components = components;
-		this.enumConstants = enums;
-		this.failOnUnknown = e.failOnUnknownProperties();
-		this.skipDefaultValues = e.config().skipDefaultValues();
-		var primFound = false;
-		for (final var t : types) if (t != null && t.isPrimitive()) { primFound = true; break; }
-		this.needsPrims = primFound;
-		this.componentDescriptor = 0L;
-		if (components != null && components.length > 0) {
-			this.fieldDescriptors = new long[components.length];
-			for (var i = 0; i < components.length; i++) this.fieldDescriptors[i] = resolveDescriptor(e, components[i].type());
-		} else {
-			this.fieldDescriptors = new long[0];
-		}
-	}
-
-	ObjectMeta(final InternalEngine e, final Class<?> mapValueType, final int cacheIndex) {
-		this.cacheIndex = cacheIndex;
+	ObjectMeta(final InternalEngine e, final Class<?> mapValueType, final int pCacheIndex) {
+		this.cacheIndex = pCacheIndex;
 		this.className = "<MAP>";
 		this.metaType = TYPE_MAP;
 		this.failOnUnknown = false;
@@ -243,23 +222,23 @@ public final class ObjectMeta {
 		this.fieldDescriptors = new long[] { this.componentDescriptor };
 	}
 
-	ObjectMeta(final InternalEngine e,final String className, final Class<?>[] subclasses, final String[] keys, final Class<?>[] types, final boolean failOnUnknown, final int cacheIndex) {
-		this.cacheIndex     = cacheIndex;
-		this.className      = className;
-		final var possibleComponents = new ComponentMeta[keys.length];
-		this.failOnUnknown  = failOnUnknown;
-		for (var i = 0; i < keys.length; i++) possibleComponents[i] = new ComponentMeta(keys[i], types[i]);
+	ObjectMeta(final InternalEngine e,final String pClassName, final Class<?>[] pSubclasses, final String[] pKeys, final Class<?>[] pTypes, final int pCacheIndex) {
+		this.cacheIndex     = pCacheIndex;
+		this.className      = pClassName;
+		final var possibleComponents = new ComponentMeta[pKeys.length];
+		this.failOnUnknown  = e.failOnUnknownProperties();
+		for (var i = 0; i < pKeys.length; i++) possibleComponents[i] = new ComponentMeta(pKeys[i], pTypes[i]);
 		this.metaType       = TYPE_SEALED;
 		this.pojoStart      = null;
 		this.factory        = null;
 		this.arrayCreator   = null;
 		this.ctorParamCount = 0;
-		this.permitted      = subclasses;
+		this.permitted      = pSubclasses;
 		this.baseType       = null;
 		this.keys           = FastKeyTable.build(possibleComponents);
-		this.types          = types;
+		this.types          = pTypes;
 		this.components     = possibleComponents;
-		this.enumConstants  = buildEnumConstants(types);
+		this.enumConstants  = buildEnumConstants(pTypes);
 		this.skipDefaultValues = e.config().skipDefaultValues();
 		this.needsPrims = false;
 		this.componentDescriptor = 0L;
@@ -268,8 +247,8 @@ public final class ObjectMeta {
 
 	@Deprecated(forRemoval = true, since = "Switch to getChildDescriptor / getComponentDescriptor")
 	Class<?> type(final int index) { return types[1==types.length?0:index]; }
-	public long getChildDescriptor(final int index) { return (this.metaType == TYPE_MAP ? this.componentDescriptor : (fieldDescriptors == null ? 0L : fieldDescriptors[index])); }
-	public long getComponentDescriptor() { return componentDescriptor; }
+	long getChildDescriptor(final int index) { return (this.metaType == TYPE_MAP ? this.componentDescriptor : (fieldDescriptors == null ? 0L : fieldDescriptors[index])); }
+	long getComponentDescriptor() { return componentDescriptor; }
 
 	static ObjectMeta ofPojo(final InternalEngine engine, final Class<?> c, final int cacheIndex) {
 		try {
@@ -281,28 +260,23 @@ public final class ObjectMeta {
 			}
 			if (bestCtor == null) return DEFECT_FIRST;
 			if (!bestCtor.canAccess(null)) bestCtor.setAccessible(true);
-
 			final var params = bestCtor.getParameters();
 			final var props = pojoProps(c, params);
 			final var totalProps = props.size();
 			final var finalComps = new ComponentMeta[totalProps];
 			final var finalTypes = new Class<?>[totalProps];
 			var setterCounter = params.length;
-
 			for (final var entry : props.entrySet()) {
 				final var targetIdx = entry.getValue().ctorIdx != -1 ? entry.getValue().ctorIdx : setterCounter++;
 				finalComps[targetIdx] = new ComponentMeta(entry.getKey(), entry.getValue().type);
 				finalTypes[targetIdx] = entry.getValue().type;
 			}
-
 			final var keys = FastKeyTable.build(finalComps);
 			final var enumConstants = buildEnumConstants(finalTypes);
-
-			if (bestCtor.getParameterCount() == 0)
-				return new ObjectMeta(engine, c.getCanonicalName(), Meta.asSupplier(c, LOOKUP.unreflectConstructor(bestCtor)), keys, finalTypes, finalComps, enumConstants, cacheIndex);
-
-			return new ObjectMeta(engine, c.getCanonicalName(), ConstructorGenerator.generate(c, finalTypes), params.length, keys, finalTypes, finalComps, enumConstants, cacheIndex);
+			if (bestCtor.getParameterCount() == 0) return new ObjectMeta(engine, c.getCanonicalName(), Meta.asSupplier(c, LOOKUP.unreflectConstructor(bestCtor)), NO_FACTORY, NO_FACTORY_PARAM, keys, finalTypes, finalComps, enumConstants, cacheIndex);
+			return new ObjectMeta(engine, c.getCanonicalName(), NO_POJO_START, ConstructorGenerator.generate(c, finalTypes), params.length, keys, finalTypes, finalComps, enumConstants, cacheIndex);
 		} catch (final Throwable e) {
+			e.printStackTrace();
 			return DEFECT_FIRST;
 		}
 	}
@@ -316,15 +290,16 @@ public final class ObjectMeta {
 				types[i] = comps[i].getType();
 				metaComps[i] = new ComponentMeta(comps[i].getName(), types[i]);
 			}
-			return new ObjectMeta(engine, c.getCanonicalName(), ConstructorGenerator.generate(c, types), 0, FastKeyTable.build(metaComps), types, metaComps, buildEnumConstants(types), cacheIndex);
+			return new ObjectMeta(engine, c.getCanonicalName(), NO_POJO_START, ConstructorGenerator.generate(c, types), 0, FastKeyTable.build(metaComps), types, metaComps, buildEnumConstants(types), cacheIndex);
 		} catch (final Throwable e) {
+			e.printStackTrace();
 			return DEFECT_FIRST;
 		}
 	}
 
 	static ObjectMeta ofEnum(final InternalEngine e, final Class<?> c, final int cacheIndex) {
 		final var values = c.getEnumConstants();
-		return new ObjectMeta(e, c.getCanonicalName(), (objects, _) -> Meta.resolveEnum(values, objects[1]), 0, ENUM_KEYS, ENUM_TYPES, ENUM_COMPS, null, cacheIndex);
+		return new ObjectMeta(e, c.getCanonicalName(), NO_POJO_START, (objects, _) -> Meta.resolveEnum(values, objects[1]), 0, ENUM_KEYS, ENUM_TYPES, ENUM_COMPS, null, cacheIndex);
 	}
 
 	private static Object[][] buildEnumConstants(final Class<?>[] types) {

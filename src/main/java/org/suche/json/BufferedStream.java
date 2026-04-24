@@ -456,22 +456,22 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		strBuf = Arrays.copyOf(strBuf, newCapacity);
 	}
 
-	final boolean parseTruePrimitive() throws IOException {
+	final boolean parseTrueOrFalse(final boolean expected) throws IOException {
 		ensure(4);
-		if(limit - pos < 4
-				|| buffer[pos  ] != 't'
-				|| buffer[pos+1] != 'r'
-				|| buffer[pos+2] != 'u'
-				|| buffer[pos+3] != 'e') throw new IllegalStateException();
+		if(limit - pos < 4) throw new IllegalStateException();
+		if(expected) {
+			if(        buffer[pos  ] != 't'
+					|| buffer[pos+1] != 'r'
+					|| buffer[pos+2] != 'u'
+					|| buffer[pos+3] != 'e') throw new IllegalStateException();
+			pos += 4;
+			return true;
+		}
+		if(buffer[pos] != 'f' || buffer[pos+1] != 'a' || buffer[pos+2] != 'l' || buffer[pos+3] != 's') throw new IllegalStateException();
 		pos += 4;
-		return true;
-	}
-
-	final boolean parseFalsePrimitive() throws IOException {
 		ensure(5);
-		if(limit - pos < 5 || buffer[pos] != 'f' || buffer[pos+1] != 'a'
-				|| buffer[pos+2] != 'l' || buffer[pos+3] != 's' || buffer[pos+4] != 'e') throw new IllegalStateException();
-		pos += 5;
+		if(buffer[pos] != 'e') throw new IllegalStateException();
+		pos += 1;
 		return false;
 	}
 

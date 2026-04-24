@@ -7,7 +7,7 @@ import java.util.Arrays;
 public final class JsonInputStream extends BufferedStream implements AutoCloseable, MetaPool {
 	private static final ObjectPool<JsonInputStream> STREAM_POOL = new ObjectPool<>(64, JsonInputStream::new);
 
-	public ObjectMeta[] metaCache;
+	ObjectMeta[] metaCache;
 
 	static final class CTX {
 		long typeDesc;
@@ -84,9 +84,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			if (pos >= limit) { ensure(1); if (pos >= limit) throw new IllegalStateException(); }
 			var b = buffer[pos];
 			switch (b) {
-			case '\t', '\n', '\r', ' ' -> {
-				for(pos++; pos < limit; pos++) if (((b = buffer[pos]) & 0xC0) != 0 || ((1L << b) & WHITESPACE_MASK) == 0) break;
-			}
+			case '\t', '\n', '\r', ' ' -> { for(pos++; pos < limit; pos++) if (((b = buffer[pos]) & 0xC0) != 0 || ((1L << b) & WHITESPACE_MASK) == 0) break; }
 			case '"' -> {
 				if (curTypeDesc >= 0L && curIdx < 0) {
 					pos++;
@@ -98,19 +96,6 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 					consumeCommaIfPresent();
 				}
 			}
-			case '}', ']' -> {
-				pos++;
-				final var finishedObj = curMeta.end(this, curObj);
-				if (engineStack.depth < 0) return finishedObj;
-				final var parent = engineStack.stack[engineStack.depth--];
-				curTypeDesc = parent.typeDesc;
-				curObj = parent.obj;
-				curMeta = (ObjectMeta) parent.meta;
-				curIdx = parent.targetIdx;
-				curMeta.set(this, curObj, curIdx, finishedObj);
-				curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
-				consumeCommaIfPresent();
-			}
 			case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9' -> {
 				parseNumericPrimitive(curMeta, curObj, curIdx, null);
 				curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
@@ -121,8 +106,8 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
 				consumeCommaIfPresent();
 			}
-			case 't', 'f' -> {
-				curMeta.set(this, curObj, curIdx, b == 't' ? parseTruePrimitive() : parseFalsePrimitive());
+			case 't', 'f' -> { // Combined to reduce method sice
+				curMeta.set(this, curObj, curIdx, parseTrueOrFalse(b == 't'));
 				curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
 				consumeCommaIfPresent();
 			}
@@ -136,18 +121,30 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				curObj = curMeta.start(this);
 				curIdx = -1;
 			}
+			case '}', ']' -> {
+				pos++;
+				// IMPORTANT: Must be evaluated BEFORE parent overwrites curMeta/curObj
+				final var finishedObj = curMeta.end(this, curObj);
+				if (engineStack.depth < 0) return finishedObj;
+				final var parent = engineStack.stack[engineStack.depth--];
+				curTypeDesc = parent.typeDesc;
+				curObj  = parent.obj;
+				curMeta = (ObjectMeta) parent.meta;
+				curIdx  = parent.targetIdx;
+				curMeta.set(this, curObj, curIdx, finishedObj);
+				curIdx  = curTypeDesc < 0L ? curIdx + 1 : -1;
+				consumeCommaIfPresent();
+			}
 			case '[' -> {
 				if (curTypeDesc >= 0L && curIdx < 0) throw new IllegalStateException("Expected key");
 				pos++;
 				var childDesc = curMeta.fieldDescriptor(curIdx);
 				if (childDesc >= 0L) {
 					if (((int) (childDesc >> 1))!= ObjectMeta.IDX_MAP) throw new IllegalStateException("Expected object, got '['");
-					// TODO this should be an constant. not an method call here
-					childDesc = EngineImpl.createTypeDesc(true, false, ObjectMeta.IDX_COLLECTION);
+					childDesc = ObjectMeta.DESC_COLLECTION;
 				}
 				if ((childDesc & 1L) != 0L) {
-					// TODO remove bit shift here and move it to parsePrimitiv
-					curMeta.set(this, curObj, curIdx, parsePrimitiveArray((int) (childDesc >> 1))); // cast to int avoid mask with & 0x7FFFFFFFFFFFFFFFL
+					curMeta.set(this, curObj, curIdx, parsePrimitiveArray(childDesc));
 					curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
 					consumeCommaIfPresent();
 				} else {
@@ -179,7 +176,8 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		return runStateEngine(startTypeDesc, targetMeta != null ? targetMeta.start(this) : null, targetMeta, isArray ? 0 : -1);
 	}
 
-	private Object parsePrimitiveArray(final int primId) throws IOException {
+	private Object parsePrimitiveArray(final long typeDesc) throws IOException {
+		final var primId = (int)(typeDesc>>1);
 		final var size = (lastArraySize > 0 && lastArraySize < 1024) ? lastArraySize : 16;
 		return switch (primId) {
 		case ObjectMeta.PRIM_DOUBLE  -> parseDoubleArray(new double[size]);
