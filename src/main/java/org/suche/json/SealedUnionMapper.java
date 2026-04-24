@@ -3,6 +3,7 @@ package org.suche.json;
 
 import java.lang.reflect.Array;
 import java.lang.reflect.Modifier;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Collections;
@@ -132,7 +133,8 @@ final class SealedUnionMapper {
 		}
 		unionKeys [0] = CLASS_KEY;
 		unionTypes[0] = String.class;
-		return new ObjectMeta(e, sealedInterface.getCanonicalName(), subclasses, unionKeys, unionTypes, e.failOnUnknownProperties());
+		final var cacheIdx = ((EngineImpl) e).registerMeta(null);
+		return new ObjectMeta(e, sealedInterface.getCanonicalName(), subclasses, unionKeys, unionTypes, e.failOnUnknownProperties(), cacheIdx);
 	}
 
 	static Object end(final MetaPool s, final Object context, final Class<?> baseType, final Class<?>[] permitted, final FastKeyTable keys, final Class<?>[] unionTypes) throws Throwable {
@@ -141,21 +143,23 @@ final class SealedUnionMapper {
 		final var unionObj  = unionCtx.objs;
 		final var unionPrim = unionCtx.prims;
 		var className = (String) unionObj[0];
-		if (className == null) { final var enumIdx = keys.get(ENUM_KEY); if (enumIdx >= 0) className = (String) unionObj[enumIdx]; }
+		if (className == null) {
+			final var enumBytes = ENUM_KEY.getBytes(StandardCharsets.UTF_8);
+			final var enumIdx = keys.get(FastKeyTable.computeHash(enumBytes, 0, enumBytes.length), enumBytes, 0, enumBytes.length);
+			if (enumIdx >= 0) className = (String) unionObj[enumIdx];
+		}
 		final var targetClass = resolvePermittedSubclass(baseType, permitted, className);
 		final var engine      = s.engine();
 		final var targetMeta  = engine.metaOf(targetClass);
-		final var targetCtx   = s.takeContext(targetMeta.components.length, true);
-		targetCtx.cnt         = targetMeta.components.length;
+		final var targetCtx   = (MetaPool.ParseContext) targetMeta.start(s);
 		final var targetObj   = targetCtx.objs;
 		final var targetPrim  = targetCtx.prims;
-
 		for (var i = 0; i < targetMeta.components.length; i++) {
 			final var comp = targetMeta.components[i];
-			final var unionIdx = keys.get(comp.name());
+			final var nameBytes = comp.name().getBytes(StandardCharsets.UTF_8);
+			final var unionIdx  = keys.get(FastKeyTable.computeHash(nameBytes, 0, nameBytes.length), nameBytes, 0, nameBytes.length);
 			if (unionIdx < 0) continue;
 			final var uType = unionTypes[unionIdx];
-
 			if (uType.isPrimitive()) {
 				targetPrim[i] = unionPrim[unionIdx];
 			} else {
@@ -169,7 +173,6 @@ final class SealedUnionMapper {
 						val = coercePrimitive(val, comp.type());
 					}
 				}
-
 				if (comp.type().isPrimitive()) {
 					var primVal = 0L;
 					if (val instanceof final Boolean b) primVal = b ? 1L : 0L;
@@ -188,10 +191,7 @@ final class SealedUnionMapper {
 				}
 			}
 		}
-
-		// MAXIMALE VEREINFACHUNG: Die Factory erledigt nun Instanziierung UND Setter!
 		final var result = targetMeta.factory.create(targetObj, targetPrim);
-
 		s.returnContext(targetCtx);
 		s.returnContext(unionCtx);
 		return result;
@@ -227,10 +227,10 @@ final class SealedUnionMapper {
 		final var engine = s.engine();
 		try {
 			if (rootVal instanceof final CompactMap<?, ?> m) {
-				final var raw   = m.getRawData();
-				final var prims = m.prims();
+				final var raw        = m.getRawData();
+				final var prims      = m.prims();
 				final var singleType = m.singleType();
-				final var meta  = getMeta(engine, raw, rootExpected);
+				final var meta        = getMeta(engine, raw, rootExpected);
 				if (meta == null || meta == ObjectMeta.GENERIC_MAP || meta == ObjectMeta.NULL) return rootVal;
 				stack.push(raw, prims, singleType, meta, meta.start(s), null, -1);
 			} else if (rootVal instanceof final CompactList<?> l) {
@@ -288,7 +288,6 @@ final class SealedUnionMapper {
 					while (c.idx < c.len) {
 						final var key = (String) c.raw[c.idx];
 						var val = c.raw[c.idx + 1];
-
 						// LAZY PRIMITIVES AUFLÖSEN (MAP)
 						final var logicalIdx = c.idx >> 1; // Sicherer Bit-Shift für Value-Index
 					if (c.singleType == MetaPool.T_LONG) {
@@ -303,7 +302,8 @@ final class SealedUnionMapper {
 					if (CLASS_KEY.equals(key)) continue;
 					final var targetIdx = c.meta.prepareKey(c.context, key);
 					if (targetIdx >= 0) {
-						final Class<?> expectedType = c.meta.type(targetIdx);
+
+						final Class<?> expectedType = c.meta.type(targetIdx); // TODO replace with typedesc + fetch class from engine
 						if (val instanceof final CompactMap<?, ?> m && expectedType != Object.class && expectedType != java.util.Map.class) {
 							final var childRaw = m.getRawData();
 							final var childPrims = m.prims();

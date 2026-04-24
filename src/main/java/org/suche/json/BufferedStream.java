@@ -62,10 +62,6 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 	private final ObjectMeta[] dynamicMetaCache = new ObjectMeta[32];
 	private final int dynamicMetaCount = 0;
 
-	ObjectMeta getDynamicMeta(final Class<?> compType, final int targetMetaType) {
-		return ((EngineImpl) engine).getDynamicMeta(compType, targetMetaType);
-	}
-
 	final Object[] onceInternal = new Object[32];
 	int            onceInternalSize = 0;
 

@@ -60,7 +60,7 @@ public final class ObjectMeta {
 	private final IntFunction<Object> arrayCreator;
 	final int ctorParamCount;
 	private final FastKeyTable keys;
-	final Class<?>[] types; // TODO wird nur für linkDescriptors gebraucht
+	final Class<?>[] types;
 	private final Class<?> baseType;
 	final Class<?>[] permitted;
 	final Object[][] enumConstants;
@@ -69,8 +69,9 @@ public final class ObjectMeta {
 	final int cacheIndex;
 	final boolean needsPrims;
 
-	private long[] fieldDescriptors;
-	private long componentDescriptor;
+	// NOW FINAL thanks to pre-allocated cache indices resolving circular dependencies!
+	private final long[] fieldDescriptors;
+	private final long componentDescriptor;
 
 	private int startSize(final int depth) {
 		final var size = depth < 64 && depth >= 0 ? lastSeenSizeByDepth[depth] : 16;
@@ -94,6 +95,21 @@ public final class ObjectMeta {
 
 	private static final int MOD_FINAL_OR_STATIC = Modifier.STATIC | Modifier.FINAL;
 
+	private static long resolveDescriptor(final InternalEngine e, Class<?> type) {
+		if (type == null) type = Object.class;
+		final var isArray = type.isArray() || Collection.class.isAssignableFrom(type);
+		final var isPrimArray = isArray && type.isArray() && type.componentType().isPrimitive();
+		final var isPrimValue = !isArray && type.isPrimitive();
+
+		Class<?> primTarget = null;
+		if (isPrimArray) primTarget = type.componentType();
+		else if (isPrimValue) primTarget = type;
+
+		// FIX: Null-Check für 'e', da statische Felder (wie GENERIC_MAP) e = null übergeben
+		final var subIdx = primTarget != null ? getPrimId(primTarget) : (e != null ? ((EngineImpl) e).metaIdOf(type) : IDX_GENERIC);
+		return EngineImpl.createTypeDesc(isArray, primTarget != null, subIdx);
+	}
+
 	ObjectMeta(final InternalEngine e, final Class<?> compType, final int targetMetaType, final int cacheIndex) {
 		this.cacheIndex = cacheIndex;
 		this.className = targetMetaType == TYPE_OBJ_ARRAY ? "<ARRAY>" : (targetMetaType == TYPE_SET ? "<SET>" : "<COLLECTION>");
@@ -111,6 +127,8 @@ public final class ObjectMeta {
 		this.enumConstants = null;
 		this.skipDefaultValues = e.config().skipDefaultValues();
 		this.needsPrims = compType != null && compType.isPrimitive();
+		this.componentDescriptor = resolveDescriptor(e, compType);
+		this.fieldDescriptors = null;
 	}
 
 	private ObjectMeta(final int cacheIndex) {
@@ -130,6 +148,8 @@ public final class ObjectMeta {
 		this.enumConstants = null;
 		this.skipDefaultValues = false;
 		this.needsPrims = false;
+		this.componentDescriptor = 0L;
+		this.fieldDescriptors = null;
 	}
 
 	ObjectMeta(final InternalEngine e, final String className, final Supplier<Object> pojoStart, final FastKeyTable keys, final Class<?>[] types, final ComponentMeta[] components, final Object[][] enumConstants, final int cacheIndex) {
@@ -150,7 +170,15 @@ public final class ObjectMeta {
 		this.skipDefaultValues = e.config().skipDefaultValues();
 		var primFound = false;
 		for (final var t : types) if (t != null && t.isPrimitive()) { primFound = true; break; }
-		this.needsPrims = primFound; // TODO needsPrims kann schon beim erstellen berechnet werden
+		this.needsPrims = primFound;
+
+		if (components != null && components.length > 0) {
+			this.fieldDescriptors = new long[components.length];
+			for (var i = 0; i < components.length; i++) this.fieldDescriptors[i] = resolveDescriptor(e, components[i].type());
+		} else {
+			this.fieldDescriptors = null;
+		}
+		this.componentDescriptor = 0L;
 	}
 
 	ObjectMeta(final InternalEngine e, final String className, final ObjectArrayFactory factory, final int ctorParamCount, final FastKeyTable keys, final Class<?>[] types, final ComponentMeta[] components, final Object[][] enums, final int cacheIndex) {
@@ -172,6 +200,14 @@ public final class ObjectMeta {
 		var primFound = false;
 		for (final var t : types) if (t != null && t.isPrimitive()) { primFound = true; break; }
 		this.needsPrims = primFound;
+
+		if (components != null && components.length > 0) {
+			this.fieldDescriptors = new long[components.length];
+			for (var i = 0; i < components.length; i++) this.fieldDescriptors[i] = resolveDescriptor(e, components[i].type());
+		} else {
+			this.fieldDescriptors = null;
+		}
+		this.componentDescriptor = 0L;
 	}
 
 	ObjectMeta(final InternalEngine e, final Class<?> mapValueType, final int cacheIndex) {
@@ -191,6 +227,8 @@ public final class ObjectMeta {
 		this.enumConstants = null;
 		this.skipDefaultValues = e == null ? true : e.config().skipDefaultValues();
 		this.needsPrims = mapValueType != null && mapValueType.isPrimitive();
+		this.componentDescriptor = resolveDescriptor(e, mapValueType);
+		this.fieldDescriptors = null;
 	}
 
 	ObjectMeta(final InternalEngine e,final String className, final Class<?>[] subclasses, final String[] keys, final Class<?>[] types, final boolean failOnUnknown, final int cacheIndex) {
@@ -212,48 +250,8 @@ public final class ObjectMeta {
 		this.enumConstants  = buildEnumConstants(types);
 		this.skipDefaultValues = e.config().skipDefaultValues();
 		this.needsPrims = false;
-	}
-
-	void linkDescriptors(final EngineImpl engine) {
-		if (this.metaType == TYPE_OBJ_ARRAY || this.metaType == TYPE_COLLECTION || this.metaType == TYPE_MAP || this.metaType == TYPE_SET) {
-			// SICHERE TYP-ERMITTLUNG FÜR COLLECTIONS UND MAPS
-			Class<?> compType = Object.class;
-			if (this.types != null) {
-				if (this.metaType == TYPE_MAP && this.types.length >= 2) {
-					compType = this.types[1]; // Bei Map ist der Value-Typ an Index 1
-				} else if (this.types.length >= 1) {
-					compType = this.types[0]; // Bei Listen/Arrays an Index 0
-				}
-			}
-			if (compType == null) compType = Object.class;
-
-			final var isArray = compType.isArray() || Collection.class.isAssignableFrom(compType);
-			final var isPrimArray = isArray && compType.isArray() && compType.componentType().isPrimitive();
-			final var isPrimValue = !isArray && compType.isPrimitive();
-
-			Class<?> primTarget = null;
-			if (isPrimArray) primTarget = compType.componentType();
-			else if (isPrimValue) primTarget = compType;
-
-			final var subIdx = primTarget != null ? getPrimId(primTarget) : (engine.metaOf(compType) != null ? engine.metaOf(compType).cacheIndex : IDX_GENERIC);
-			this.componentDescriptor = EngineImpl.createTypeDesc(isArray, primTarget != null, subIdx);
-		} else if (this.components != null) {
-			this.fieldDescriptors = new long[this.components.length];
-			for (var i = 0; i < this.components.length; i++) {
-				Class<?> fType = types[i]; // TODO warum nutzen holen wir hier nicht gleich die Descriptor ID ?
-				if (fType == null) fType = Object.class;
-				final var isArray = fType.isArray() || Collection.class.isAssignableFrom(fType);
-				final var isPrimArray = isArray && fType.isArray() && fType.componentType().isPrimitive();
-				final var isPrimValue = !isArray && fType.isPrimitive();
-
-				Class<?> primTargetF = null;
-				if (isPrimArray) primTargetF = fType.componentType();
-				else if (isPrimValue) primTargetF = fType;
-
-				final var fIdx = primTargetF != null ? getPrimId(primTargetF) : (engine.metaOf(fType) != null ? engine.metaOf(fType).cacheIndex : IDX_GENERIC);
-				this.fieldDescriptors[i] = EngineImpl.createTypeDesc(isArray, primTargetF != null, fIdx);
-			}
-		}
+		this.componentDescriptor = 0L;
+		this.fieldDescriptors = null;
 	}
 
 	@Deprecated(forRemoval = true, since = "Switch to getChildDescriptor / getComponentDescriptor")
@@ -261,7 +259,7 @@ public final class ObjectMeta {
 	public long getChildDescriptor(final int index) { return (this.metaType == TYPE_MAP ? this.componentDescriptor : (fieldDescriptors == null ? 0L : fieldDescriptors[index])); }
 	public long getComponentDescriptor() { return componentDescriptor; }
 
-	static ObjectMeta ofPojo(final InternalEngine engine, final Class<?> c) {
+	static ObjectMeta ofPojo(final InternalEngine engine, final Class<?> c, final int cacheIndex) {
 		try {
 			final var ctors = c.getDeclaredConstructors();
 			Constructor<?> bestCtor = null;
@@ -287,18 +285,17 @@ public final class ObjectMeta {
 
 			final var keys = FastKeyTable.build(finalComps);
 			final var enumConstants = buildEnumConstants(finalTypes);
-			final var idx = ((EngineImpl) engine).registerMeta(null);
 
 			if (bestCtor.getParameterCount() == 0)
-				return new ObjectMeta(engine, c.getCanonicalName(), Meta.asSupplier(c, LOOKUP.unreflectConstructor(bestCtor)), keys, finalTypes, finalComps, enumConstants, idx);
+				return new ObjectMeta(engine, c.getCanonicalName(), Meta.asSupplier(c, LOOKUP.unreflectConstructor(bestCtor)), keys, finalTypes, finalComps, enumConstants, cacheIndex);
 
-			return new ObjectMeta(engine, c.getCanonicalName(), ConstructorGenerator.generate(c, finalTypes), params.length, keys, finalTypes, finalComps, enumConstants, idx);
+			return new ObjectMeta(engine, c.getCanonicalName(), ConstructorGenerator.generate(c, finalTypes), params.length, keys, finalTypes, finalComps, enumConstants, cacheIndex);
 		} catch (final Throwable e) {
 			return DEFECT_FIRST;
 		}
 	}
 
-	static ObjectMeta ofRecord(final InternalEngine engine, final Class<? extends Record> c) {
+	static ObjectMeta ofRecord(final InternalEngine engine, final Class<? extends Record> c, final int cacheIndex) {
 		final var comps = c.getRecordComponents();
 		final var metaComps = new ComponentMeta[comps.length];
 		final var types = new Class<?>[comps.length];
@@ -307,15 +304,15 @@ public final class ObjectMeta {
 				types[i] = comps[i].getType();
 				metaComps[i] = new ComponentMeta(comps[i].getName(), types[i]);
 			}
-			return new ObjectMeta(engine, c.getCanonicalName(), ConstructorGenerator.generate(c, types), 0, FastKeyTable.build(metaComps), types, metaComps, buildEnumConstants(types), ((EngineImpl) engine).registerMeta(null));
+			return new ObjectMeta(engine, c.getCanonicalName(), ConstructorGenerator.generate(c, types), 0, FastKeyTable.build(metaComps), types, metaComps, buildEnumConstants(types), cacheIndex);
 		} catch (final Throwable e) {
 			return DEFECT_FIRST;
 		}
 	}
 
-	static ObjectMeta ofEnum(final InternalEngine e, final Class<?> c) {
+	static ObjectMeta ofEnum(final InternalEngine e, final Class<?> c, final int cacheIndex) {
 		final var values = c.getEnumConstants();
-		return new ObjectMeta(e, c.getCanonicalName(), (objects, _) -> Meta.resolveEnum(values, objects[1]), 0, ENUM_KEYS, ENUM_TYPES, ENUM_COMPS, null, ((EngineImpl) e).registerMeta(null));
+		return new ObjectMeta(e, c.getCanonicalName(), (objects, _) -> Meta.resolveEnum(values, objects[1]), 0, ENUM_KEYS, ENUM_TYPES, ENUM_COMPS, null, cacheIndex);
 	}
 
 	private static Object[][] buildEnumConstants(final Class<?>[] types) {
@@ -373,11 +370,11 @@ public final class ObjectMeta {
 		return switch (metaType) {
 		case TYPE_MAP, TYPE_OBJ_ARRAY, TYPE_COLLECTION -> s.takeContext(startSize(s.depth()), TYPE_MAP == metaType);
 		case TYPE_INSTANTIATOR -> {
-			final var len = components.length;
-			final var ctx = s.takeContext(len, false); // TODO use fieldDescriptors.length
+			final var len = fieldDescriptors != null ? fieldDescriptors.length : 0;
+			final var ctx = s.takeContext(len, false);
 			if (ctx.objs == null) ctx.objs = s.takeArray(len);
-			if (needsPrims && ctx.prims == null) ctx.prims = s.takeLongArray(len); // TODO use fieldDescriptors.length
-			ctx.cnt = len; // TODO Use fieldDescriptors instead
+			if (needsPrims && ctx.prims == null) ctx.prims = s.takeLongArray(len);
+			ctx.cnt = len;
 			yield ctx;
 		}
 		case TYPE_SET -> new HashSet<>();
@@ -407,7 +404,7 @@ public final class ObjectMeta {
 			final var ctx = (ParseContext) context;
 			if (skipDefaultValues && ctx.cnt == 0) { s.returnContext(ctx); yield null; }
 			lastSize(s.depth(), ctx.cnt);
-			final var result = arrayCreator.apply(ctx.cnt); // TODO als Method handle speichern Fixer erster Parameter IntFunction(size)
+			final var result = arrayCreator.apply(ctx.cnt);
 			if (ctx.objs != null) System.arraycopy(ctx.objs, 0, result, 0, ctx.cnt);
 			else if (ctx.prims != null) {
 				// Primitive Werte in Ziel-Array boxen (z.B. für Double[] vs double[])
