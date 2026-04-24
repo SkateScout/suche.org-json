@@ -88,7 +88,13 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			case '"' -> {
 				if (curTypeDesc >= 0L && curIdx < 0) {
 					pos++;
-					curIdx = curMeta.prepareKey(curObj, parseStringValue());
+					final var key = parseStringValue();
+					if (curMeta.metaType == ObjectMeta.TYPE_MAP) {
+						((ParseContext)curObj).currentKey = key;
+						curIdx = 0;
+					} else {
+						curIdx = curMeta.prepareKey(curObj, key);
+					}
 					expect((byte) ':');
 				} else {
 					curMeta.set(this, curObj, curIdx, parseStringValue());
@@ -96,7 +102,9 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 					consumeCommaIfPresent();
 				}
 			}
+
 			case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9' -> {
+				// TODO why is here no curTypeDesc type ?
 				parseNumericPrimitive(curMeta, curObj, curIdx, null);
 				curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
 				consumeCommaIfPresent();
@@ -128,11 +136,11 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				if (engineStack.depth < 0) return finishedObj;
 				final var parent = engineStack.stack[engineStack.depth--];
 				curTypeDesc = parent.typeDesc;
-				curObj  = parent.obj;
-				curMeta = (ObjectMeta) parent.meta;
-				curIdx  = parent.targetIdx;
+				curObj      = parent.obj;
+				curMeta     = (ObjectMeta) parent.meta;
+				curIdx      = parent.targetIdx;
 				curMeta.set(this, curObj, curIdx, finishedObj);
-				curIdx  = curTypeDesc < 0L ? curIdx + 1 : -1;
+				curIdx      = curTypeDesc < 0L ? curIdx + 1 : -1;
 				consumeCommaIfPresent();
 			}
 			case '[' -> {
@@ -161,9 +169,19 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 	}
 
 	private void consumeCommaIfPresent() throws IOException {
-		if (pos < limit && buffer[pos] == (byte) ',') { pos++; return; }
+		var p = pos;
+		final var l = limit;
+		final var buf = buffer;
+		if (p < l && buf[p] == ',') { pos = p + 1; return; }
+		while (p < l) {
+			final var c = buf[p];
+			if (c == ',') { pos = p + 1; return; }
+			if (((c & 0xC0) != 0) || (((1L << c) & WHITESPACE_MASK) == 0)) { pos = p; return; }
+			p++;
+		}
+		pos = p;
 		skipWhitespace();
-		if (pos < limit && buffer[pos] == (byte) ',') pos++;
+		if (pos < limit && buffer[pos] == ',') pos++;
 	}
 
 	public Object readObject(final Class<?> targetType) throws Throwable {

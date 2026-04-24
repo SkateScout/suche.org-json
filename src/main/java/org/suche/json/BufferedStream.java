@@ -17,6 +17,7 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 			100000000000000L, 1000000000000000L, 10000000000000000L, 100000000000000000L, 1000000000000000000L
 	};
 	private static final int POOL_SIZE = 128;
+	private static final int STRING_POOL_SIZE = 4096;
 
 	Map<Object, Object> internPool;
 	byte[]                       strBuf          = new byte[1024];
@@ -77,8 +78,8 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		if (cfg.enableDeduplication()) {
 			if (this.internPool     == null) {
 				this.internPool     = new java.util.HashMap<>();
-				this.stringPoolKeys = new byte[1024][];
-				this.stringPoolVals = new String[1024];
+				this.stringPoolKeys = new byte  [STRING_POOL_SIZE][];
+				this.stringPoolVals = new String[STRING_POOL_SIZE];
 			} else {
 				this.internPool.clear();
 				java.util.Arrays.fill(this.stringPoolKeys, null);
@@ -91,7 +92,6 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 			this.stringPoolVals = null;
 		}
 	}
-
 
 	@Override public Object[] takeArray(final int exactCapacity) {
 		final var b = getBucket(exactCapacity);
@@ -420,8 +420,13 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		return v;
 	}
 
+	// TODO replace targetType with descId this allow easy check for primitve via bit op
 	final void parseNumericPrimitive(final ObjectMeta meta, final Object ctx, final int targetIdx, final Class<?> targetType) throws IOException {
 		parseNumberCore();
+		if(null == targetType) { // TODO Marker that our Map Implementation can handle both primitive types
+			if(isFloat) meta.setDouble(this, ctx, targetIdx, computeDoubleValue());
+			else        meta.setLong  (this, ctx, targetIdx, computeLongValue  ());
+		}
 		if (targetType == double.class || targetType == float.class || (isFloat && targetType != long.class && targetType != int.class)) {
 			meta.setDouble(this, ctx, targetIdx, computeDoubleValue());
 		} else {
@@ -506,6 +511,10 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		return Boolean.FALSE;
 	}
 
+	// ######################################################################################
+	// ######################################################################################
+	// ######################################################################################
+
 	private int parseHex4() throws IOException {
 		if (limit - pos < 4) ensure(4);
 		if (limit - pos < 4) throw new IllegalStateException();
@@ -525,7 +534,7 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 	void parseU(int dstLen) throws IOException {
 		final var buf = this.buffer;
 		var isAscii = true   ;
-		var cp = BufferedStream.this.parseHex4();
+		var cp = parseHex4();
 		if (cp >= 0xD800 && cp <= 0xDBFF) {
 			if (limit - pos < 6) ensure(6);
 			if (limit - pos >= 6 && buf[pos] == '\\' && buf[pos + 1] == 'u') {
@@ -552,6 +561,7 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		this.escapedIsAscii   = isAscii;
 		this.escapedParsedLen = dstLen;
 	}
+
 
 	private String parseStringSlow(final int start, final int lPos, boolean isAscii) throws IOException {
 		var parsedLen = lPos - start;
@@ -644,6 +654,11 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		}
 		return parseStringSlow(start, lPos, true);
 	}
+
+	// ######################################################################################
+	// ######################################################################################
+	// ######################################################################################
+
 
 	// Bit 9 (\t), 10 (\n), 13 (\r), 32 (Space)
 	static final long WHITESPACE_MASK = (1L << 9) | (1L << 10) | (1L << 13) | (1L << 32);

@@ -35,7 +35,5 @@ public record MetaConfig(boolean emitClassName,
 
 	public static final RuntimeException SKIP_FIELD = new RuntimeException("ILLEGALSTATE", null, false, false) { };
 
-	public static final MetaConfig DEFAULT = new MetaConfig(false, false
-			, null, null, null
-			, 128, 5 * 1024 * 1024, 100_000, true);
+	public static final MetaConfig DEFAULT = new MetaConfig(false, false, null, null, null, 128, 5 * 1024 * 1024, 100_000, true);
 }
