@@ -10,9 +10,9 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.Set;
 import java.util.function.Supplier;
 
-import org.suche.annotation.NonNull;
 import org.suche.json.CompactMap.PRIMITIVE;
 import org.suche.json.ConstructorGenerator.ObjectArrayFactory;
 import org.suche.json.MetaPool.ParseContext;
@@ -21,12 +21,13 @@ interface ObjBooleanConsumer<T> { void accept(T t, boolean value); }
 
 public final class ObjectMeta {
 	static final int TYPE_INSTANTIATOR = 1;
-	private static final int                  TYPE_MAP        = 2;
+	static final int                  TYPE_MAP        = 2;
 	private static final int                  TYPE_DEFECT     = 3;
 	private static final int                  TYPE_SEALED     = 4;
 	static         final int                  TYPE_OBJ_ARRAY  = 6;
 	static         final int                  TYPE_COLLECTION = 7;
 	static         final int                  TYPE_SET        = 8;
+	public static final int PRIM_INT = 1, PRIM_LONG = 2, PRIM_DOUBLE = 3, PRIM_FLOAT = 4, PRIM_BOOLEAN = 5, PRIM_OTHER = 6;
 
 	private static final MethodHandles.Lookup LOOKUP        = MethodHandles.lookup();
 	static         final ObjectMeta           DEFECT_FIRST  = new ObjectMeta();
@@ -38,6 +39,16 @@ public final class ObjectMeta {
 	private static final Class<?>     []      ENUM_TYPES    =  { String.class, String.class };
 	private static final FastKeyTable         ENUM_KEYS     = FastKeyTable.build(ENUM_COMPS);
 
+
+	static int getPrimId(final Class<?> type) {
+		if (type == int.class)     return PRIM_INT;
+		if (type == long.class)    return PRIM_LONG;
+		if (type == double.class)  return PRIM_DOUBLE;
+		if (type == float.class)   return PRIM_FLOAT;
+		if (type == boolean.class) return PRIM_BOOLEAN;
+		return PRIM_OTHER;
+	}
+
 	final int metaType;
 	private final String className;
 	private final boolean failOnUnknown;
@@ -45,12 +56,19 @@ public final class ObjectMeta {
 	final ConstructorGenerator.ObjectArrayFactory factory;
 	final int          ctorParamCount;
 	private final FastKeyTable keys          ;
-	private final Class<?>[]   types         ;
+	final Class<?>[]   types         ;
 	private final Class<?>     baseType      ;
 	final Class<?>[]   permitted     ;
 	final Object[][]   enumConstants ;
 	final boolean skipDefaultValues;
 	private final int[] lastSeenSizeByDepth = new int[64];
+	int cacheIndex = -1;
+
+	// Ein vorkalkuliertes Array der typeDescs für alle Felder (POJO)
+	private long[] fieldDescriptors;
+
+	// Der typeDesc für die Elemente (falls dieses Meta ein Array/Collection ist)
+	private long componentDescriptor;
 
 	private int startSize(final int depth) {
 		final var size = depth < 64 && depth >= 0 ? lastSeenSizeByDepth[depth] : 16;
@@ -234,6 +252,74 @@ public final class ObjectMeta {
 		return props;
 	}
 
+	void linkDescriptors(final EngineImpl engine) {
+		if (this.metaType == TYPE_OBJ_ARRAY || this.metaType == TYPE_COLLECTION || this.metaType == TYPE_MAP || this.metaType == TYPE_SET) {
+
+			// SICHERE TYP-ERMITTLUNG FÜR COLLECTIONS UND MAPS
+			Class<?> compType = Object.class;
+			if (this.types != null) {
+				if (this.metaType == TYPE_MAP && this.types.length >= 2) {
+					compType = this.types[1]; // Bei Map ist der Value-Typ an Index 1
+				} else if (this.types.length >= 1) {
+					compType = this.types[0]; // Bei Listen/Arrays an Index 0
+				}
+			}
+			if (compType == null) compType = Object.class;
+
+			final var isArray = compType.isArray() || Collection.class.isAssignableFrom(compType);
+			final var isPrimArray = isArray && compType.isArray() && compType.componentType().isPrimitive();
+			final var isPrimValue = !isArray && compType.isPrimitive();
+
+			Class<?> primTarget = null;
+			if (isPrimArray) primTarget = compType.isArray() ? compType.componentType() : compType;
+			else if (isPrimValue) primTarget = compType;
+			final ObjectMeta subMeta;
+			if (primTarget != null) subMeta = null;
+			else if (compType.isArray()) subMeta = engine.getDynamicMeta(compType.componentType(), TYPE_OBJ_ARRAY);
+			else if (Set.class.isAssignableFrom(compType)) subMeta = engine.getDynamicMeta(Object.class, TYPE_SET);
+			else if (Collection.class.isAssignableFrom(compType)) subMeta = engine.getDynamicMeta(Object.class, TYPE_COLLECTION);
+			else subMeta = engine.metaOf(compType);
+
+			final var subIdx = primTarget != null ? getPrimId(primTarget) : (subMeta != null ? subMeta.cacheIndex : 0);
+			this.componentDescriptor = EngineImpl.createTypeDesc(isArray, primTarget != null, subIdx);
+		} else if (this.components != null) {
+			this.fieldDescriptors = new long[this.components.length];
+			for (var i = 0; i < this.components.length; i++) {
+
+				// SICHERE TYP-ERMITTLUNG FÜR POJO FELDER
+				Class<?> fType = types[i];
+				if (fType == null) fType = Object.class;
+
+				final var isArray = fType.isArray() || Collection.class.isAssignableFrom(fType);
+				final var isPrimArray = isArray && fType.isArray() && fType.componentType().isPrimitive();
+				final var isPrimValue = !isArray && fType.isPrimitive();
+
+				Class<?> primTargetF = null;
+				if (isPrimArray) primTargetF = fType.isArray() ? fType.componentType() : fType;
+				else if (isPrimValue) primTargetF = fType;
+
+				final ObjectMeta fMeta;
+				if (isPrimArray || isPrimValue) fMeta = null;
+				else if (fType.isArray()) fMeta = engine.getDynamicMeta(fType.componentType(), TYPE_OBJ_ARRAY);
+				else if (Set.class.isAssignableFrom(fType)) fMeta = engine.getDynamicMeta(Object.class, TYPE_SET);
+				else if (Collection.class.isAssignableFrom(fType)) fMeta = engine.getDynamicMeta(Object.class, TYPE_COLLECTION);
+				else fMeta = engine.metaOf(fType);
+
+				final var fIdx = primTargetF != null ? getPrimId(primTargetF) : (fMeta != null ? fMeta.cacheIndex : 0);
+				this.fieldDescriptors[i] = EngineImpl.createTypeDesc(isArray, primTargetF != null, fIdx);
+			}
+		}
+	}
+
+	public long getChildDescriptor(final int index) {
+		if (this.metaType == TYPE_MAP) return this.componentDescriptor;
+		return fieldDescriptors == null ? 0L : fieldDescriptors[index];
+	}
+
+	public long getComponentDescriptor() {
+		return componentDescriptor;
+	}
+
 	static ObjectMeta ofPojo(final InternalEngine engine, final Class<?> c) {
 		try {
 			final var ctors = c.getDeclaredConstructors();
@@ -323,7 +409,7 @@ public final class ObjectMeta {
 
 	private static Object typeDefault(final Class<?> t) { return (t == boolean.class ? Boolean.FALSE : (t == char.class ? '\0' : 0)); }
 
-	Object start(@NonNull final MetaPool s) {
+	Object start(final MetaPool s) {
 		return switch (metaType) {
 		case TYPE_MAP, TYPE_OBJ_ARRAY, TYPE_COLLECTION -> s.takeContext(startSize(s.depth()), TYPE_MAP==metaType);
 		case TYPE_INSTANTIATOR -> {
@@ -382,6 +468,7 @@ public final class ObjectMeta {
 
 	@SuppressWarnings("unchecked")
 	void setLong(final MetaPool s, final Object context, final int index, final long v) {
+		if (index < 0) throw new IllegalStateException("Expected key before value");
 		if (skipDefaultValues && v == 0L) return;
 		switch (metaType) {
 		case TYPE_INSTANTIATOR               -> ((ParseContext) context).prims[index] = v;
@@ -394,6 +481,7 @@ public final class ObjectMeta {
 
 	@SuppressWarnings("unchecked")
 	void setDouble(final MetaPool s, final Object context, final int index, final double v)  {
+		if (index < 0) throw new IllegalStateException("Expected key before value");
 		if (skipDefaultValues && v == 0.0) return;
 		switch (metaType) {
 		case TYPE_INSTANTIATOR               -> ((ParseContext) context).prims[index] = Double.doubleToRawLongBits(v);
@@ -406,14 +494,17 @@ public final class ObjectMeta {
 
 	@SuppressWarnings("unchecked")
 	void set(final MetaPool s, final Object context, final int index, Object value) {
+		if (index < 0) throw new IllegalStateException("Expected key before value");
 		final var type = type(index);
 		if(type == boolean.class && value != null) {
 			setLong(s, context, index, ((Boolean)value) ? 1 : 0);
 			return;
 		}
 		if (value == null) {
-			if (skipDefaultValues || !type.isPrimitive()) return;
-			value = typeDefault(type);
+			if (skipDefaultValues && metaType != TYPE_OBJ_ARRAY && metaType != TYPE_COLLECTION) return;
+			if (type != null && type.isPrimitive()) {
+				value = typeDefault(type);
+			}
 		} else if (skipDefaultValues && ((value instanceof final Number n  && n.doubleValue() == 0.0) || (value instanceof final Boolean b && !b.booleanValue()))) return;
 
 		if (this.enumConstants != null && this.enumConstants[index] != null) value = Meta.resolveEnum(this.enumConstants[index], value);

@@ -6,6 +6,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Map;
 
+import org.suche.annotation.NonNull;
+
 sealed abstract class BufferedStream  implements MetaPool permits JsonInputStream {
 	private static final int BUFFER_SIZE = 128*1024;
 	private static final double[] POW10 = { 1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18 };
@@ -58,27 +60,10 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 	ObjectMeta genericSetMeta       ;
 
 	private final ObjectMeta[] dynamicMetaCache = new ObjectMeta[32];
-	private int dynamicMetaCount = 0;
+	private final int dynamicMetaCount = 0;
 
 	ObjectMeta getDynamicMeta(final Class<?> compType, final int targetMetaType) {
-		final var searchType = compType == null ? Object.class : compType;
-		if (searchType == Object.class) {
-			switch (targetMetaType) {
-			case ObjectMeta.TYPE_COLLECTION: if (genericCollectionMeta == null) genericCollectionMeta = new ObjectMeta(engine, Object.class, ObjectMeta.TYPE_COLLECTION); return genericCollectionMeta;
-			case ObjectMeta.TYPE_OBJ_ARRAY : if (genericArrayMeta      == null) genericArrayMeta = new ObjectMeta(engine, Object.class, ObjectMeta.TYPE_OBJ_ARRAY); return genericArrayMeta;
-			case ObjectMeta.TYPE_SET       : if (genericSetMeta        == null) genericSetMeta = new ObjectMeta(engine, Object.class, ObjectMeta.TYPE_SET); return genericSetMeta;
-			default                        : break;
-			}
-		}
-
-		for (var i = 0; i < dynamicMetaCount; i++) {
-			final var m = dynamicMetaCache[i];
-			if (m.metaType == targetMetaType && m.type(0) == searchType) return m;
-		}
-
-		final var m = new ObjectMeta(engine, searchType, targetMetaType);
-		if (dynamicMetaCount < dynamicMetaCache.length) dynamicMetaCache[dynamicMetaCount++] = m;
-		return m;
+		return ((EngineImpl) engine).getDynamicMeta(compType, targetMetaType);
 	}
 
 	final Object[] onceInternal = new Object[32];
@@ -196,7 +181,7 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		return ctx;
 	}
 
-	@Override public void returnContext(final ParseContext ctx) {
+	@Override public void returnContext(final @NonNull ParseContext ctx) {
 		if (ctx.objs != null) {
 			returnArray(ctx.objs, ctx.cnt<<ctx.map);
 			ctx.objs = null;
@@ -649,7 +634,7 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 	}
 
 	final String parseStringValue() throws IOException {
-		var       lPos   = pos;
+		var       lPos   = pos + 1;
 		final var lLimit = limit;
 		final var start  = lPos;
 		final var buf    = buffer;
@@ -669,7 +654,7 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 	}
 
 	// Bit 9 (\t), 10 (\n), 13 (\r), 32 (Space)
-	private static final long WHITESPACE_MASK = (1L << 9) | (1L << 10) | (1L << 13) | (1L << 32);
+	static final long WHITESPACE_MASK = (1L << 9) | (1L << 10) | (1L << 13) | (1L << 32);
 
 	void skipWhitespace() throws IOException {
 		var p = pos;
@@ -677,8 +662,7 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		final var buf = buffer;
 		while (p < l) {
 			final var b = buf[p];
-			// Fast check  32? Negativ (UTF-8)? Nicht in der Maske? -> Abbruch.
-			if (b > 0x20 || b < 0 || (WHITESPACE_MASK & (1L << b)) == 0) {
+			if ((b & 0xC0) != 0 || ((1L << b) & WHITESPACE_MASK) == 0) {
 				pos = p;
 				return;
 			}
@@ -692,12 +676,10 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		while (true) {
 			if (pos >= limit) { ensure(1); if (pos >= limit) return; }
 			final var b = buffer[pos];
-			if (b > 0x20) return;
-			if (b != 0x20 && b != 0x09 && b != 0x0A && b != 0x0D) break;
+			if ((b & 0xC0) != 0 || ((1L << b) & WHITESPACE_MASK) == 0) return;
 			pos++;
 		}
 	}
-
 	final void skipValue() throws IOException {
 		final var b = peek();
 		switch (b) {

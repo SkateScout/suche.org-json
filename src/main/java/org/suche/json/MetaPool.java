@@ -1,7 +1,5 @@
 package org.suche.json;
 
-import org.suche.annotation.NonNull;
-
 interface MetaPool {
 	byte T_EMPTY  = 0;
 	byte T_LONG   = 1;
@@ -70,9 +68,9 @@ interface MetaPool {
 	long[]       takeLongArray(int minCapacity);
 	ParseContext takeContext  (int minCapacity, boolean map);
 
-	void         returnArray    (@NonNull Object[] arr, int used);
-	void         returnLongArray(         long  [] arr);
-	void         returnContext  (@NonNull ParseContext ctx);
+	void         returnArray    (Object[] arr, int used);
+	void         returnLongArray(long  [] arr);
+	void         returnContext  (ParseContext ctx);
 
 	int          depth();
 

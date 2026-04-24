@@ -5,9 +5,9 @@ import java.io.OutputStream;
 import java.lang.invoke.MethodHandle;
 import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
-import java.util.AbstractMap;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Predicate;
@@ -43,6 +43,7 @@ sealed interface InternalEngine extends JsonEngine permits EngineImpl {
 	KeyValueObject[] ofComplex( final Class<?> c);
 	UnaryOperator<Object> transformer(Class<?> c);
 	boolean                 hasCoreTransformer();
+	ObjectMeta[] metaCache();
 	int maxRecursiveDepth();
 }
 
@@ -74,6 +75,16 @@ final class EngineImpl implements InternalEngine {
 
 	}
 
+	public  final ObjectMeta[] metaCache = new ObjectMeta[32768];
+	private       int metaCacheSize = 1; // Index 0 ist global reserviert!
+	public final ObjectMeta defaultMapMeta;
+	public final ObjectMeta genericCollectionMeta;
+	public final ObjectMeta genericArrayMeta;
+	public final ObjectMeta genericSetMeta;
+	final MetaConfig cfg;
+
+	@Override public ObjectMeta[] metaCache() { return metaCache; }
+
 	@Override public void maxRecursiveDepth(final int v) { this.maxRecursiveDepth = v; }
 	@Override public int maxRecursiveDepth() { return maxRecursiveDepth; }
 
@@ -86,26 +97,70 @@ final class EngineImpl implements InternalEngine {
 	final Collection<Predicate<Class<?>>> AUTO_POJO = new CopyOnWriteArrayList<>();
 	@Override public void autoPojo(final Predicate<Class<?>> p) { AUTO_POJO.add(p); }
 
-	final MetaConfig cfg;
+	synchronized int registerMeta(final ObjectMeta meta) {
+		if (meta.cacheIndex >= 0) return meta.cacheIndex;
+		if (metaCacheSize >= metaCache.length) throw new IllegalStateException("Global MetaCache Limit erreicht");
+		final var index = metaCacheSize++;
+		metaCache[index] = meta;
+		meta.cacheIndex = index;
+		return index;
+	}
 
-	void putMeta(final Class<?> c, final ObjectMeta m) { getTypeRecord(c).metaObject = m; }
+	static long createTypeDesc(final boolean isArray, final boolean isPrimitive, final int cacheIndex) {
+		var desc = ((long) cacheIndex) << 1;
+		if (isArray)     desc |= 0x8000000000000000L;
+		if (isPrimitive) desc |= 1L;
+		return desc;
+	}
 
+	private final ObjectMeta[] dynamicMetaCache = new ObjectMeta[32];
+	private int dynamicMetaCount = 0;
+
+	public synchronized ObjectMeta getDynamicMeta(final Class<?> compType, final int targetMetaType) {
+		final var searchType = compType == null ? Object.class : compType;
+		if (searchType == Object.class) {
+			switch (targetMetaType) {
+			case ObjectMeta.TYPE_COLLECTION: return genericCollectionMeta;
+			case ObjectMeta.TYPE_OBJ_ARRAY : return genericArrayMeta;
+			case ObjectMeta.TYPE_SET       : return genericSetMeta;
+			case ObjectMeta.TYPE_MAP       : return defaultMapMeta;
+			default                        : break;
+			}
+		}
+		for (var i = 0; i < dynamicMetaCount; i++) {
+			final var m = dynamicMetaCache[i];
+			if (m.metaType == targetMetaType && m.type(0) == searchType) return m;
+		}
+		final var m = new ObjectMeta(this, searchType, targetMetaType);
+		registerMeta(m);
+		m.linkDescriptors(this);
+		if (dynamicMetaCount < dynamicMetaCache.length) dynamicMetaCache[dynamicMetaCount++] = m;
+		return m;
+	}
+
+	// Der Konstruktor:
 	public EngineImpl(final MetaConfig cfg) {
 		this.cfg = cfg;
-		putMeta(Object       .class, ObjectMeta.GENERIC_MAP);
-		putMeta(java.util.Map.class, ObjectMeta.GENERIC_MAP);
-		putMeta(CompactMap   .class, ObjectMeta.GENERIC_MAP);
-		putMeta(AbstractMap  .class, ObjectMeta.GENERIC_MAP);
-		putMeta(String       .class, ObjectMeta.NULL);
-		putMeta(Boolean      .class, ObjectMeta.NULL);
-		putMeta(CompactMap   .class, ObjectMeta.NULL);
-		putMeta(Byte         .class, ObjectMeta.NULL);
-		putMeta(Short        .class, ObjectMeta.NULL);
-		putMeta(Integer      .class, ObjectMeta.NULL);
-		putMeta(Long         .class, ObjectMeta.NULL);
-		putMeta(Float        .class, ObjectMeta.NULL);
-		putMeta(Double       .class, ObjectMeta.NULL);
+
+		// 1. Erstellen der Metas PRO ENGINE (nicht mehr static!)
+		// Je nachdem wie dein ObjectMeta-Konstruktor aussieht, nutze hier Map.class oder Object.class
+		this.defaultMapMeta        = new ObjectMeta(this, Map.class);
+		this.genericCollectionMeta = new ObjectMeta(this, Object.class, ObjectMeta.TYPE_COLLECTION);
+		this.genericArrayMeta      = new ObjectMeta(this, Object.class, ObjectMeta.TYPE_OBJ_ARRAY);
+		this.genericSetMeta        = new ObjectMeta(this, Object.class, ObjectMeta.TYPE_SET);
+
+		// 2. Sofortiges Registrieren und Linken in DIESEM engine-spezifischen Cache
+		registerMeta(defaultMapMeta);        defaultMapMeta.linkDescriptors(this);
+		registerMeta(genericCollectionMeta); genericCollectionMeta.linkDescriptors(this);
+		registerMeta(genericArrayMeta);      genericArrayMeta.linkDescriptors(this);
+		registerMeta(genericSetMeta);        genericSetMeta.linkDescriptors(this);
+
+		// 3. Mapping für das reguläre Abfragen
+		putMeta(Object.class, defaultMapMeta);
+		putMeta(java.util.Map.class, defaultMapMeta);
 	}
+
+	void putMeta(final Class<?> c, final ObjectMeta m) { getTypeRecord(c).metaObject = m; }
 
 	@Override public JsonOutputStream jsonOutputStream(final OutputStream out, final TimeFormat timeFormat, final Flags... flags)  {
 		return JsonOutputStream.of(this, out, timeFormat, flags);
@@ -175,7 +230,11 @@ final class EngineImpl implements InternalEngine {
 
 	@Override public ObjectMeta metaOf(final Class<?> clazz) {
 		if (clazz == null) return null;
+
+		// NUTZE DIE INSTANZ-VARIABLE!
+		if (clazz == Object.class || Map.class.isAssignableFrom(clazz)) return this.defaultMapMeta;
 		final var t = getTypeRecord(clazz);
+
 		if (t.metaObject instanceof final ObjectMeta r) {
 			if (r == ObjectMeta.DEFECT) throw E_DEFEKT1;
 			if (r == ObjectMeta.DEFECT_FIRST) { t.metaObject = ObjectMeta.DEFECT; throw new IllegalArgumentException("Clazz: " + clazz.getCanonicalName()); }
@@ -189,7 +248,9 @@ final class EngineImpl implements InternalEngine {
 			final var r = createMeta(clazz);
 			if (r == ObjectMeta.NULL || r == null) { t.metaObject = ObjectMeta.NULL; return null; }
 			if (r == ObjectMeta.DEFECT_FIRST)  { t.metaObject = ObjectMeta.DEFECT; throw new IllegalArgumentException("Clazz: " + clazz.getCanonicalName()); }
-			t.metaObject =r;
+			t.metaObject = r;
+			registerMeta(r);
+			r.linkDescriptors(this);
 			return r;
 		}
 	}

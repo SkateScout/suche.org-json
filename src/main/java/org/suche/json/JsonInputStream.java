@@ -12,30 +12,26 @@ import java.util.Set;
 import org.suche.json.ObjectMeta.ComponentMeta;
 
 public final class JsonInputStream extends BufferedStream implements AutoCloseable, MetaPool {
-	private static final byte TYPE_OBJECT = 1;
-	private static final byte TYPE_ARRAY  = 2;
-	private static final byte TYPE_COL    = 3;
 	private static final ObjectPool<JsonInputStream> STREAM_POOL = new ObjectPool<>(64, JsonInputStream::new);
 
-	static final class CTX  {
-		byte     type;
-		Object   obj;
-		Object   meta;
-		int      targetIdx;
-		Class<?> targetType;
+	public ObjectMeta[] metaCache;
 
-		void set(final byte pType, final Object pObj, final Object pMeta, final int pTargetIdx, final Class<?> pTargetType) {
-			this.type       = pType;
-			this.obj        = pObj;
-			this.meta       = pMeta;
-			this.targetIdx  = pTargetIdx;
-			this.targetType = pTargetType;
+	static final class CTX  {
+		long   typeDesc;
+		Object obj;
+		Object meta;
+		int    targetIdx;
+
+		void set(final long pTypeDesc, final Object pObj, final Object pMeta, final int pTargetIdx) {
+			this.typeDesc  = pTypeDesc;
+			this.obj       = pObj;
+			this.meta      = pMeta;
+			this.targetIdx = pTargetIdx;
 		}
 
 		public void clean() {
-			this.obj        = null;
-			this.meta       = null;
-			this.targetType = null;
+			this.obj  = null;
+			this.meta = null;
 		}
 	}
 
@@ -46,13 +42,13 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 
 		CtxStack() { for (var i = 0; i < 64; i++) stack[i] = new CTX(); }
 
-		void push(final byte type, final Object obj, final Object meta, final int targetIdx, final Class<?> targetType) {
+		void push(final long typeDesc, final Object obj, final Object meta, final int targetIdx) {
 			if (++depth >= stack.length) {
 				final var oldLen = stack.length;
 				stack = Arrays.copyOf(stack, oldLen * 2);
 				for (var i = oldLen; i < stack.length; i++) stack[i] = new CTX();
 			}
-			stack[depth].set(type, obj, meta, targetIdx, targetType);
+			stack[depth].set(typeDesc, obj, meta, targetIdx);
 		}
 
 		void clear() {
@@ -76,8 +72,17 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		s.init(in, engine);
 		s.engineStack.depth = -1;
 		s.lastArraySize = 16;
-		s.defaultMapMeta = engine.metaOf(Map.class);
+		final var e = (EngineImpl) engine;
+		s.defaultMapMeta = e.defaultMapMeta;
+		s.metaCache = engine.metaCache();
 		return s;
+	}
+
+	static long createTypeDesc(final boolean isArray, final boolean isPrimitive, final int cacheIndex) {
+		var desc = ((long) cacheIndex) << 1;
+		if (isArray)     desc |= 0x8000000000000000L;
+		if (isPrimitive) desc |= 1L;
+		return desc;
 	}
 
 	@Override public void close() throws IOException {
@@ -127,33 +132,15 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		throw new IllegalStateException("metaOf("+clazz.getCanonicalName()+")=null");
 	}
 
-	private void pushState(final byte type, final Object obj, final Object meta, final int targetIdx, final Class<?> targetType) {
-		if (engineStack.depth + 1 >= maxDepth) throw new IllegalStateException();
-		engineStack.push(type, obj, meta, targetIdx, targetType);
-	}
-
 	Object finalResult = null;
 
 	private void applyValueToCurrentState(final Object value) {
 		if (engineStack.depth < 0) return;
 		final var c = engineStack.stack[engineStack.depth];
-		if (c.targetIdx >= 0 || c.type != TYPE_OBJECT) {
+		if (c.targetIdx >= 0 || c.typeDesc < 0L) {
 			((ObjectMeta) c.meta).set(this, c.obj, c.targetIdx, value);
-			if (c.type != TYPE_OBJECT) c.targetIdx++;
+			c.targetIdx = c.typeDesc < 0L ? c.targetIdx + 1 : -1;
 		}
-	}
-
-	private void applyValue(final Object result) throws IOException {
-		applyValueToCurrentState(result);
-		consumeCommaIfPresent();
-	}
-
-	private void popAndApply(final Object result) throws IOException {
-		engineStack.stack[engineStack.depth].clean();
-		engineStack.depth--;
-		if (engineStack.depth >= 0) {
-			applyValue(result);
-		} else this.finalResult = result;
 	}
 
 	private void consumeCommaIfPresent() throws IOException {
@@ -162,150 +149,157 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		if (pos < limit && buffer[pos] == (byte) ',') pos++;
 	}
 
-	private Object runStateEngine(final byte startType, final Object startObj, final Object startMeta, final int startIdx, final Class<?> startTarget) throws Throwable {
-		pushState(startType, startObj, startMeta, startIdx, startTarget);
-		Class<?> targetType = null;
-		finalResult = null;
-		while (engineStack.depth >= 0) {
-			if (pos < limit) {
-				final var b = buffer[pos];
-				if (b == 0x20 || b == 0x09 || b == 0x0A || b == 0x0D) skipWhitespace();
-			} else skipWhitespace();
-			final var c = engineStack.stack[engineStack.depth];
-			final var shouldContinue = switch (c.type) {
-			case TYPE_OBJECT           -> {
-				if (peek() == (byte) '}') {
-					read();
-					popAndApply(((ObjectMeta) c.meta).end(this, c.obj));
-					yield true;
-				}
-				final var meta = (ObjectMeta) c.meta;
-				expect((byte) '"');
-				c.targetIdx = parseStringKeyAsIndex(c.obj, (ObjectMeta) c.meta);
-				if (pos < limit && buffer[pos] == (byte) ':') pos++;
-				else { skipWhitespace(); expect((byte) ':'); }
-				if (c.targetIdx < 0) {
-					skipWhitespace();
-					skipValue();
-					consumeCommaIfPresent();
-					yield true;
-				}
-				targetType = meta.type(c.targetIdx);
-				yield false;
-			}
-			case TYPE_ARRAY, TYPE_COL  ->  {
-				if (peek() == (byte) ']') {
-					read();
-					popAndApply(((ObjectMeta) c.meta).end(this, c.obj));
-					yield true;
-				}
-				targetType = (c.type == TYPE_ARRAY ? c.targetType.componentType() : c.targetType);
-				yield false;
-			}
-			default                    -> throw new IllegalStateException();
-			};
-			if (shouldContinue) continue;
+	private void fillNullValue(final long typeDesc, final Object obj, final int targetIdx, final ObjectMeta meta, final Class<?> targetType) throws IOException {
+		parseNull();
+		if (!engine.config().skipDefaultValues() || typeDesc < 0L) {
+			if      (targetType == boolean.class)                             meta.set       (this, obj, targetIdx, Boolean.FALSE);
+			else if (targetType == double.class || targetType == float.class) meta.setDouble (this, obj, targetIdx, 0.0);
+			else if (targetType != null && targetType.isPrimitive())          meta.setLong   (this, obj, targetIdx, 0L);
+			else                                                              meta.set       (this, obj, targetIdx, null);
+		}
+	}
 
+	private Object runStateEngine(final long startTypeDesc, final Object startObj, final Object startMeta, final int startIdx) throws Throwable {
+		var       curTypeDesc = startTypeDesc;
+		var       curObj      = startObj;
+		var       curMeta     = (ObjectMeta) startMeta;
+		var       curIdx      = startIdx;
 
-			if (pos >= limit || buffer[pos] <= ' ') skipWhitespace();
-			if (pos >= limit) throw new IllegalStateException("Unexpected EOF");
-			final var b = buffer[pos];
+		engineStack.clear();
 
-			if (c.targetIdx >= 0 && c.meta instanceof final ObjectMeta meta) {
-				switch(b) {
-				case '-','0','1','2','3','4','5','6','7','8','9' -> {
-					parseNumericPrimitive(meta, c.obj, c.targetIdx, targetType);
-					if (c.type != TYPE_OBJECT) c.targetIdx++;
-					consumeCommaIfPresent();
-					continue;
-				}
-				case 'n' -> {
-					parseNull();
-					if (!engine.config().skipDefaultValues()) {
-						if      (targetType == boolean.class)                             meta.set       (this, c.obj, c.targetIdx, Boolean.FALSE);
-						else if (targetType == double.class || targetType == float.class) meta.setDouble (this, c.obj, c.targetIdx, 0.0);
-						else if (targetType != null && targetType.isPrimitive())          meta.setLong   (this, c.obj, c.targetIdx, 0L);
-						else                                                              meta.set       (this, c.obj, c.targetIdx, null);
-					}
-					if (c.type != TYPE_OBJECT) c.targetIdx++;
-					consumeCommaIfPresent();
-					continue;
-				}
-				case 't', 'f' -> {
-					meta.set       (this, c.obj, c.targetIdx, parseBooleanPrimitive()); // there exists only two boolean Objects
-					if (c.type != TYPE_OBJECT) c.targetIdx++;
-					consumeCommaIfPresent();
-					continue;
-				}
-				case '"' -> {
-					pos++;
-					meta.set(this, c.obj, c.targetIdx, parseStringValue());
-					if (c.type != TYPE_OBJECT) c.targetIdx++;
-					consumeCommaIfPresent();
-					continue;
-				}
-				}
-			}
+		while (true) {
+			if (pos >= limit) { ensure(1); if (pos >= limit) throw new IllegalStateException("Unexpected EOF"); }
+			var b = buffer[pos];
+
 			switch (b) {
-			case '{' -> {
+			case '\t', '\n', '\r', ' ' -> {
 				pos++;
-				final var t = targetType == null ? Map.class : targetType;
-				final var meta = (t == Map.class) ? defaultMapMeta : metaOf(t);
-				pushState(TYPE_OBJECT, meta.start(this), meta, -1, t);
+				while (pos < limit) {
+					b = buffer[pos];
+					if ((b & 0xC0) != 0 || ((1L << b) & WHITESPACE_MASK) == 0) break;
+					pos++;
+				}
+			}
+			case '"' -> {
+				if (curTypeDesc >= 0L && curIdx < 0) {
+					pos++;
+					curIdx = parseStringKeyAsIndex(curObj, curMeta);
+
+					if (pos < limit && buffer[pos] == (byte) ':') {
+						pos++;
+					} else {
+						skipWhitespace();
+						expect((byte) ':');
+					}
+
+					if (curIdx < 0) { skipWhitespace(); skipValue(); consumeCommaIfPresent(); }
+				} else {
+					curMeta.set(this, curObj, curIdx, parseStringValue());
+					curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
+					consumeCommaIfPresent();
+				}
+			}
+			case '}', ']' -> {
+				final var isArray = curTypeDesc < 0L;
+				if ((b == '}') == isArray || (b == '}' && curIdx >= 0)) throw new IllegalStateException("Unexpected character: " + (char) b);
+				pos++;
+				final var finishedObj = curMeta.end(this, curObj);
+				if (engineStack.depth < 0) return finishedObj;
+				final var parent = engineStack.stack[engineStack.depth--];
+				curTypeDesc = parent.typeDesc;
+				curObj      = parent.obj;
+				curMeta     = (ObjectMeta) parent.meta;
+				curIdx      = parent.targetIdx;
+				curMeta.set(this, curObj, curIdx, finishedObj);
+				curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
+				consumeCommaIfPresent();
+			}
+			case '-','0','1','2','3','4','5','6','7','8','9' -> {
+				final var target = curIdx < 0 ? null : curMeta.type(curIdx);
+				parseNumericPrimitive(curMeta, curObj, curIdx, target);
+				curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
+				consumeCommaIfPresent();
+			}
+			case 'n' -> {
+				parseNull();
+				curMeta.set(this, curObj, curIdx, null);
+				curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
+				consumeCommaIfPresent();
+			}
+			case 't' -> {
+				curMeta.set(this, curObj, curIdx, parseTruePrimitive());
+				curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
+				consumeCommaIfPresent();
+			}
+			case 'f' -> {
+				curMeta.set(this, curObj, curIdx, parseFalsePrimitive());
+				curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
+				consumeCommaIfPresent();
+			}
+			case '{' -> {
+				if (curTypeDesc >= 0L && curIdx < 0) throw new IllegalStateException("Expected key");
+				pos++;
+				final var childDesc = curTypeDesc >= 0L ? curMeta.getChildDescriptor(curIdx) : curMeta.getComponentDescriptor();
+
+				// Validierung: Wenn das Schema ein Array fordert, das JSON aber ein Objekt liefert
+				if (childDesc < 0L) throw new IllegalStateException("Expected array, got '{'");
+				if ((childDesc & 1L) != 0L) throw new IllegalStateException("Expected primitive, got '{'");
+
+				engineStack.push(curTypeDesc, curObj, curMeta, curIdx);
+				curTypeDesc = childDesc;
+				curMeta     = metaCache[(int) (curTypeDesc >> 1)];
+				curObj      = curMeta.start(this);
+				curIdx      = -1;
 			}
 			case '[' -> {
-				if (targetType == null) {
-					pos++;
-					if (genericCollectionMeta == null) genericCollectionMeta = new ObjectMeta(engine, Object.class, ObjectMeta.TYPE_COLLECTION);
-					pushState(TYPE_COL, genericCollectionMeta.start(this), genericCollectionMeta, 0, Object.class);
-				} else if (targetType.isArray() && targetType.componentType().isPrimitive()) {
-					final var result = parsePrimitiveArray(targetType.componentType());
-					final var parentState = engineStack.stack[engineStack.depth];
-					((ObjectMeta) parentState.meta).set(this, parentState.obj, parentState.targetIdx, result);
-					if (parentState.type != TYPE_OBJECT) parentState.targetIdx++;
+				if (curTypeDesc >= 0L && curIdx < 0) throw new IllegalStateException("Expected key");
+				pos++;
+				var childDesc = curTypeDesc >= 0L ? curMeta.getChildDescriptor(curIdx) : curMeta.getComponentDescriptor();
+				// Validierung: Wenn das Schema ein Objekt/Map fordert, das JSON aber ein Array liefert
+				if (childDesc >= 0L) {
+					final var expectedMeta = metaCache[(int) (childDesc >> 1)];
+					// Wenn der Zieltyp "Object" (also generisch) ist, switchen wir fliegend auf eine Collection um!
+					if (expectedMeta != defaultMapMeta) {
+						throw new IllegalStateException("Expected object, got '['");
+					}
+					final var colIdx = ((EngineImpl)engine).genericCollectionMeta.cacheIndex;
+					childDesc = createTypeDesc(true, false, colIdx); // Bit 63 (Array-Flag) sicher setzen!
+				}
+				if ((childDesc & 1L) != 0L) {
+					final var primId = (int) ((childDesc & 0x7FFFFFFFFFFFFFFFL) >> 1);
+					final var fallback = curTypeDesc >= 0L ? curMeta.type(curIdx).componentType() : curMeta.type(0).componentType();
+					curMeta.set(this, curObj, curIdx, parsePrimitiveArray(primId, fallback));
+					curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
 					consumeCommaIfPresent();
 				} else {
-					pos++;
-					final var isArray  = targetType.isArray();
-					final var isSet    = Set.class.isAssignableFrom(targetType);
-					final var metaType = isArray ? ObjectMeta.TYPE_OBJ_ARRAY : (isSet ? ObjectMeta.TYPE_SET : ObjectMeta.TYPE_COLLECTION);
-					final var compType = isArray ? targetType.componentType() : (isSet ? Object.class : targetType);
-					final var meta = getDynamicMeta(compType, metaType);
-					pushState(isArray ? TYPE_ARRAY : TYPE_COL, meta.start(this), meta, 0, compType);
+					engineStack.push(curTypeDesc, curObj, curMeta, curIdx);
+					curTypeDesc = childDesc;
+					curMeta     = metaCache[(int) (curTypeDesc >> 1)];
+					curObj      = curMeta.start(this);
+					curIdx      = 0;
 				}
 			}
-			default -> throw new IllegalStateException("Unexpected character: " + (char)b);
+			default -> throw new IllegalStateException("Unexpected character: " + (char) b);
 			}
 		}
-		return finalResult;
 	}
 
 	// ========================================================================
 	// PUBLIC API
 	// ========================================================================
 
-	public <T> T readObject(final Class<T> targetClass) throws IOException {
-		skipWhitespace();
-		expect((byte) '{');
-		final var meta = (targetClass == Map.class) ? defaultMapMeta : metaOf(targetClass);
-		try {
-			final var r = (engine.maxRecursiveDepth() <= 0
-					? runStateEngine(TYPE_OBJECT, meta.start(this), meta, -1, targetClass)
-							: parseRecordRecursive(meta, 0));
-			return targetClass.cast(r);
-		} catch(final IOException | RuntimeException e) { throw e;
-		} catch(final Throwable e) { throw new RuntimeException(e); }
-	}
 
 	@SuppressWarnings("unchecked")
 	public <T> T[] readRecords(final Class<T> targetClass) throws IOException {
 		skipWhitespace();
 		final var meta = getDynamicMeta(targetClass, ObjectMeta.TYPE_OBJ_ARRAY);
 		expect((byte) '[');
+		final var typeDesc = createTypeDesc(true, false, meta.cacheIndex);
+
 		try {
 			return (T[]) (engine.maxRecursiveDepth() <= 0 ?
-					runStateEngine(TYPE_ARRAY, meta.start(this), meta, 0, targetClass)
-					: parseArrayRecursive(targetClass, 0));
+					runStateEngine(typeDesc, meta.start(this), meta, 0)
+					: parseArrayRecursive(typeDesc, meta, 0));
 		} catch(final IOException | RuntimeException e) { throw e;
 		} catch(final Throwable e) { throw new RuntimeException(e); }
 	}
@@ -314,12 +308,13 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 	public <V> Map<String, V> readMap(final Class<V> valueClass) throws IOException {
 		skipWhitespace();
 		expect((byte) '{');
-		final var meta = new ObjectMeta(engine, valueClass);
+		final var meta = getDynamicMeta(valueClass, ObjectMeta.TYPE_MAP);
+		final var typeDesc = createTypeDesc(false, false, meta.cacheIndex);
+
 		try {
 			return (Map<String, V>) (engine.maxRecursiveDepth() <= 0 ?
-					runStateEngine(TYPE_OBJECT, meta.start(this), meta, -1, valueClass)
+					runStateEngine(typeDesc, meta.start(this), meta, -1)
 					: parseRecordRecursive(meta, 0));
-
 		} catch(final IOException | RuntimeException e) { throw e;
 		} catch(final Throwable e) { throw new RuntimeException(e); }
 	}
@@ -329,10 +324,12 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		skipWhitespace();
 		expect((byte) '[');
 		final var meta = getDynamicMeta(elementClass, ObjectMeta.TYPE_COLLECTION);
+		final var typeDesc = createTypeDesc(true, false, meta.cacheIndex);
+
 		try {
 			return (List<T>) (engine.maxRecursiveDepth() <= 0 ?
-					runStateEngine(TYPE_COL, takeArray(10), meta, 0, elementClass)
-					: parseArrayRecursive(elementClass, 0));
+					runStateEngine(typeDesc, meta.start(this), meta, 0)
+					: parseArrayRecursive(typeDesc, meta, 0));
 		} catch(final IOException | RuntimeException e) { throw e;
 		} catch(final Throwable e) { throw new RuntimeException(e); }
 	}
@@ -342,13 +339,42 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		skipWhitespace();
 		expect((byte) '[');
 		final var meta = getDynamicMeta(elementClass, ObjectMeta.TYPE_SET);
+		final var typeDesc = createTypeDesc(true, false, meta.cacheIndex);
+
 		try {
 			return (Set<T>)  (engine.maxRecursiveDepth() <= 0 ?
-					runStateEngine(TYPE_COL, meta.start(this), meta, 0, elementClass)
-					: parseArrayRecursive(elementClass, 0));
+					runStateEngine(typeDesc, meta.start(this), meta, 0)
+					: parseArrayRecursive(typeDesc, meta, 0));
 		} catch(final IOException | RuntimeException e) { throw e;
 		} catch(final Throwable e) { throw new RuntimeException(e); }
 	}
+
+	public Object readObject(final Class<?> targetType) throws Throwable {
+		skipWhitespace();
+		if (pos >= limit) return null;
+
+		final var b = buffer[pos];
+		if ((b != '{') && (b != '[')) return parsePrimitiveInline(b, targetType);
+		pos++;
+
+		var targetMeta = engine.metaOf(targetType);
+		var cacheIdx = targetMeta != null ? targetMeta.cacheIndex : 0;
+		final var isArray = (b == '[');
+
+		if (isArray && targetMeta == defaultMapMeta) {
+			targetMeta = ((EngineImpl)engine).genericCollectionMeta;
+			cacheIdx = targetMeta.cacheIndex;
+		} else if (isArray && targetMeta != null && targetMeta.metaType != ObjectMeta.TYPE_OBJ_ARRAY && targetMeta.metaType != ObjectMeta.TYPE_COLLECTION && targetMeta.metaType != ObjectMeta.TYPE_SET) {
+			throw new IllegalStateException("Expected object, got '['");
+		}
+
+		final var startTypeDesc = createTypeDesc(isArray, false, cacheIdx);
+		final var startObj = targetMeta != null ? targetMeta.start(this) : null;
+		final var startIdx = isArray ? 0 : -1;
+
+		return runStateEngine(startTypeDesc, startObj, targetMeta, startIdx);
+	}
+
 	// ========================================================================
 	// RECURSIVE FAST-PATH ENGINE (Mit Hybrid-Fallback zur State-Machine)
 	// ========================================================================
@@ -449,25 +475,21 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		}
 	}
 
-	private Object parsePrimitiveArray(final Class<?> compType) throws IOException {
+	private Object parsePrimitiveArray(final int primId, final Class<?> fallbackCompType) throws IOException {
 		final var startSize = (lastArraySize > 1 && lastArraySize < 64) ? lastArraySize : 16;
-		pos++;
-		final var builder = Array.newInstance(compType, startSize);
-		final Object arr;
-		if      (compType == double .class) arr = parseDoubleArray ((double [])builder);
-		else if (compType == long   .class) arr = parseLongArray   ((long   [])builder);
-		else if (compType == int    .class) arr = parseIntArray    ((int    [])builder);
-		else if (compType == boolean.class) arr = parseBooleanArray((boolean[])builder);
-		else if (compType == float  .class) arr = parseFloatArray  ((float  [])builder);
-		else                                arr = parseDefaultArray(           builder, compType);
-		final var curSize = Array.getLength(arr);
-		if(curSize != lastArraySize) {
-			final var ret = Array.newInstance(compType, 16);
-			System.arraycopy(arr, 0, ret, 0, lastArraySize);
-			return ret;
+		return switch (primId) {
+		case ObjectMeta.PRIM_DOUBLE  -> parseDoubleArray (new double [startSize]);
+		case ObjectMeta.PRIM_LONG    -> parseLongArray   (new long   [startSize]);
+		case ObjectMeta.PRIM_INT     -> parseIntArray    (new int    [startSize]);
+		case ObjectMeta.PRIM_BOOLEAN -> parseBooleanArray(new boolean[startSize]);
+		case ObjectMeta.PRIM_FLOAT   -> parseFloatArray  (new float  [startSize]);
+		default -> {
+			pos++;
+			// Fallback für char/byte/short
+			yield parseDefaultArray(Array.newInstance(fallbackCompType, startSize), fallbackCompType);
 		}
-		lastArraySize = Array.getLength(arr);
-		return arr;
+		};
+
 	}
 
 	private Object parseRecordRecursive(final ObjectMeta meta, final int recursionDeep) throws Throwable {
@@ -480,73 +502,64 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			if (pos < limit && buffer[pos] == (byte) ':') pos++;
 			else { skipWhitespace(); expect((byte) ':'); }
 			if (targetIdx < 0) { skipWhitespace(); skipValue(); consumeCommaIfPresent(); continue; }
+
 			final var type = meta.type(targetIdx);
 			skipWhitespace();
 			final Object value;
 			final var b = buffer[pos];
+
 			switch (b) {
 			case '-','0','1','2','3','4','5','6','7','8','9' -> parseNumericPrimitive(meta, context, targetIdx, type);
-			case 'n' -> {
-				parseNull();
-				if (!engine.config().skipDefaultValues()) {
-					if      (type == boolean.class)                       meta.set       (this, context, targetIdx, false);
-					else if (type == double.class || type == float.class) meta.setDouble (this, context, targetIdx, 0.0);
-					else if (type != null && type.isPrimitive())          meta.setLong   (this, context, targetIdx, 0L);
-					else                                                  meta.set       (this, context, targetIdx, null);
-				}
-			}
-			case 't' -> {
-				parseTruePrimitive();
-				meta.set(this, context, targetIdx, Boolean.TRUE);
-			}
-			case 'f' -> {
-				parseFalsePrimitive();
-				meta.set(this, context, targetIdx, Boolean.FALSE);
-			}
-			case '"' -> {
-				pos++;
-				meta.set(this, context, targetIdx, parseStringValue());
-			}
+			case 'n' -> fillNullValue(-1L, context, targetIdx, meta, type);
+			case 't' -> meta.set(this, context, targetIdx, parseTruePrimitive());
+			case 'f' -> meta.set(this, context, targetIdx, parseFalsePrimitive());
+			case '"' -> meta.set(this, context, targetIdx, parseStringValue());
 			case '{' -> {
+				pos++;
+				final var childDesc = meta.getChildDescriptor(targetIdx);
+
+				if (childDesc < 0L) throw new IllegalStateException("Expected array, got '{'");
+				if ((childDesc & 1L) != 0L) throw new IllegalStateException("Expected primitive, got '{'");
+
+				final var childMeta = metaCache[(int) (childDesc >> 1)];
 				if (recursionDeep >= this.maxDepth) {
-					pos++;
-					final var t = type == null ? Map.class : type;
-					final var fallbackMeta = t == Map.class ? defaultMapMeta : metaOf(t);
-					value = runStateEngine(TYPE_OBJECT, fallbackMeta.start(this), fallbackMeta, -1, t);
+					value = runStateEngine(childDesc, childMeta.start(this), childMeta, -1);
 				} else {
-					pos++;
-					value = parseRecordRecursive(type == null || type == Map.class ? defaultMapMeta : metaOf(type), recursionDeep + 1);
+					value = parseRecordRecursive(childMeta, recursionDeep + 1);
 				}
 				meta.set(this, context, targetIdx, value);
 			}
 			case '[' -> {
-				if (type == null) {
-					pos++;
-					if (recursionDeep >= this.maxDepth) {
-						if (genericCollectionMeta == null) genericCollectionMeta = new ObjectMeta(engine, Object.class, ObjectMeta.TYPE_COLLECTION);
-						value = runStateEngine(TYPE_COL, genericCollectionMeta.start(this), genericCollectionMeta, 0, Object.class);
-					} else {
-						value = parseArrayRecursive(null, recursionDeep + 1);
+				pos++;
+				var childDesc = meta.getChildDescriptor(targetIdx);
+
+				// Dynamischer Switch von Object zu Collection, falls ein untypisiertes JSON-Array kommt
+				if (childDesc >= 0L) {
+					final var expectedMeta = metaCache[(int) (childDesc >> 1)];
+					if (expectedMeta != defaultMapMeta) {
+						throw new IllegalStateException("Expected object, got '['");
 					}
-				} else if (recursionDeep >= this.maxDepth) {
-					pos++;
-					if (type.isArray() && type.componentType().isPrimitive()) {
-						value = parsePrimitiveArray(type.componentType());
-					} else {
-						final var isArray  = type.isArray();
-						final var isSet    = Set.class.isAssignableFrom(type);
-						final var metaType = isArray ? ObjectMeta.TYPE_OBJ_ARRAY : (isSet ? ObjectMeta.TYPE_SET : ObjectMeta.TYPE_COLLECTION);
-						final var compType = isArray ? type.componentType() : (isSet ? Object.class : type);
-						final var subMeta = getDynamicMeta(compType, metaType);
-						value = runStateEngine(isArray ? TYPE_ARRAY : TYPE_COL, subMeta.start(this), subMeta, 0, compType);
-					}
+					final var colIdx = ((EngineImpl)engine).genericCollectionMeta.cacheIndex;
+					childDesc = createTypeDesc(true, false, colIdx);
+				}
+
+				// Bitmaske sagt uns: Ist es ein Primitiv-Array?
+				if ((childDesc & 1L) != 0L) {
+					final var primId = (int) ((childDesc & 0x7FFFFFFFFFFFFFFFL) >> 1);
+					final var fallback = type != null ? type.componentType() : null;
+					value = parsePrimitiveArray(primId, fallback);
 				} else {
-					pos++;
-					value = parseArrayRecursive(type, recursionDeep + 1);
+					final var childMeta = metaCache[(int) (childDesc >> 1)];
+					if (recursionDeep >= this.maxDepth) {
+						value = runStateEngine(childDesc, childMeta.start(this), childMeta, 0);
+					} else {
+						value = parseArrayRecursive(childDesc, childMeta, recursionDeep + 1);
+						depth = recursionDeep; // Reset depth nach Rekursion
+					}
 				}
 				meta.set(this, context, targetIdx, value);
 			}
-			default -> throw new IllegalStateException(); // NOT number/boolean/string/array/object
+			default -> throw new IllegalStateException("Unexpected character: " + (char) b);
 			}
 			consumeCommaIfPresent();
 		}
@@ -554,10 +567,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 
 	private Object parsePrimitiveInline(final byte b, final Class<?> type) throws IOException {
 		return switch (b) {
-		case '"' -> {
-			pos++;
-			yield parseStringValue();
-		}
+		case '"' -> parseStringValue();
 		case 't' -> parseTrue();
 		case 'f' -> parseFalse();
 		case 'n' -> parseNull();
@@ -567,95 +577,54 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 
 	@Override public int depth() { return depth; }
 
-	private Object parseArrayRecursive(final Class<?> targetType, final int recursionDeep) throws Throwable {
+	private Object parseArrayRecursive(final long typeDesc, final ObjectMeta meta, final int recursionDeep) throws Throwable {
 		depth = recursionDeep;
-		final ObjectMeta meta;
-		final Class<?> compType;
-
-		if (targetType == null) {
-			if (genericCollectionMeta == null) genericCollectionMeta = new ObjectMeta(engine, Object.class, ObjectMeta.TYPE_COLLECTION);
-			meta = genericCollectionMeta;
-			compType = Object.class;
-		} else if (targetType.isArray()) {
-			compType = targetType.componentType();
-			if (compType.isPrimitive()) return parsePrimitiveArray(compType);
-			meta = getDynamicMeta(compType, ObjectMeta.TYPE_OBJ_ARRAY);
-		} else {
-			final var isSet = Set.class.isAssignableFrom(targetType);
-			compType = isSet ? Object.class : targetType;
-			meta = getDynamicMeta(compType, isSet ? ObjectMeta.TYPE_SET : ObjectMeta.TYPE_COLLECTION);
-		}
-
 		final var context = meta.start(this);
 		var idx = 0;
 		while (true) {
 			skipWhitespace();
-			if (pos < limit && buffer[pos] == (byte) ']') {
-				pos++;
-				return meta.end(this, context);
-			}
+			if (pos < limit && buffer[pos] == (byte) ']') { pos++; return meta.end(this, context); }
 
 			final var b = buffer[pos];
 			switch (b) {
-			case '-','0','1','2','3','4','5','6','7','8','9' -> parseNumericPrimitive(meta, context, idx++, compType);
-			case 'n' -> {
-				parseNull();
-				if (!engine.config().skipDefaultValues()) {
-					if      (compType == boolean.class)                             meta.set       (this, context, idx, false);
-					else if (compType == double.class || compType == float.class)   meta.setDouble (this, context, idx, 0.0);
-					else if (compType != null && compType.isPrimitive())            meta.setLong   (this, context, idx, 0L);
-					else                                                            meta.set       (this, context, idx, null);
-				}
-				idx++;
-			}
-			case 't','f' -> meta.set(this, context, idx++, parseBooleanPrimitive());
-			case '"' -> {
+			case '-','0','1','2','3','4','5','6','7','8','9' -> parseNumericPrimitive(meta, context, idx++, meta.type(0));
+			case 'n' -> fillNullValue(0x8000000000000000L, context, idx++, meta, meta.type(0));
+			case 't' -> meta.set(this, context, idx++, parseTruePrimitive());
+			case 'f' -> meta.set(this, context, idx++, parseFalsePrimitive());
+			case '"' -> meta.set(this, context, idx++, parseStringValue());
+			case '{' -> {
 				pos++;
-				meta.set(this, context, idx++, parseStringValue());
-			}
-			default -> {
 				final Object val;
-				if (recursionDeep >= this.maxDepth) {
-					if (b == '{') {
-						pos++;
-						final var t = compType == Object.class ? Map.class : compType;
-						final var fallbackMeta = t == Map.class ? defaultMapMeta : metaOf(t);
-						val = runStateEngine(TYPE_OBJECT, fallbackMeta.start(this), fallbackMeta, -1, t);
-					} else if (b == '[') {
-						if (compType == Object.class) {
-							pos++;
-							if (genericCollectionMeta == null) genericCollectionMeta = new ObjectMeta(engine, Object.class, ObjectMeta.TYPE_COLLECTION);
-							val = runStateEngine(TYPE_COL, genericCollectionMeta.start(this), genericCollectionMeta, 0, Object.class);
-						} else {
-							pos++;
-							if (compType.isArray() && compType.componentType().isPrimitive()) {
-								val = parsePrimitiveArray(compType.componentType());
-							} else {
-								final var isSubArray = compType.isArray();
-								final var isSubSet   = Set.class.isAssignableFrom(compType);
-								final var subMetaType = isSubArray ? ObjectMeta.TYPE_OBJ_ARRAY : (isSubSet ? ObjectMeta.TYPE_SET : ObjectMeta.TYPE_COLLECTION);
-								final var subCompType = isSubArray ? compType.componentType() : (isSubSet ? Object.class : compType);
-								final var subMeta = getDynamicMeta(subCompType, subMetaType);
-								val = runStateEngine(isSubArray ? TYPE_ARRAY : TYPE_COL, subMeta.start(this), subMeta, 0, subCompType);
-							}
-						}
-					} else {
-						val = parsePrimitiveInline(b, compType);
-					}
-				} else // Reguläre Rekursion
-					if (b == '{') {
-						pos++;
-						val = parseRecordRecursive(compType == Object.class ? defaultMapMeta : metaOf(compType), recursionDeep + 1);
-					} else if (b == '[') {
-						pos++;
-						val = parseArrayRecursive(compType == Object.class ? null : compType, recursionDeep + 1);
-						depth = recursionDeep;
-					} else {
-						val = parsePrimitiveInline(b, compType);
+				final var childDesc = meta.getComponentDescriptor(); // Bei Arrays ist es immer getComponentDescriptor()
+				final var childMeta = metaCache[(int) (childDesc >> 1)];
 
-					}
+				if (recursionDeep >= this.maxDepth) {
+					val = runStateEngine(childDesc, childMeta.start(this), childMeta, -1);
+				} else {
+					val = parseRecordRecursive(childMeta, recursionDeep + 1);
+				}
 				meta.set(this, context, idx++, val);
 			}
+			case '[' -> {
+				pos++;
+				final Object val;
+				final var childDesc = meta.getComponentDescriptor();
+
+				if ((childDesc & 1L) != 0L) {
+					final var primId = (int) ((childDesc & 0x7FFFFFFFFFFFFFFFL) >> 1);
+					val = parsePrimitiveArray(primId, meta.type(0).componentType());
+				} else {
+					final var childMeta = metaCache[(int) (childDesc >> 1)];
+					if (recursionDeep >= this.maxDepth) {
+						val = runStateEngine(childDesc, childMeta.start(this), childMeta, 0);
+					} else {
+						val = parseArrayRecursive(childDesc, childMeta, recursionDeep + 1);
+						depth = recursionDeep;
+					}
+				}
+				meta.set(this, context, idx++, val);
+			}
+			default -> throw new IllegalStateException("Unexpected character in array: " + (char) b);
 			}
 			consumeCommaIfPresent();
 		}
