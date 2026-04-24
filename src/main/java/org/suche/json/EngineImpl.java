@@ -35,31 +35,36 @@ final class EngineImpl implements InternalEngine {
 	private boolean failOnUnknownProperties = true;
 
 	private final ConcurrentHashMap<Class<?>, TypeRecord> typeRecordCache = new ConcurrentHashMap<>();
+	private TypeRecord getTypeRecord(final Class<?> c) { return typeRecordCache.computeIfAbsent(c, TypeRecord::new); }
 
-	private TypeRecord getTypeRecord(final Class<?> c) {
-		return typeRecordCache.computeIfAbsent(c, TypeRecord::new);
+	void putMeta(final Class<?> c, final ObjectMeta m) {
+		final var t = getTypeRecord(c);
+		t.metaObject = m;
+		t.cacheIndex = m.cacheIndex;
 	}
 
-	public final ObjectMeta[] metaCache = new ObjectMeta[32768];
+
+	private final ObjectMeta[] metaCache = new ObjectMeta[32768];
 	private int metaCacheSize = ObjectMeta.IDX_CUSTOM_START;
 
-	public final ObjectMeta defaultMapMeta;
-	public final ObjectMeta genericCollectionMeta;
-	public final ObjectMeta genericArrayMeta;
-	public final ObjectMeta genericSetMeta;
+	private final ObjectMeta defaultMapMeta       ; // -> ObjectMeta.IDX_MAP
+	private final ObjectMeta genericCollectionMeta;
+	private final ObjectMeta genericArrayMeta;
+	private final ObjectMeta genericSetMeta;
 	final MetaConfig cfg;
 
 	@Override public ObjectMeta[] metaCache() { return metaCache; }
-	@Override public void maxRecursiveDepth(final int v) { this.maxRecursiveDepth = v; }
-	@Override public int maxRecursiveDepth() { return maxRecursiveDepth; }
-	@Override public void skipInvalid(final boolean v) { this.skipInvalid = v; }
+	@Override public void    maxRecursiveDepth(final int v) { this.maxRecursiveDepth = v; }
+	@Override public int     maxRecursiveDepth() { return maxRecursiveDepth; }
+	@Override public void    skipInvalid(final boolean v) { this.skipInvalid = v; }
 	@Override public boolean skipInvalid() { return skipInvalid; }
-	@Override public void failOnUnknownProperties(final boolean v) { this.failOnUnknownProperties = v; }
+	@Override public void    failOnUnknownProperties(final boolean v) { this.failOnUnknownProperties = v; }
 	@Override public boolean failOnUnknownProperties() { return failOnUnknownProperties; }
 
 	final Collection<Predicate<Class<?>>> AUTO_POJO = new CopyOnWriteArrayList<>();
 	@Override public void autoPojo(final Predicate<Class<?>> p) { AUTO_POJO.add(p); }
 
+	// Used by metaIdOf getDynamicMetaId(Synchronized)
 	synchronized int registerMeta(final ObjectMeta meta) {
 		if (meta != null && meta.cacheIndex >= 0) return meta.cacheIndex;
 		if (metaCacheSize >= metaCache.length) throw new IllegalStateException();
@@ -68,17 +73,17 @@ final class EngineImpl implements InternalEngine {
 		return index;
 	}
 
-	EngineImpl(final MetaConfig cfg) {
-		this.cfg = cfg;
-		this.defaultMapMeta = new ObjectMeta(this, Map.class, ObjectMeta.IDX_MAP);
+	EngineImpl(final MetaConfig config) {
+		this.cfg = config;
+		this.defaultMapMeta        = new ObjectMeta(this, Map.class, ObjectMeta.IDX_MAP);
 		this.genericCollectionMeta = new ObjectMeta(this, Object.class, ObjectMeta.TYPE_COLLECTION, ObjectMeta.IDX_COLLECTION);
-		this.genericArrayMeta = new ObjectMeta(this, Object.class, ObjectMeta.TYPE_OBJ_ARRAY, ObjectMeta.IDX_OBJ_ARRAY);
-		this.genericSetMeta = new ObjectMeta(this, Object.class, ObjectMeta.TYPE_SET, ObjectMeta.IDX_SET);
+		this.genericArrayMeta      = new ObjectMeta(this, Object.class, ObjectMeta.TYPE_OBJ_ARRAY, ObjectMeta.IDX_OBJ_ARRAY);
+		this.genericSetMeta        = new ObjectMeta(this, Object.class, ObjectMeta.TYPE_SET, ObjectMeta.IDX_SET);
 
-		metaCache[ObjectMeta.IDX_MAP] = defaultMapMeta;
+		metaCache[ObjectMeta.IDX_MAP       ] = defaultMapMeta;
 		metaCache[ObjectMeta.IDX_COLLECTION] = genericCollectionMeta;
-		metaCache[ObjectMeta.IDX_OBJ_ARRAY] = genericArrayMeta;
-		metaCache[ObjectMeta.IDX_SET] = genericSetMeta;
+		metaCache[ObjectMeta.IDX_OBJ_ARRAY ] = genericArrayMeta;
+		metaCache[ObjectMeta.IDX_SET       ] = genericSetMeta;
 
 		putMeta(Object.class, defaultMapMeta);
 		putMeta(Map.class, defaultMapMeta);
@@ -94,15 +99,16 @@ final class EngineImpl implements InternalEngine {
 	private final ObjectMeta[] dynamicMetaCache = new ObjectMeta[32];
 	private int dynamicMetaCount = 0;
 
+	// Not used in hot path only by resolveDescriptor in Constructor
 	synchronized int getDynamicMetaId(final Class<?> compType, final int targetMetaType) {
 		final var searchType = compType == null ? Object.class : compType;
 		if (searchType == Object.class) {
 			return switch (targetMetaType) {
 			case ObjectMeta.TYPE_COLLECTION -> ObjectMeta.IDX_COLLECTION;
-			case ObjectMeta.TYPE_OBJ_ARRAY -> ObjectMeta.IDX_OBJ_ARRAY;
-			case ObjectMeta.TYPE_SET -> ObjectMeta.IDX_SET;
-			case ObjectMeta.TYPE_MAP -> ObjectMeta.IDX_MAP;
-			default -> ObjectMeta.IDX_GENERIC;
+			case ObjectMeta.TYPE_OBJ_ARRAY  -> ObjectMeta.IDX_OBJ_ARRAY;
+			case ObjectMeta.TYPE_SET        -> ObjectMeta.IDX_SET;
+			case ObjectMeta.TYPE_MAP        -> ObjectMeta.IDX_MAP;
+			default                         -> ObjectMeta.IDX_GENERIC;
 			};
 		}
 		for (var i = 0; i < dynamicMetaCount; i++) {
@@ -149,12 +155,6 @@ final class EngineImpl implements InternalEngine {
 		final var id = metaIdOf(clazz);
 		if (id == ObjectMeta.IDX_GENERIC || metaCache[id] == null) return null;
 		return metaCache[id];
-	}
-
-	void putMeta(final Class<?> c, final ObjectMeta m) {
-		final var t = getTypeRecord(c);
-		t.metaObject = m;
-		t.cacheIndex = m.cacheIndex;
 	}
 
 	@Override public JsonOutputStream jsonOutputStream(final OutputStream out, final TimeFormat timeFormat, final Flags... flags) { return JsonOutputStream.of(this, out, timeFormat, flags); }

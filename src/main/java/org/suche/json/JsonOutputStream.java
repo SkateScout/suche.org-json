@@ -557,6 +557,7 @@ public final class JsonOutputStream implements AutoCloseable {
 
 	private void writeCommaIfNeeded() throws IOException { if (pos == 0 || (buffer[pos - 1] != '[' && buffer[pos - 1] != '{')) write((byte)','); }
 
+	// TODO replace with classDesc -> switch over int
 	private boolean isSkipped(final Object v) {
 		if (v == null) return skipNull;
 		final Class<?> c = v.getClass(); // Liest den Klass-Pointer in O(1)
@@ -569,7 +570,7 @@ public final class JsonOutputStream implements AutoCloseable {
 			if (c == Object[].class)    return ((Object[]) v).length == 0;
 			if (v instanceof final Collection<?> col) return col.isEmpty();
 			if (v instanceof final Map<?, ?> m)       return m.isEmpty();
-			if (c.isArray())                    return Array.getLength(v) == 0;
+			if (c.isArray())                          return Array.getLength(v) == 0;
 			if (v instanceof final Record r)          return engine.ofComplex(r.getClass()).length == 0;
 		}
 		return false;

@@ -17,7 +17,6 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 			100000000000000L, 1000000000000000L, 10000000000000000L, 100000000000000000L, 1000000000000000000L
 	};
 	private static final int POOL_SIZE = 128;
-	private static final int POOL_RETURN_LIMIT = 2048;
 
 	Map<Object, Object> internPool;
 	byte[]                       strBuf          = new byte[1024];
@@ -35,9 +34,9 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 
 	// Branchless-optimierte Bucket-Berechnung
 	private static int getBucket(final int capacity) {
-		if (capacity <= 16)   return 0;
-		if (capacity <= 128)  return 1;
-		if (capacity <= 512)  return 2;
+		if (capacity <=   16) return 0;
+		if (capacity <=  128) return 1;
+		if (capacity <=  512) return 2;
 		if (capacity <= 2048) return 3;
 		return -1; // Zu groß, geht an den GC
 	}
@@ -53,14 +52,11 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 	int         maxCollectionSize ;
 	int         maxStringLength   ;
 	int         maxDepth          ;
-	int     escapedParsedLen;
-	boolean escapedIsAscii  ;
-	ObjectMeta genericCollectionMeta;
-	ObjectMeta genericArrayMeta     ;
-	ObjectMeta genericSetMeta       ;
-
-	private final ObjectMeta[] dynamicMetaCache = new ObjectMeta[32];
-	private final int dynamicMetaCount = 0;
+	int         escapedParsedLen;
+	boolean     escapedIsAscii  ;
+	ObjectMeta  genericCollectionMeta;
+	ObjectMeta  genericArrayMeta     ;
+	ObjectMeta  genericSetMeta       ;
 
 	final Object[] onceInternal = new Object[32];
 	int            onceInternalSize = 0;

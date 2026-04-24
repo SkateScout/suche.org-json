@@ -11,6 +11,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.Set;
 import java.util.function.IntFunction;
 import java.util.function.Supplier;
 
@@ -69,9 +70,13 @@ public final class ObjectMeta {
 	final int cacheIndex;
 	final boolean needsPrims;
 
-	// NOW FINAL thanks to pre-allocated cache indices resolving circular dependencies!
 	private final long[] fieldDescriptors;
-	private final long componentDescriptor;
+	final long componentDescriptor;
+
+	long fieldDescriptor(final int idx) {
+		if(fieldDescriptors.length == 0) return componentDescriptor;
+		return fieldDescriptors[idx];
+	}
 
 	private int startSize(final int depth) {
 		final var size = depth < 64 && depth >= 0 ? lastSeenSizeByDepth[depth] : 16;
@@ -105,8 +110,14 @@ public final class ObjectMeta {
 		if (isPrimArray) primTarget = type.componentType();
 		else if (isPrimValue) primTarget = type;
 
-		// FIX: Null-Check für 'e', da statische Felder (wie GENERIC_MAP) e = null übergeben
-		final var subIdx = primTarget != null ? getPrimId(primTarget) : (e != null ? ((EngineImpl) e).metaIdOf(type) : IDX_GENERIC);
+		final int subIdx;
+		if (primTarget != null) subIdx = getPrimId(primTarget);
+		else if (e != null) {
+			if (type.isArray()) subIdx = ((EngineImpl) e).getDynamicMetaId(type.componentType(), TYPE_OBJ_ARRAY);
+			else if (Set       .class.isAssignableFrom(type)) subIdx = ((EngineImpl) e).getDynamicMetaId(Object.class, TYPE_SET);
+			else if (Collection.class.isAssignableFrom(type)) subIdx = ((EngineImpl) e).getDynamicMetaId(Object.class, TYPE_COLLECTION);
+			else subIdx = ((EngineImpl) e).metaIdOf(type);
+		} else subIdx = IDX_GENERIC;
 		return EngineImpl.createTypeDesc(isArray, primTarget != null, subIdx);
 	}
 
@@ -128,7 +139,7 @@ public final class ObjectMeta {
 		this.skipDefaultValues = e.config().skipDefaultValues();
 		this.needsPrims = compType != null && compType.isPrimitive();
 		this.componentDescriptor = resolveDescriptor(e, compType);
-		this.fieldDescriptors = null;
+		this.fieldDescriptors = new long[0];
 	}
 
 	private ObjectMeta(final int cacheIndex) {
@@ -149,10 +160,12 @@ public final class ObjectMeta {
 		this.skipDefaultValues = false;
 		this.needsPrims = false;
 		this.componentDescriptor = 0L;
-		this.fieldDescriptors = null;
+		this.fieldDescriptors = new long[0];
+
 	}
 
-	ObjectMeta(final InternalEngine e, final String className, final Supplier<Object> pojoStart, final FastKeyTable keys, final Class<?>[] types, final ComponentMeta[] components, final Object[][] enumConstants, final int cacheIndex) {
+	// TODO (1)
+	ObjectMeta(final InternalEngine e, final String className, final Supplier<Object> pojoStart, final FastKeyTable keys, final Class<?>[] types, final ComponentMeta[] components, final Object[][] enums, final int cacheIndex) {
 		this.cacheIndex = cacheIndex;
 		this.className = className;
 		this.pojoStart = pojoStart;
@@ -165,22 +178,22 @@ public final class ObjectMeta {
 		this.keys = keys;
 		this.types = types;
 		this.components = components;
-		this.enumConstants = enumConstants;
+		this.enumConstants = enums;
 		this.failOnUnknown = e.failOnUnknownProperties();
 		this.skipDefaultValues = e.config().skipDefaultValues();
 		var primFound = false;
 		for (final var t : types) if (t != null && t.isPrimitive()) { primFound = true; break; }
 		this.needsPrims = primFound;
-
+		this.componentDescriptor = 0L;
 		if (components != null && components.length > 0) {
 			this.fieldDescriptors = new long[components.length];
 			for (var i = 0; i < components.length; i++) this.fieldDescriptors[i] = resolveDescriptor(e, components[i].type());
 		} else {
-			this.fieldDescriptors = null;
+			this.fieldDescriptors = new long[0];
 		}
-		this.componentDescriptor = 0L;
 	}
 
+	// TODO (1) kombine with defect / Instance
 	ObjectMeta(final InternalEngine e, final String className, final ObjectArrayFactory factory, final int ctorParamCount, final FastKeyTable keys, final Class<?>[] types, final ComponentMeta[] components, final Object[][] enums, final int cacheIndex) {
 		this.cacheIndex = cacheIndex;
 		this.className = className;
@@ -200,14 +213,13 @@ public final class ObjectMeta {
 		var primFound = false;
 		for (final var t : types) if (t != null && t.isPrimitive()) { primFound = true; break; }
 		this.needsPrims = primFound;
-
+		this.componentDescriptor = 0L;
 		if (components != null && components.length > 0) {
 			this.fieldDescriptors = new long[components.length];
 			for (var i = 0; i < components.length; i++) this.fieldDescriptors[i] = resolveDescriptor(e, components[i].type());
 		} else {
-			this.fieldDescriptors = null;
+			this.fieldDescriptors = new long[0];
 		}
-		this.componentDescriptor = 0L;
 	}
 
 	ObjectMeta(final InternalEngine e, final Class<?> mapValueType, final int cacheIndex) {
@@ -228,7 +240,7 @@ public final class ObjectMeta {
 		this.skipDefaultValues = e == null ? true : e.config().skipDefaultValues();
 		this.needsPrims = mapValueType != null && mapValueType.isPrimitive();
 		this.componentDescriptor = resolveDescriptor(e, mapValueType);
-		this.fieldDescriptors = null;
+		this.fieldDescriptors = new long[] { this.componentDescriptor };
 	}
 
 	ObjectMeta(final InternalEngine e,final String className, final Class<?>[] subclasses, final String[] keys, final Class<?>[] types, final boolean failOnUnknown, final int cacheIndex) {
@@ -251,7 +263,7 @@ public final class ObjectMeta {
 		this.skipDefaultValues = e.config().skipDefaultValues();
 		this.needsPrims = false;
 		this.componentDescriptor = 0L;
-		this.fieldDescriptors = null;
+		this.fieldDescriptors = new long[0];
 	}
 
 	@Deprecated(forRemoval = true, since = "Switch to getChildDescriptor / getComponentDescriptor")
