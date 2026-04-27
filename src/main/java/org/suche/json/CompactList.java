@@ -134,7 +134,7 @@ sealed interface ConextBacked<E> permits CompactList, CompactMap {
 	default Float     optFloat  (final int idx) { final var v = optDouble(idx); return(null==v?null:v.floatValue()); }
 }
 
-public final class CompactList<E> extends AbstractList<E> implements ConextBacked<E>,RandomAccess {
+public final class CompactList<V> extends AbstractList<V> implements ConextBacked<V>,RandomAccess {
 	private final Object[] data;
 	private final long  [] prims;
 	private final byte     singleType;
@@ -143,8 +143,17 @@ public final class CompactList<E> extends AbstractList<E> implements ConextBacke
 	@Override public long  [] prims     () { return prims     ; }
 	@Override public byte     singleType() { return singleType; }
 
+
+	@SuppressWarnings("unchecked")
+	private V resolve(final int valIndex) {
+		final var val = data[valIndex];
+		if (val == PRIMITIVE.LONG)   return (V) Long  .valueOf(                        prims[valIndex] );
+		if (val == PRIMITIVE.DOUBLE) return (V) Double.valueOf(Double.longBitsToDouble(prims[valIndex]));
+		return (V) val;
+	}
+
 	@Override
-	@SuppressWarnings("unchecked") public E get(final int index) { return (E) rawValueAt(index); }
+	public V get(final int index) { return resolve(index); }
 
 	Object[] getRawData() { return data; }
 
@@ -155,4 +164,6 @@ public final class CompactList<E> extends AbstractList<E> implements ConextBacke
 	}
 
 	@Override public int size() { return data.length; }
+
+
 }
