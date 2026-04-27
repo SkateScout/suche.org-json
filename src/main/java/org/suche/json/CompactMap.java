@@ -7,6 +7,8 @@ import java.util.Iterator;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Set;
+import java.util.TreeSet;
+import java.util.function.BiConsumer;
 
 public final class CompactMap<K, V> extends AbstractMap<K, V> implements ConextBacked<V> {
 	public static final class PRIMITIVE extends Number {
@@ -14,22 +16,20 @@ public final class CompactMap<K, V> extends AbstractMap<K, V> implements ConextB
 		private PRIMITIVE() { }
 		public static final PRIMITIVE LONG   = new PRIMITIVE();
 		public static final PRIMITIVE DOUBLE = new PRIMITIVE();
-
-		@Override public int intValue() { throw new UnsupportedOperationException("Unresolved lazy primitive"); }
-		@Override public long longValue() { throw new UnsupportedOperationException("Unresolved lazy primitive"); }
-		@Override public float floatValue() { throw new UnsupportedOperationException("Unresolved lazy primitive"); }
+		@Override public int    intValue   () { throw new UnsupportedOperationException("Unresolved lazy primitive"); }
+		@Override public long   longValue  () { throw new UnsupportedOperationException("Unresolved lazy primitive"); }
+		@Override public float  floatValue () { throw new UnsupportedOperationException("Unresolved lazy primitive"); }
 		@Override public double doubleValue() { throw new UnsupportedOperationException("Unresolved lazy primitive"); }
 	}
+	private final Object[]             data;
+	private final long[]               prims;
+	private final byte                 singleType;
+	private       Set<K>               keySet; // LAZY INIT
+	private       Set<Map.Entry<K, V>> entrySet;
 
 	@Override public Object rawValueAt(final int logicalIdx) { return data[(logicalIdx << 1) + 1]; }
 	@Override public long  [] prims     () { return prims     ; }
 	@Override public byte     singleType() { return singleType; }
-
-
-	private final Object[] data;
-	private final long[]   prims;
-	private final byte     singleType;
-	private Set<Map.Entry<K, V>> entrySet;
 
 	Object[] getRawData() { return data; }
 
@@ -37,21 +37,30 @@ public final class CompactMap<K, V> extends AbstractMap<K, V> implements ConextB
 		this.singleType = singleType;
 		this.data       = data;
 		this.prims      = prims;
+		for(var i=0;i < data.length; i += 2) if(data[i] == null) throw new IllegalArgumentException("Missing key "+i/2+" "+Arrays.toString(data));
+	}
+
+	@SuppressWarnings("unchecked")
+	@Override public Set<K> keySet() {
+		if(keySet == null) {
+			keySet = new TreeSet<>();
+			for(var i=0;i < data.length; i += 2) if(data[i] != null) keySet.add((K)data[i]);
+		}
+		return keySet;
 	}
 
 	@Override public int size() { return data.length >> 1; }
 
 	@SuppressWarnings("unchecked")
-	private V resolve(final Object val, final int valIndex) {
+	private V resolve(final int valIndex) {
+		final var val = data[valIndex];
 		if (val == PRIMITIVE.LONG)   return (V) Long.valueOf(prims[valIndex >> 1]);
 		if (val == PRIMITIVE.DOUBLE) return (V) Double.valueOf(Double.longBitsToDouble(prims[valIndex >> 1]));
 		return (V) val;
 	}
 
 	@Override public V get(final Object key) {
-		for (var i = 0; i < data.length - 1; i += 2) {
-			if (key.equals(data[i])) return resolve(data[i + 1], i + 1);
-		}
+		for (var i = 0; i < data.length - 1; i += 2) if (key.equals(data[i])) return resolve(i + 1);
 		return null;
 	}
 
@@ -71,9 +80,9 @@ public final class CompactMap<K, V> extends AbstractMap<K, V> implements ConextB
 						@Override @SuppressWarnings("unchecked") public Map.Entry<K, V> next() {
 							if (index >= data.length - 1) throw new NoSuchElementException();
 							final var k = (K) data[index];
-							final var v = resolve(data[index + 1], index + 1);
+							final var v = resolve(index + 1);
 							index += 2;
-							return new java.util.AbstractMap.SimpleImmutableEntry<>(k, v);
+							return new AbstractMap.SimpleImmutableEntry<>(k, v);
 						}
 					};
 				}
@@ -83,13 +92,12 @@ public final class CompactMap<K, V> extends AbstractMap<K, V> implements ConextB
 	}
 
 	@Override
-	public void forEach(final java.util.function.BiConsumer<? super K, ? super V> action) {
+	public void forEach(final BiConsumer<? super K, ? super V> action) {
 		if (action == null) throw new NullPointerException();
 		for (var i = 0; i < data.length - 1; i += 2) {
 			@SuppressWarnings("unchecked")
 			final var k = (K) data[i];
-			final var v = resolve(data[i + 1], i + 1);
-			action.accept(k, v);
+			action.accept(k, resolve(i + 1));
 		}
 	}
 
