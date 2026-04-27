@@ -458,9 +458,9 @@ final class ObjectMeta {
 		if (skipDefaultValues && v == 0L) return;
 		switch (metaType) {
 		case TYPE_INSTANTIATOR -> ((ParseContext) context).prims[index] = v;
-		case TYPE_MAP -> primKeyValue(context, s, PRIMITIVE.LONG, v);
+		case TYPE_MAP          -> primKeyValue(context, s, PRIMITIVE.LONG, v);
 		case TYPE_OBJ_ARRAY, TYPE_COLLECTION -> primIdxValue(context, s, PRIMITIVE.LONG, MetaPool.T_LONG, v, index);
-		case TYPE_SET -> ((Collection<Object>) context).add(v);
+		case TYPE_SET          -> ((Collection<Object>) context).add(v);
 		default -> set(s, context, index, v);
 		}
 	}
