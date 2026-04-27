@@ -16,6 +16,9 @@ public sealed interface JsonEngine permits InternalEngine {
 	JsonOutputStream jsonOutputStream(final OutputStream out, final TimeFormat timeFormat, final int flags);
 	JsonOutputStream jsonOutputStream(final OutputStream out);
 
+	void maxRecursiveDepth(int v);
+	int maxRecursiveDepth();
+
 	<C> void registerTransformer(final Class<C> c, final UnaryOperator<Object> f);
 
 	void skipInvalid(final boolean v);

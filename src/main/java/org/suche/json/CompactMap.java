@@ -108,7 +108,7 @@ public final class CompactMap<K, V> extends AbstractMap<K, V> implements ConextB
 		return Arrays.deepEquals(data, other.data) && Arrays.equals(prims, other.prims);
 	}
 
-	public int idx(final Object key) {
+	private int idx(final Object key) {
 		for (var i = 0; i < data.length - 1; i += 2) if (key == data[i] || key.equals(data[i])) return(i >> 1);
 		return -1;
 	}

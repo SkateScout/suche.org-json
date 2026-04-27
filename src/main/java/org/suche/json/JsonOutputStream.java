@@ -16,9 +16,22 @@ import java.util.Collection;
 import java.util.Date;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.function.BiConsumer;
 import java.util.function.Supplier;
 
 public final class JsonOutputStream implements AutoCloseable {
+	private static final byte[] DIGITS = new byte[200];
+	static {
+		var c0 = (byte)'0';
+		var c1 = (byte)'0';
+		for(var i=0; i<100; i++) {
+			DIGITS[i*2]   = c0;
+			DIGITS[i*2+1] = c1;
+			c0++;
+			if(c0>'9') { c0 = '0'; c1++; }
+		}
+	}
+
 	private static final int    BUFFER_SIZE = 128 * 1024;
 	private static final ObjectPool<JsonOutputStream> STREAM_POOL = new ObjectPool<>(64, JsonOutputStream::new);
 	static         final byte[] NULL_BYTES  = {'n','u','l','l'};
@@ -83,10 +96,13 @@ public final class JsonOutputStream implements AutoCloseable {
 		}
 	}
 
-	private static final class MapDumper implements java.util.function.BiConsumer<Object, Object> {
+	private static final class MapDumper implements BiConsumer<Object, Object> {
 		Object[] target;
 		int      idx;
-		@Override public void accept(final Object k, final Object v) { target[idx++] = k; target[idx++] = v; }
+		@Override public void accept(final Object k, final Object v) {
+			target[idx++] = k;
+			target[idx++] = v;
+		}
 	}
 
 	private final byte[] buffer = new byte[BUFFER_SIZE];
@@ -100,6 +116,7 @@ public final class JsonOutputStream implements AutoCloseable {
 	private int          fractionalLimit;
 	private static final Supplier<Object> ERROR = () -> { throw new IllegalStateException("Cyclic reference"); };
 	public Supplier<Object> cycleMarker = ERROR;
+	public Object queuedComplex;
 
 	private final Object[][]     arrayPool       = new Object[32][];
 	private int                  arrayPoolSize   = 0;
@@ -119,27 +136,15 @@ public final class JsonOutputStream implements AutoCloseable {
 
 	public enum Flags { printNull, printFalse, printEmpty, printOneFractional, printThreeFractional }
 
-	private static final byte[] DIGITS = new byte[200];
-	static {
-		var c0 = (byte)'0';
-		var c1 = (byte)'0';
-		for(var i=0; i<100; i++) {
-			DIGITS[i*2]   = c0;
-			DIGITS[i*2+1] = c1;
-			c0++;
-			if(c0>'9') { c0 = '0'; c1++; }
-		}
-	}
-
 	private final Object DEFAULTOBJ   = new Object();
 
-	private void init0(final InternalEngine engine, final OutputStream out, final TimeFormat timeFormat) {
-		this.engine             = engine;
+	private void init0(final InternalEngine pEngine, final OutputStream out, final TimeFormat timeFormat) {
+		this.engine             = pEngine;
 		this.out                = out;
 		this.pos                = 0;
 		this.timeFormat         = timeFormat==null ? TimeFormatDefault.EPOCH_MILLIS : timeFormat;
 		this.stack.depth        = -1;
-		this.hasCoreTransformer = engine.hasCoreTransformer();
+		this.hasCoreTransformer = pEngine.hasCoreTransformer();
 	}
 
 	@Override public void close() throws IOException {
@@ -151,8 +156,8 @@ public final class JsonOutputStream implements AutoCloseable {
 		}
 	}
 
-	void init(final InternalEngine engine, final OutputStream out, final TimeFormat timeFormat, final Flags... flags) {
-		init0(engine, out, timeFormat);
+	void init(final InternalEngine pEngine, final OutputStream out, final TimeFormat timeFormat, final Flags... flags) {
+		init0(pEngine, out, timeFormat);
 		var preSkipNull  = true;
 		var preSkipFalse = true;
 		var preSkipEmpty = true;
@@ -163,6 +168,7 @@ public final class JsonOutputStream implements AutoCloseable {
 		case printFalse           -> preSkipFalse = false;
 		case printOneFractional   -> frac      = 1;
 		case printThreeFractional -> frac      = 3;
+		default                   -> throw new IllegalArgumentException();
 		}
 		this.skipNull        = preSkipNull ;
 		this.skipFalse       = preSkipFalse;
@@ -203,7 +209,9 @@ public final class JsonOutputStream implements AutoCloseable {
 
 	private Object transform(final Object val) {
 		if (val == null || !hasCoreTransformer) return val;
-		final var f = engine.transformer(val.getClass());
+		final Class<?> c = val.getClass();
+		if (c == String.class || c == Integer.class || c == Long.class || c == Boolean.class || c == Double.class) return val;
+		final var f = engine.transformer(c);
 		return f != null ? f.apply(val) : val;
 	}
 
@@ -361,7 +369,7 @@ public final class JsonOutputStream implements AutoCloseable {
 		@Override public void writeTemp(final JsonOutputStream s, final Temporal v) throws IOException { writeTemp.accept(s, v); }
 	}
 
-	Void write(final byte[] bytes) throws IOException {
+	void write(final byte[] bytes) throws IOException {
 		final var len = bytes.length;
 		final var space = buffer.length - pos;
 		if (len <= space) {
@@ -378,7 +386,6 @@ public final class JsonOutputStream implements AutoCloseable {
 				pos = remaining;
 			}
 		}
-		return null;
 	}
 
 	void write(final byte   b) throws IOException {
@@ -391,25 +398,22 @@ public final class JsonOutputStream implements AutoCloseable {
 
 	private void flushBuffer       () throws IOException { if (pos > 0) { out.write(buffer, 0, pos); pos = 0; } }
 
-	private Void writeBaseAscii    (final String s, final int start, final int end) throws IOException {
+	private void writeBaseAscii    (final String s, final int start, final int end) throws IOException {
 		for (var i = start; i < end; i++) write((byte) s.charAt(i));
-		return null;
 	}
 
-	private Void writeBaseAscii    (final char[] c, final int start, final int end) throws IOException {
+	private void writeBaseAscii    (final char[] c, final int start, final int end) throws IOException {
 		for (var i = start; i < end; i++) write((byte) c[i]       );
-		return null;
 	}
 
-	private Void writeBaseAscii    (final String s) throws IOException {
+	private void writeBaseAscii    (final String s) throws IOException {
 		final var l = s.length();
 		for (var i = 0; i < l; i++) write((byte) s.charAt(i));
-		return null;
 	}
 
-	private void writeBoolean(final boolean b) throws IOException { write(b ? TRUE_BYTES : FALSE_BYTES); }
+	void writeBoolean(final boolean b) throws IOException { write(b ? TRUE_BYTES : FALSE_BYTES); }
 
-	private void writeEscapedString(final String s) throws IOException {
+	void writeEscapedString(final String s) throws IOException {
 		final var sLen = s.length();
 		mayFlush(sLen+2);
 		buffer[pos++] = '"';
@@ -424,13 +428,13 @@ public final class JsonOutputStream implements AutoCloseable {
 		buffer[pos++] = '"';
 	}
 
-	private Void writeFractionalLimited(final String s) throws IOException {
-		if (fractionalLimit < 0) return writeBaseAscii(s);
+	private void writeFractionalLimited(final String s) throws IOException {
+		if (fractionalLimit < 0) { writeBaseAscii(s); return; }
 		final var dot = s.indexOf('.');
-		if (dot == -1 || s.indexOf('e', dot) != -1 || s.indexOf('E', dot) != -1) return writeBaseAscii(s);
+		if (dot == -1 || s.indexOf('e', dot) != -1 || s.indexOf('E', dot) != -1) { writeBaseAscii(s); return; }
 		final var sLen = s.length();
 		final var targetLimit = dot + 1 + fractionalLimit;
-		if (targetLimit >= sLen) return writeBaseAscii(s, 0, getCleanLen(s, sLen, dot));
+		if (targetLimit >= sLen) { writeBaseAscii(s, 0, getCleanLen(s, sLen, dot)); return; }
 		final var chars = s.toCharArray();
 		var carry = chars[targetLimit] >= '5';
 		if (carry) {
@@ -443,10 +447,10 @@ public final class JsonOutputStream implements AutoCloseable {
 			if (carry) {
 				write((byte) '1');
 				for (var i = 0; i < dot; i++) write((byte) '0');
-				return null;
+				return;
 			}
 		}
-		return writeBaseAscii(chars, 0, getCleanLen(chars, targetLimit, dot));
+		writeBaseAscii(chars, 0, getCleanLen(chars, targetLimit, dot));
 	}
 
 	private int getCleanLen(final String s, int len, final int dotIdx) {
@@ -459,13 +463,13 @@ public final class JsonOutputStream implements AutoCloseable {
 		return len;
 	}
 
-	private Void writeDouble(double d) throws IOException {
-		if (Double.isNaN(d) || Double.isInfinite(d)) return write(NULL_BYTES);
+	private void writeDouble(double d) throws IOException {
+		if (Double.isNaN(d) || Double.isInfinite(d)) { write(NULL_BYTES); return; }
 		final var l = (long) d;
-		if (d == l) { writeNumber(l); return null; }
+		if (d == l) { writeNumber(l); return; }
 		var limit = fractionalLimit >= 0 ? fractionalLimit : 6;
 		if (limit >= POW10_L.length) limit = POW10_L.length - 1;
-		if (d >= 1e14 || d <= -1e14 || (Math.abs(d) < 1e-4)) return writeFractionalLimited(Double.toString(d));
+		if (d >= 1e14 || d <= -1e14 || (Math.abs(d) < 1e-4)) { writeFractionalLimited(Double.toString(d)); return; }
 		if (d < 0) { write((byte) '-'); d = -d; }
 		final var multiplier = POW10_L[limit];
 		final var total = Math.round(d * multiplier);
@@ -473,12 +477,11 @@ public final class JsonOutputStream implements AutoCloseable {
 		var fracPart = total % multiplier;
 		writeNumber(intPart);
 		write((byte) '.');
-		if (fracPart == 0) { write((byte) '0'); return null; }
+		if (fracPart == 0) { write((byte) '0'); return; }
 		var tempLimit = multiplier / 10;
 		while (tempLimit > 1 && fracPart < tempLimit) { write((byte) '0'); tempLimit /= 10; }
 		while (fracPart % 10 == 0) fracPart /= 10;
 		writeNumber(fracPart);
-		return null;
 	}
 
 	void writeTimestampasText(final Temporal t) throws IOException {
@@ -531,8 +534,32 @@ public final class JsonOutputStream implements AutoCloseable {
 		buffer[pos++] = DIGITS[q * 2 + 1];
 	}
 
-	void writeNumber(long val) throws IOException {
+
+	void writeNumber(int val) throws IOException {
 		if (val == 0) { write((byte)'0'); return; }
+		if (val == Integer.MIN_VALUE) { write("-2147483648".getBytes()); return; }
+		if (pos + 12 > buffer.length) flushBuffer();
+		if (val < 0) { buffer[pos++] = (byte) '-'; val = -val; }
+		final var start = pos + 9;
+		var i = start;
+		while (val >= 100) {
+			final var q = val % 100;
+			val /= 100;
+			buffer[--i] = DIGITS[q * 2 + 1];
+			buffer[--i] = DIGITS[q * 2];
+		}
+		if (val < 10)  buffer[--i] = (byte) ('0' + val);
+		else {
+			buffer[--i] = DIGITS[val * 2 + 1];
+			buffer[--i] = DIGITS[val * 2];
+		}
+		final var len = start - i;
+		System.arraycopy(buffer, i, buffer, pos, len);
+		pos += len;
+	}
+
+	void writeNumber(long val) throws IOException {
+		if (val >= Integer.MIN_VALUE && val <= Integer.MAX_VALUE) { writeNumber((int) val); return; }
 		if (val == Long.MIN_VALUE) { write(MIN_LONG); return; }
 		if (pos + 20 > buffer.length) flushBuffer();
 		if (val < 0) { buffer[pos++] = (byte) '-'; val = -val; }
@@ -555,10 +582,11 @@ public final class JsonOutputStream implements AutoCloseable {
 		pos += len;
 	}
 
-	private void writeCommaIfNeeded() throws IOException { if (pos == 0 || (buffer[pos - 1] != '[' && buffer[pos - 1] != '{')) write((byte)','); }
+
+	void writeCommaIfNeeded() throws IOException { if (pos == 0 || (buffer[pos - 1] != '[' && buffer[pos - 1] != '{')) write((byte)','); }
 
 	// TODO replace with classDesc -> switch over int
-	private boolean isSkipped(final Object v) {
+	boolean isSkipped(final Object v) {
 		if (v == null) return skipNull;
 		final Class<?> c = v.getClass(); // Liest den Klass-Pointer in O(1)
 		if (c == String.class)  return skipEmpty && ((String) v).isEmpty();
@@ -593,7 +621,7 @@ public final class JsonOutputStream implements AutoCloseable {
 		switch(val) {
 		case null                      -> write(NULL_BYTES);
 		case final String            t -> writeEscapedString(t);
-		case final Integer           t -> writeNumber(t.longValue());
+		case final Integer           t -> writeNumber(t.intValue());
 		case final Boolean           t -> write(t ? TRUE_BYTES : FALSE_BYTES);
 		case final Long              t -> writeNumber(t);
 		case final Double            t -> writeDouble(t);

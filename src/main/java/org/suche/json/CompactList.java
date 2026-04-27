@@ -45,7 +45,8 @@ sealed interface ConextBacked<E> permits CompactList, CompactMap {
 	default long      optLong   (final int idx, final long    fallback) {
 		final var prims      = prims     ();
 		final var singleType = singleType();
-		if(idx < 0 || idx >= prims.length) throw new IndexOutOfBoundsException();
+		if(idx < 0) return fallback;
+		if(idx >= prims.length) throw new IndexOutOfBoundsException();
 		return switch(singleType) {
 		case MetaPool.T_LONG   -> prims[idx];
 		case MetaPool.T_DOUBLE -> (long)Double.longBitsToDouble(prims[idx]);
@@ -60,9 +61,10 @@ sealed interface ConextBacked<E> permits CompactList, CompactMap {
 	}
 
 	default Long      optLong   (final int idx) {
+		if(idx < 0) return null;
 		final var prims      = prims     ();
+		if(idx >= prims.length) throw new IndexOutOfBoundsException();
 		final var singleType = singleType();
-		if(idx < 0 || idx >= prims.length) throw new IndexOutOfBoundsException();
 		return switch(singleType) {
 		case MetaPool.T_LONG   -> prims[idx];
 		case MetaPool.T_DOUBLE -> (long)Double.longBitsToDouble(prims[idx]);
@@ -77,9 +79,10 @@ sealed interface ConextBacked<E> permits CompactList, CompactMap {
 	}
 
 	default double    optDouble (final int idx, final double  fallback) {
+		if(idx < 0) return fallback;
 		final var prims      = prims     ();
 		final var singleType = singleType();
-		if(idx < 0 || idx >= prims.length) throw new IndexOutOfBoundsException();
+		if(idx >= prims.length) throw new IndexOutOfBoundsException();
 		return switch(singleType) {
 		case MetaPool.T_LONG   -> prims[idx];
 		case MetaPool.T_DOUBLE -> Double.longBitsToDouble(prims[idx]);
@@ -94,6 +97,7 @@ sealed interface ConextBacked<E> permits CompactList, CompactMap {
 	}
 
 	default Double    optDouble (final int idx) {
+		if(idx < 0) return null;
 		final var prims      = prims     ();
 		final var singleType = singleType();
 		return switch(singleType) {

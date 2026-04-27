@@ -50,7 +50,12 @@ final class EngineImpl implements InternalEngine {
 	private final ObjectMeta genericCollectionMeta;
 	private final ObjectMeta genericArrayMeta;
 	private final ObjectMeta genericSetMeta;
+	private int maxRecursiveDepth = 128;
 	final MetaConfig cfg;
+
+	@Override public void maxRecursiveDepth(final int v) { this.maxRecursiveDepth = v; }
+	@Override public int maxRecursiveDepth() { return maxRecursiveDepth; }
+
 
 	@Override public ObjectMeta[] metaCache() { return metaCache; }
 	@Override public void    skipInvalid(final boolean v) { this.skipInvalid = v; }
@@ -109,9 +114,13 @@ final class EngineImpl implements InternalEngine {
 			};
 		}
 		for (var i = 0; i < dynamicMetaCount; i++) {
-			if (dynamicMetaCache[i].metaType == targetMetaType && dynamicMetaCache[i].components[0].type() == searchType) return dynamicMetaCache[i].cacheIndex;
+			if (dynamicMetaCache[i].metaType == targetMetaType && dynamicMetaCache[i].types[0] == searchType) return dynamicMetaCache[i].cacheIndex;
 		}
-		final var m = new ObjectMeta(this, searchType, targetMetaType, registerMeta(null));
+
+		final ObjectMeta m;
+		if (targetMetaType == ObjectMeta.TYPE_MAP) m = new ObjectMeta(this, searchType, registerMeta(null));
+		else m = new ObjectMeta(this, searchType, targetMetaType, registerMeta(null));
+
 		metaCache[m.cacheIndex] = m;
 		if (dynamicMetaCount < dynamicMetaCache.length) dynamicMetaCache[dynamicMetaCount++] = m;
 		return m.cacheIndex;
@@ -131,6 +140,8 @@ final class EngineImpl implements InternalEngine {
 		synchronized (t.mutex) {
 			// Circular reference detected! Returning the ID early is sufficient for linking.
 			if ((t.metaObject != null) || t.building) return t.cacheIndex;
+
+
 
 			t.building = true;
 			final ObjectMeta r;

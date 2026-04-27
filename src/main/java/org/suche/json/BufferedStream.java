@@ -53,7 +53,8 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 	int         maxCollectionSize ;
 	int         maxStringLength   ;
 	int         maxDepth          ;
-	int         escapedParsedLen;
+	int         escapedParsedLen  ;
+	int         maxRecursiveDepth ;
 	boolean     escapedIsAscii  ;
 	ObjectMeta  genericCollectionMeta;
 	ObjectMeta  genericArrayMeta     ;
@@ -68,6 +69,7 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		this.maxCollectionSize = cfg.maxCollectionSize();
 		this.maxStringLength   = cfg.maxStringLength();
 		this.maxCollectionSize = cfg.maxCollectionSize();
+		this.maxRecursiveDepth = c.maxRecursiveDepth();
 
 		this.engine            = c;
 		this.in                = i;
@@ -267,19 +269,15 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		// 1. Initial bounds check and sign
 		ensure(64);
 		final var limitSafe = limit; // Local copy for performance
-
 		if (pos < limitSafe && buffer[pos] == '-') {
 			lIsNegative = true;
 			pos++;
 		}
-
-		// 2. MICRO-LOOP 1: Integer Part (Before the dot)
-		// The CPU loves this: No state checks, just pure arithmetic.
+		// Integer Part (Before the dot)
 		while (pos < limitSafe) {
 			final var d = buffer[pos] - '0';
 			// Unsigned check: catches everything outside '0'-'9' (including '.' and 'e')
 			if (d < 0 || d > 9) break;
-
 			if (++lIntDigitCount <= 18) {
 				lNumberVal = lNumberVal * 10L + d;
 			} else {
@@ -288,16 +286,13 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 			}
 			pos++;
 		}
-
 		if (lIntDigitCount == 0) throw new IllegalStateException("Missing integer digits");
-
-		// 3. MICRO-LOOP 2: Fractional Part (After the dot)
+		// Fractional Part (After the dot)
 		if (pos < limitSafe && buffer[pos] == '.') {
 			pos++; // Skip the dot
 			while (pos < limitSafe) {
 				final var d = buffer[pos] - '0';
 				if (d < 0 || d > 9) break;
-
 				if (lIntDigitCount + lFracDigits < 18) {
 					lFracDigits++;
 					lNumberVal = lNumberVal * 10L + d;
@@ -311,7 +306,7 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 			}
 		}
 
-		// 4. MICRO-LOOP 3: Exponent Part ('e' or 'E')
+		// Exponent Part ('e' or 'E')
 		if (pos < limitSafe && (buffer[pos] == 'e' || buffer[pos] == 'E')) {
 			pos++; // Skip 'e'
 			if (pos < limitSafe) {
@@ -612,6 +607,7 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 	}
 
 	final int parseStringKeyAsIndex(final Object context, final ObjectMeta meta) throws IOException {
+		pos++;
 		var lPos = pos;
 		final var start = lPos;
 		final var buf = buffer;
