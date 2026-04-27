@@ -16,32 +16,35 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
 
+import javax.lang.model.SourceVersion;
+
 import org.suche.json.JsonEngine;
 import org.suche.json.MetaConfig;
 
 public class Analyze {
 	private static final int    MIN_PREFIX_LEN  = 2;
 	private static final int    MIN_POSTIFX_LEN = 3;
+	private static final int    PROPERTY_COUNT_THRESHOLD = 32;
 	private static final String RECORD_PREFIX   = "record ";
 	private static final String ENUM_PREFIX     = "enum ";
 	private static final int    NUMERICS_MASK   = (PropertyInfo.T_BYTE | PropertyInfo.T_SHORT | PropertyInfo.T_INT | PropertyInfo.T_LONG | PropertyInfo.T_FLOAT | PropertyInfo.T_DOUBLE);
 
 	public static final class PropertyInfo {
-		static final int T_BYTE    = 1 <<  0; // Byte .MIN_VALUE   <= v <= Byte.MAX_VALUE
-		static final int T_SHORT   = 1 <<  1; // Short.MIN_VALUE   <= v <= Short.MAX_VALUE
-		static final int T_INT     = 1 <<  2; // Integer.MIN_VALUE <= v <= Integer.MAX_VALUE
-		static final int T_LONG552 = 1 <<  3; // long may double without loose
-		static final int T_LONG    = 1 <<  4; // Long.MIN_VALUE <= v <= Byte.MAX_VALUE
-		static final int T_FLOAT   = 1 <<  5; // Unused
-		static final int T_DOUBLE  = 1 <<  6;
-		static final int T_CHAR    = 1 <<  7;
-		static final int T_BOOLEAN = 1 <<  8;
-		static final int T_STRING  = 1 <<  9;
-		static final int T_ENUM    = 1 << 10;
-		static final int T_ARRAY   = 1 << 11; // No difference between []/CollectionS
-		static final int T_OBJECT  = 1 << 13;
-		static final int T_NULL    = 1 << 14; // Explizit null used
-		static final int T_MAP     = 1 << 15;
+		static final int T_BYTE    = 1 <<  0; // 0x0001   // Byte .MIN_VALUE   <= v <= Byte.MAX_VALUE
+		static final int T_SHORT   = 1 <<  1; // 0x0002   // Short.MIN_VALUE   <= v <= Short.MAX_VALUE
+		static final int T_INT     = 1 <<  2; // 0x0004   // Integer.MIN_VALUE <= v <= Integer.MAX_VALUE
+		static final int T_LONG552 = 1 <<  3; // 0x0008   // long may double without loose
+		static final int T_LONG    = 1 <<  4; // 0x0010   // Long.MIN_VALUE <= v <= Byte.MAX_VALUE
+		static final int T_FLOAT   = 1 <<  5; // 0x0020   // Unused
+		static final int T_DOUBLE  = 1 <<  6; // 0x0040
+		static final int T_CHAR    = 1 <<  7; // 0x0080
+		static final int T_BOOLEAN = 1 <<  8; // 0x0100
+		static final int T_STRING  = 1 <<  9; // 0x0200
+		static final int T_ENUM    = 1 << 10; // 0x0400
+		static final int T_ARRAY   = 1 << 11; // 0x0800   // No difference between []/CollectionS
+		static final int T_OBJECT  = 1 << 12; // 0x1000
+		static final int T_NULL    = 1 << 13; // 0x2000   // Explizit null used
+		static final int T_MAP     = 1 << 14; // 0x4000
 		static final String CLASS_KEY  = "__class__";
 		static final String ENUM_KEY   = "__enum__";
 		static final String VALUE_KEY  = "value";
@@ -52,7 +55,7 @@ public class Analyze {
 		public final String fieldName;
 		public int         types      = 0;
 		public boolean     hasDefault = false; // 0 or false
-		public int         useCount;   // Statistik only
+		public int         useCount;
 		public int         minSize    = Integer.MAX_VALUE;
 		public int         maxSize    = Integer.MIN_VALUE;
 
@@ -62,11 +65,71 @@ public class Analyze {
 		public PropertyInfo    arrayElements = null;
 		public PropertyInfo    mapValues     = null;
 		public String          interfaceName = null;
+		public Set<String>     autoStringValues = new HashSet<>();
+		public boolean         autoStringAborted = false;
 
 		PropertyInfo(final String name) { this.fieldName = name; }
 
+		private static boolean isValidVariableName(final CharSequence name) { return javax.lang.model.SourceVersion.isIdentifier(name) && !SourceVersion.isKeyword(name); }
+
+		private boolean registerString(final String v) {
+			types |= T_STRING ;
+			if(v.isEmpty      ()) hasDefault = true;
+			if(!autoStringAborted) {
+				if(!isValidVariableName(v)) {
+					autoStringAborted = true;
+					autoStringValues = null;
+				} else {
+					autoStringValues.add(v);
+					if(autoStringValues.size() >= 33) {
+						autoStringAborted = true;
+						autoStringValues = null;
+					}
+				}
+			}
+			return false;
+		}
+
+		boolean registerMap    (final String fielnName, final Map<String, Set<String>> globalEnums, final Map<?,?> m) {
+			@SuppressWarnings("unchecked") final var t = (Map<String,Object>)m;
+			minSize = Math.min(minSize, t.size());
+			maxSize = Math.max(maxSize, t.size());
+
+			if(t.get(CLASS_KEY) instanceof final String cls) {
+				if(classes == null) classes = new TreeSet<>();
+				classes.add(cls);
+				types |= T_OBJECT;
+				return true;
+			}
+			if(t.get(ENUM_KEY ) instanceof final String cls) {
+				if(enumClasses == null) enumClasses = new HashSet<>();
+				enumClasses.add(cls);
+				types |= T_ENUM;
+				if(t.get(VALUE_KEY) instanceof final String enumValue) {
+					(enums == null ? enums = new HashSet<>() : enums).add(enumValue);
+					globalEnums.computeIfAbsent(cls, _->new TreeSet<>()).add(enumValue);
+				}
+				return false;
+			}
+			types |= T_MAP;
+			if(mapValues == null) mapValues = new PropertyInfo(fielnName);
+			for(final var val : t.values()) mapValues.register(fielnName, globalEnums, val);
+			return true;
+		}
+
+		boolean registerCollection(final String fielnName, final Map<String, Set<String>> globalEnums, final Collection<?> t) {
+			if(t.isEmpty()) return false; //  We do not need to scan empty collections
+			types |= T_ARRAY;
+			minSize = Math.min(minSize, t.size());
+			maxSize = Math.max(maxSize, t.size());
+			if(t.isEmpty()) hasDefault = true;
+			if(arrayElements == null) arrayElements = new PropertyInfo("[]");
+			for(final var e : t) arrayElements.register(fielnName, globalEnums, e);
+			return true;
+		}
+
 		// Return if to dive info
-		boolean register(final String fieldName, final Map<String, Set<String>> globalEnums, final Object v) {
+		boolean register(final String fielnName, final Map<String, Set<String>> globalEnums, final Object v) {
 			useCount++;
 			return switch(v) {
 			case null -> { types |= T_NULL; yield false; }
@@ -83,51 +146,17 @@ public class Analyze {
 				yield false;
 			}
 			case final Boolean       t -> { types |= T_BOOLEAN; if(!t.booleanValue()) hasDefault = true;  yield false; }
-			case final String        t -> { types |= T_STRING ; if(t.isEmpty      ()) hasDefault = true;  yield false; }
+			case final String        t -> registerString(t);
 			case final Character     _ -> { types |= T_CHAR   ; yield false; }
 			case final Enum<?>       t -> { types |= T_ENUM   ; if(enums == null) enums = new HashSet<>(); enums.add(t.name()); yield false;}
-			case final Collection<?> t -> {
-				types |= T_ARRAY;
-				minSize = Math.min(minSize, t.size());
-				maxSize = Math.max(maxSize, t.size());
-				if(t.isEmpty()) hasDefault = true;
-				if(arrayElements == null) arrayElements = new PropertyInfo("[]");
-				for(final var e : t) arrayElements.register(fieldName, globalEnums, e);
-				yield true;
-			}
-			case final Map<?,?> m -> {
-				@SuppressWarnings("unchecked") final var t = (Map<String,Object>)m;
-				minSize = Math.min(minSize, t.size());
-				maxSize = Math.max(maxSize, t.size());
-
-				if(t.get(CLASS_KEY) instanceof final String cls) {
-					if(classes == null) classes = new TreeSet<>();
-					classes.add(cls);
-					types |= T_OBJECT;
-					yield true;
-				}
-				if(t.get(ENUM_KEY ) instanceof final String cls) {
-					if(enumClasses == null) enumClasses = new HashSet<>();
-					enumClasses.add(cls);
-					types |= T_ENUM;
-					if(t.get(VALUE_KEY) instanceof final String enumValue) {
-						(enums == null ? enums = new HashSet<>() : enums).add(enumValue);
-						globalEnums.computeIfAbsent(cls, _->new TreeSet<>()).add(enumValue);
-					}
-					yield false;
-				}
-				types |= T_MAP;
-				if(mapValues == null) mapValues = new PropertyInfo(fieldName);
-				for(final var val : t.values()) mapValues.register(fieldName, globalEnums, val);
-				yield true;
-			}
-			case final Object[] arr -> {
+			case final Collection<?> t -> registerCollection(fielnName, globalEnums, t);
+			case final Map<?,?>      m -> registerMap       (fielnName, globalEnums, m);
+			case final Object[]      a -> {
 				types |= T_ARRAY;
 				if(arrayElements == null) arrayElements = new PropertyInfo("[]");
-				for(final var e : arr) arrayElements.register(fieldName, globalEnums, e);
+				for(final var e : a) arrayElements.register(fielnName, globalEnums, e);
 				yield true;
 			}
-
 			default -> {
 				if(v.getClass().isArray()) { types |= T_ARRAY; yield true; }
 				System.err.println("TYP- ? "+v.getClass().getCanonicalName()+" "+v);
@@ -138,52 +167,28 @@ public class Analyze {
 
 		// this.useCount < useCount := This implies optiona nullable
 		public String resolveJavaType(final int maxUseCount) {
-			final var t = this.types;
 			final var mayAbsent = useCount < maxUseCount;
-			final var nullable = (t & PropertyInfo.T_NULL) != 0 || (this.hasDefault && mayAbsent);	// Wenn wir explizit 'null' gesehen haben oder das Feld in einigen Objekten fehlte
-
-			final var numerics = t & NUMERICS_MASK;
-			if (numerics != 0 && numerics == t) {
-				// Das höchste gesetzte Bit gewinnt! (z.B. wenn BYTE und INT gesetzt sind, liefert das INT)
-				final var highest = Integer.highestOneBit(numerics);
-				switch (highest) {
-				case PropertyInfo.T_DOUBLE: return nullable ? "Double"  : "double";
-				case PropertyInfo.T_FLOAT : return nullable ? "Float"   : "float";
-				case PropertyInfo.T_LONG  : return nullable ? "Long"    : "long";
-				case PropertyInfo.T_INT   : return nullable ? "Integer" : "int";
-				case PropertyInfo.T_SHORT : return nullable ? "Short"   : "short";
-				case PropertyInfo.T_BYTE  : return nullable ? "Byte"    : "byte";
-				default                   : break;
-				}
-			}
-			if ((t & PropertyInfo.T_BOOLEAN) == PropertyInfo.T_BOOLEAN) return nullable ? "Boolean"   : "boolean";
-			if ((t & PropertyInfo.T_STRING ) == PropertyInfo.T_STRING ) return "String";
-			if ((t & PropertyInfo.T_CHAR   ) == PropertyInfo.T_CHAR   ) return nullable ? "Character" : "char";
-			if ((t & PropertyInfo.T_ENUM   ) == PropertyInfo.T_ENUM   ) return this.enumClasses != null ? this.enumClasses.iterator().next() : "String";
-			if ((t & PropertyInfo.T_MAP    ) == PropertyInfo.T_MAP    ) {
-				final var valType = (mapValues != null && mapValues.types != 0) ? mapValues.resolveJavaType(maxUseCount) : "Object";
-				return "Map<String, " + valType + ">";
-			}
-			if ((t & PropertyInfo.T_ARRAY  ) == PropertyInfo.T_ARRAY) {
-				final var elemType = (arrayElements != null && arrayElements.types != 0) ? arrayElements.resolveJavaType(maxUseCount) : "Object";
-				return switch(elemType) {
-				case "int"     -> "int[]";
-				case "long"    -> "long[]";
-				case "double"  -> "double[]";
-				case "float"   -> "float[]";
-				case "boolean" -> "boolean[]";
-				case "byte"    -> "byte[]";
-				case "short"   -> "short[]";
-				case "char"    -> "character[]";
-				default        -> elemType+"[]";
-				};
-			}
-			if ((t & PropertyInfo.T_OBJECT ) == PropertyInfo.T_OBJECT ) {
-				if (this.classes.size() == 1) return this.classes.iterator().next();
-				if(interfaceName == null) interfaceName = findSealedInterfaceName(classes, fieldName);
-				return interfaceName;
-			}
-			return "Object_"+t; // Fallback, falls Typ unklar ist (z.B. leere Liste)
+			final var nullable  = (types & PropertyInfo.T_NULL) != 0 || (this.hasDefault && mayAbsent);	// Wenn wir explizit 'null' gesehen haben oder das Feld in einigen Objekten fehlte
+			var exactType = this.types & ~PropertyInfo.T_NULL;
+			final var numerics = exactType & NUMERICS_MASK;
+			if (numerics != 0 && numerics == exactType)  exactType = Integer.highestOneBit(exactType);
+			return switch (exactType) {
+			case PropertyInfo.T_DOUBLE  -> nullable ? "Double"  : "double";
+			case PropertyInfo.T_FLOAT   -> nullable ? "Float"   : "float";
+			case PropertyInfo.T_LONG    -> nullable ? "Long"    : "long";
+			case PropertyInfo.T_INT     -> nullable ? "Integer" : "int";
+			case PropertyInfo.T_SHORT   -> nullable ? "Short"   : "short";
+			case PropertyInfo.T_BYTE    -> nullable ? "Byte"    : "byte";
+			case PropertyInfo.T_BOOLEAN -> nullable ? "Boolean"   : "boolean";
+			case PropertyInfo.T_STRING  -> "String";
+			case PropertyInfo.T_CHAR    -> nullable ? "Character" : "char";
+			case PropertyInfo.T_ENUM    -> findSealedInterfaceName(enumClasses, fieldName);
+			case PropertyInfo.T_MAP     -> "Map<String, " + (mapValues != null ? mapValues.resolveJavaType(maxUseCount) : "Object") + ">";
+			case PropertyInfo.T_ARRAY   -> (arrayElements == null ? "Object[]" : arrayElements.resolveJavaType(maxUseCount) +"[]");
+			case PropertyInfo.T_OBJECT  -> (classes.size() == 1)  ? classes.iterator().next() : (interfaceName = findSealedInterfaceName(classes, fieldName));	//  This is maybe an recalculation
+			case 0                      -> "Object";
+			default                     -> "Object_" + this.types;
+			};
 		}
 
 		public boolean hasConflict() {
@@ -198,6 +203,7 @@ public class Analyze {
 					(t & PropertyInfo.T_MAP    ) == PropertyInfo.T_MAP    ||
 					(t & PropertyInfo.T_ARRAY  ) == PropertyInfo.T_ARRAY  ||
 					(t & PropertyInfo.T_ENUM   ) == PropertyInfo.T_ENUM   ) return false;
+			if(t == 0) return false;
 			System.out.println("Conflict t: "+t);
 			return true;
 		}
@@ -375,10 +381,8 @@ public class Analyze {
 						if (!p.getValue().equals(currentProps.get(p.getKey()))) it.remove();
 					}
 				}
-				// Early Exit: Wenn die Schnittmenge leer ist, müssen wir die restlichen Klassen nicht mehr prüfen
 				if (commonProps.isEmpty()) break;
 			}
-			// Interface bauen und ausgeben
 			final var out = new StringBuilder("public sealed interface ").append(interfaceName).append(" permits ").append(permits).append(" {");
 			if (commonProps != null && !commonProps.isEmpty()) {
 				out.append("\n");
@@ -393,10 +397,83 @@ public class Analyze {
 		}
 	}
 
+	public static void optimizeDynamicMaps(final Map<String, ObjectInfo> classes) {
+		final var iterator = classes.entrySet().iterator();
+		while (iterator.hasNext()) {
+			final var entry = iterator.next();
+			final var className = entry.getKey();
+			final var oi = entry.getValue();
+
+			if (oi.properties == null || oi.properties.size() < PROPERTY_COUNT_THRESHOLD) continue;
+
+			var firstType = -1;
+			var allSame = true;
+			PropertyInfo sampleProp = null;
+
+			for (final var prop : oi.properties.values()) {
+				if (firstType == -1) {
+					firstType = prop.types;
+					sampleProp = prop;
+				} else if (firstType != prop.types) {	// TODO Number up scaling
+					allSame = false;
+					break;
+				}
+			}
+
+			if (allSame && sampleProp != null) {
+				rewriteObjectToMapReferences(classes, className, sampleProp);
+				iterator.remove(); // Remove the class itself, as it's now just a Map
+			}
+		}
+	}
+
+	private static void rewriteObjectToMapReferences(final Map<String, ObjectInfo> classes, final String targetClass, final PropertyInfo mapValueProp) {
+		for (final var oi : classes.values()) {
+			if (oi.properties == null) continue;
+			for (final var prop : oi.properties.values()) {
+				if ((prop.types & PropertyInfo.T_OBJECT) != 0 && prop.classes != null && prop.classes.contains(targetClass)) {
+					// Convert property from Object to Map
+					prop.classes.remove(targetClass);
+					prop.types &= ~PropertyInfo.T_OBJECT;
+					prop.types |= PropertyInfo.T_MAP;
+
+					// Set the inner value type to our matched property
+					if (prop.mapValues == null) {
+						prop.mapValues = new PropertyInfo(prop.fieldName);
+						prop.mapValues.types = mapValueProp.types;
+						prop.mapValues.classes = mapValueProp.classes;
+						prop.mapValues.arrayElements = mapValueProp.arrayElements;
+						// ... copy other relevant type fields
+					}
+				}
+			}
+		}
+	}
+
+	public static void optimizeAutoEnums(final Map<String, ObjectInfo> classes, final Map<String, Set<String>> globalEnums, final Map<String, Set<String>> sealedInterfaces) {
+		for (final var entry : classes.entrySet()) {
+			final var className = entry.getKey();
+			final var oi = entry.getValue();
+			if (oi.properties == null) continue;
+
+			for (final var prop : oi.properties.values()) {
+				if ((prop.types & PropertyInfo.T_STRING) != 0 && prop.useCount >= 2048 && !prop.autoStringAborted && prop.autoStringValues != null && !prop.autoStringValues.isEmpty()) {
+					final var enumName = "AutoEnum" + Character.toUpperCase(className.charAt(0)) + className.substring(1) + Character.toUpperCase(prop.fieldName.charAt(0)) + prop.fieldName.substring(1);
+					prop.types &= ~PropertyInfo.T_STRING;
+					prop.types |= PropertyInfo.T_ENUM;
+					prop.enumClasses = new HashSet<>();
+					prop.enumClasses.add(enumName);
+					globalEnums.put(enumName, new TreeSet<>(prop.autoStringValues));
+					sealedInterfaces.computeIfAbsent("AutoDetectedEnum", _ -> new TreeSet<>()).add(enumName);
+					prop.autoStringValues = null;
+				}
+			}
+		}
+	}
+
 	public static int printJava(final Map<String, ObjectInfo> classes, final boolean showConflicts, final Map<String, Set<String>> sealedInterfaces) {
 		var cnt = 0;
-		for (final var oi : classes.values())
-			if (oi.properties != null) for (final var propEntry : oi.properties.entrySet()) collectSealedInterfaces(propEntry.getValue(), sealedInterfaces);
+		for (final var oi : classes.values()) if (oi.properties != null) for (final var propEntry : oi.properties.entrySet()) collectSealedInterfaces(propEntry.getValue(), sealedInterfaces);
 
 		for (final var entry : classes.entrySet()) {
 			final var oi = entry.getValue();
@@ -453,14 +530,16 @@ public class Analyze {
 		final var classes          = new HashMap<String, ObjectInfo>();
 		final var info             = typeInfo(classes, enums, json);
 		final var sealedInterfaces = new HashMap<String, Set<String>>() {
-
 			@Override
 			public Set<String> put(final String key, final Set<String> value) {
 				if(key.isBlank()) throw new IllegalStateException();
 				return super.put(key, value);
 			}
-
 		};
+
+		optimizeDynamicMaps(classes);
+		optimizeAutoEnums(classes, enums, sealedInterfaces);
+
 		System.out.println("INFO "+info.size()+" entries");
 		System.out.println("WithoutConflict: "+printJava(classes, false, sealedInterfaces));
 		System.out.println("WithConflict:    "+printJava(classes, true , sealedInterfaces));
