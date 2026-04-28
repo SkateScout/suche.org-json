@@ -421,8 +421,7 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		if(null == targetType) { // TODO Marker that our Map Implementation can handle both primitive types
 			if(isFloat) meta.setDouble(this, ctx, targetIdx, computeDoubleValue());
 			else        meta.setLong  (this, ctx, targetIdx, computeLongValue  ());
-		}
-		if (targetType == double.class || targetType == float.class || (isFloat && targetType != long.class && targetType != int.class)) {
+		} else if (targetType == double.class || targetType == float.class || (isFloat && targetType != long.class && targetType != int.class)) {
 			meta.setDouble(this, ctx, targetIdx, computeDoubleValue());
 		} else {
 			meta.setLong(this, ctx, targetIdx, computeLongValue());

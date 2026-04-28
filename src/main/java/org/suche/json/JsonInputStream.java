@@ -249,7 +249,14 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		skipWhitespace();
 		if (pos >= limit) return null;
 		final var b = buffer[pos];
-		final var targetMeta = engine.metaOf(targetType);
+		var targetMeta = engine.metaOf(targetType);
+
+		// FIX: Wenn targetType Object.class ist, liefert metaOf() die IDX_MAP.
+		// Wenn wir aber ein Array lesen, MÜSSEN wir auf IDX_COLLECTION umschalten!
+		if (b == '[' && targetMeta != null && (targetMeta.cacheIndex == ObjectMeta.IDX_MAP || targetMeta.cacheIndex == ObjectMeta.IDX_GENERIC)) {
+			targetMeta = metaCache[ObjectMeta.IDX_COLLECTION];
+		}
+
 		final var isArray = (b == '[');
 		final var startTypeDesc = EngineImpl.createTypeDesc(isArray, false, targetMeta != null ? targetMeta.cacheIndex : 0);
 
@@ -267,6 +274,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		}
 		return parsePrimitiveInline(b, targetType);
 	}
+
 
 	@SuppressWarnings("unchecked")
 	public <T> T[] readRecords(final Class<T> targetClass) throws IOException {

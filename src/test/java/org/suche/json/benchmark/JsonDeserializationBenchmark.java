@@ -50,7 +50,7 @@ public class JsonDeserializationBenchmark {
 	private Class<?> dest;
 	private byte[] jsonData;
 
-	@Param({"canada.json", "citm_catalog.json", "twitter.json"})
+	@Param({"canada.json","citm_catalog.json", "twitter.json"})
 	public String fileName;
 
 	@Setup(Level.Trial)
@@ -66,9 +66,14 @@ public class JsonDeserializationBenchmark {
 	@State(Scope.Thread)
 	public static class EngineState {
 		public JsonEngine myEngine;
+		@Param({"128"})
+		public int recursion;
 
 		@Setup(Level.Trial)
-		public void setupEngine() { myEngine = JsonEngine.of(MetaConfig.DEFAULT); }
+		public void setupEngine() {
+			myEngine = JsonEngine.of(MetaConfig.DEFAULT);
+			myEngine.maxRecursiveDepth(recursion);
+		}
 	}
 	@Benchmark
 	public void benchmarkMyEngine(final Blackhole bh, final EngineState state) throws Throwable {
