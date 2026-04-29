@@ -16,7 +16,7 @@ final class SealedUnionMapper {
 	static final class SealedContext {
 		Object[]   raw;
 		long[]     prims;
-		byte       singleType; // <-- NEU
+		byte       singleType;
 		ObjectMeta meta;
 		Object     context;
 		int        idx;
@@ -28,7 +28,7 @@ final class SealedUnionMapper {
 		void seti(final Object[] raw, final long[] prims, final byte singleType, final ObjectMeta meta, final Object context, final Class<?> compType, final int parentTargetIdx) {
 			this.raw             = raw             ;
 			this.prims           = prims           ;
-			this.singleType      = singleType      ; // <-- NEU
+			this.singleType      = singleType      ;
 			this.meta            = meta            ;
 			this.context         = context         ;
 			this.idx             = 0               ;
@@ -145,7 +145,7 @@ final class SealedUnionMapper {
 		var className = (String) unionObj[0];
 		if (className == null) {
 			final var enumBytes = ENUM_KEY.getBytes(StandardCharsets.UTF_8);
-			final var enumIdx = keys.get(FastKeyTable.computeHash(enumBytes, 0, enumBytes.length), enumBytes, 0, enumBytes.length);
+			final var enumIdx = keys.get(BufferedStream.computeHash(enumBytes, 0, enumBytes.length), enumBytes, 0, enumBytes.length);
 			if (enumIdx >= 0) className = (String) unionObj[enumIdx];
 		}
 		final var targetClass = resolvePermittedSubclass(baseType, permitted, className);
@@ -157,7 +157,7 @@ final class SealedUnionMapper {
 		for (var i = 0; i < targetMeta.components.length; i++) {
 			final var comp = targetMeta.components[i];
 			final var nameBytes = comp.name().getBytes(StandardCharsets.UTF_8);
-			final var unionIdx  = keys.get(FastKeyTable.computeHash(nameBytes, 0, nameBytes.length), nameBytes, 0, nameBytes.length);
+			final var unionIdx  = keys.get(BufferedStream.computeHash(nameBytes, 0, nameBytes.length), nameBytes, 0, nameBytes.length);
 			if (unionIdx < 0) continue;
 			final var uType = unionTypes[unionIdx];
 			if (uType.isPrimitive()) {
@@ -247,7 +247,7 @@ final class SealedUnionMapper {
 						var val = c.raw[c.idx];
 						final var currentIdx = c.idx++;
 
-						// LAZY PRIMITIVES AUFLÖSEN (LISTE)
+						// LAZY PRIMITIVE RESOLUTION (LIST)
 						if (c.singleType == MetaPool.T_LONG) {
 							val = c.prims[currentIdx];
 						} else if (c.singleType == MetaPool.T_DOUBLE) {
@@ -288,7 +288,7 @@ final class SealedUnionMapper {
 					while (c.idx < c.len) {
 						final var key = (String) c.raw[c.idx];
 						var val = c.raw[c.idx + 1];
-						// LAZY PRIMITIVES AUFLÖSEN (MAP)
+						// LAZY PRIMITIVE RESOLUTION (MAP)
 						final var logicalIdx = c.idx >> 1; // Sicherer Bit-Shift für Value-Index
 					if (c.singleType == MetaPool.T_LONG) {
 						val = c.prims[logicalIdx];

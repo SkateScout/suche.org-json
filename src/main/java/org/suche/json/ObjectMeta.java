@@ -373,7 +373,7 @@ final class ObjectMeta {
 	int prepareKey(final Object context, final String key) {
 		if (metaType == TYPE_MAP) { ((ParseContext) context).currentKey = key; return 0; }
 		final var b = key.getBytes(StandardCharsets.UTF_8);
-		final var idx = keys.get(FastKeyTable.computeHash(b, 0, b.length), b, 0, b.length);
+		final var idx = keys.get(BufferedStream.computeHash(b, 0, b.length), b, 0, b.length);
 		if (idx == -1 && failOnUnknown) throw new IllegalArgumentException("Unknown property " + key + " in class " + className);
 		return idx;
 	}

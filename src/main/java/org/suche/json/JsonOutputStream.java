@@ -242,18 +242,18 @@ public final class JsonOutputStream implements AutoCloseable {
 					while (c.idx < c.len) {
 						final var comp = comps[c.idx++];
 						switch (comp.type()) {
-						case 1 -> { writeCommaIfNeeded(); write(comp.jsonKeyBytes()); write((byte)':'); writeNumber(comp.intGetter   ().applyAsInt   (c.obj)); }
-						case 2 -> { writeCommaIfNeeded(); write(comp.jsonKeyBytes()); write((byte)':'); writeNumber(comp.longGetter  ().applyAsLong  (c.obj)); }
-						case 3 -> { writeCommaIfNeeded(); write(comp.jsonKeyBytes()); write((byte)':'); writeDouble(comp.doubleGetter().applyAsDouble(c.obj)); }
+						case 1 -> { write(comp.jsonKeyBytes(commaNeeded())); writeNumber(comp.intGetter   ().applyAsInt   (c.obj)); }
+						case 2 -> { write(comp.jsonKeyBytes(commaNeeded())); writeNumber(comp.longGetter  ().applyAsLong  (c.obj)); }
+						case 3 -> { write(comp.jsonKeyBytes(commaNeeded())); writeDouble(comp.doubleGetter().applyAsDouble(c.obj)); }
 						case 4 -> {
 							final var bVal = comp.boolGetter().test(c.obj);
 							if (skipFalse && !bVal) continue;
-							writeCommaIfNeeded(); write(comp.jsonKeyBytes()); write((byte)':'); writeBoolean(bVal);
+							write(comp.jsonKeyBytes(commaNeeded())); writeBoolean(bVal);
 						}
 						default -> {
 							final var val = transform(comp.objGetter().apply(c.obj));
 							if (!isSkipped(val)) {
-								writeCommaIfNeeded(); write(comp.jsonKeyBytes()); write((byte)':');
+								write(comp.jsonKeyBytes(commaNeeded()));
 								nextVal = val;
 							}
 						}
@@ -407,11 +407,20 @@ public final class JsonOutputStream implements AutoCloseable {
 		for (var i = start; i < end; i++) write((byte) c[i]       );
 	}
 
-	private void writeBaseAscii    (final String s) throws IOException {
+	private void writeBaseAscii(final String s) throws IOException {
 		final var l = s.length();
-		for (var i = 0; i < l; i++) write((byte) s.charAt(i));
+		if (pos + l <= buffer.length) {
+			// Fast path: Unrolled copying without bounds checking
+			for (var i = 0; i < l; i++) {
+				buffer[pos++] = (byte) s.charAt(i);
+			}
+		} else {
+			// Slow path: Bounds check for each character
+			for (var i = 0; i < l; i++) {
+				write((byte) s.charAt(i));
+			}
+		}
 	}
-
 	void writeBoolean(final boolean b) throws IOException { write(b ? TRUE_BYTES : FALSE_BYTES); }
 
 	void writeEscapedString(final String s) throws IOException {
@@ -428,6 +437,24 @@ public final class JsonOutputStream implements AutoCloseable {
 		if (pos == buffer.length) flushBuffer();
 		buffer[pos++] = '"';
 	}
+
+	void writeEscapedStringKey(final String s, final boolean second) throws IOException {
+		final var sLen = s.length();
+		mayFlush(sLen+4);
+		if(second) buffer[pos++] = ',';
+		buffer[pos++] = '"';
+		var sOff = 0;
+		while (sOff < sLen) {
+			final var res = JSONString.encodeChunk(s, sOff, sLen, buffer, pos, buffer.length);
+			sOff += (int) (res >> 32);
+			pos  += (int) res;
+			if (sOff < sLen) flushBuffer();
+		}
+		if (pos == buffer.length) flushBuffer();
+		buffer[pos++] = '"';
+		buffer[pos++] = ':';
+	}
+
 
 	private void writeFractionalLimited(final String s) throws IOException {
 		if (fractionalLimit < 0) { writeBaseAscii(s); return; }
@@ -583,6 +610,7 @@ public final class JsonOutputStream implements AutoCloseable {
 		pos += len;
 	}
 
+	boolean commaNeeded() throws IOException { return(pos == 0 || (buffer[pos - 1] != '[' && buffer[pos - 1] != '{')); }
 
 	void writeCommaIfNeeded() throws IOException { if (pos == 0 || (buffer[pos - 1] != '[' && buffer[pos - 1] != '{')) write((byte)','); }
 
@@ -670,9 +698,7 @@ public final class JsonOutputStream implements AutoCloseable {
 	}
 
 	private void writeMapKey(final Object key) throws IOException {
-		writeCommaIfNeeded();
-		if (key instanceof final String s) writeEscapedString(s);
-		else writeEscapedString(String.valueOf(key));
-		write((byte)':');
+		final var t = (key instanceof final String s ? s : String.valueOf(key));
+		writeEscapedStringKey(t, commaNeeded());
 	}
 }

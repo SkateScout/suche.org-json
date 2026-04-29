@@ -10,7 +10,8 @@ import org.suche.json.MetaConfig.Filter;
 import org.suche.json.MetaConfig.NameFilter;
 
 record KeyValueObject(
-		byte[] jsonKeyBytes,
+		byte[] jsonFirstKeyBytes,
+		byte[] jsonNextKeyBytes,
 		int type, // 0=Object, 1=Int, 2=Long, 3=Double, 4=Boolean
 		java.util.function.Function        <Object, Object> objGetter,
 		java.util.function.ToIntFunction   <Object> intGetter,
@@ -18,8 +19,29 @@ record KeyValueObject(
 		java.util.function.ToDoubleFunction<Object> doubleGetter,
 		java.util.function.Predicate       <Object> boolGetter
 		) {
+
+	byte[] jsonKeyBytes(final boolean second) { return second ? jsonNextKeyBytes : jsonFirstKeyBytes; }
+
+	public KeyValueObject(final byte[] jsonFirstKeyBytes, final int type,
+			final java.util.function.Function<Object, Object> objGetter, final java.util.function.ToIntFunction<Object> intGetter,
+			final java.util.function.ToLongFunction<Object> longGetter,
+			final java.util.function.ToDoubleFunction<Object> doubleGetter, final java.util.function.Predicate<Object> boolGetter) {
+		this(jsonFirstKeyBytes, null, type, objGetter, intGetter, longGetter, doubleGetter, boolGetter);
+	}
+
+	KeyValueObject { jsonNextKeyBytes = commaPrefix(jsonFirstKeyBytes); }
+
 	private static final Logger     LOG               = Logger.getLogger(KeyValueObject.class.getCanonicalName());
-	static final byte[]     CLASS_NAME        = JSONString.buildJsonKey("__class__", true);
+	static final byte[]     CLASS_NAME_FIRST        = "__class__:".getBytes();
+	static final byte[]     CLASS_NAME_NEXT        = "__class__:".getBytes();
+
+	static byte[] commaPrefix(final byte[] b) { // KeyValueObject.kommaPrefix
+		final var r = new byte[b.length+1];
+		System.arraycopy(b, 0, r, 1, b.length);
+		r[0]=',';
+		return r;
+	}
+
 	static final KeyValueObject[] NULL = {};
 
 	static KeyValueObject[] ofRecord(final Class<? extends Record> clazz, final MetaConfig cfg) {
@@ -30,17 +52,17 @@ record KeyValueObject(
 		final var mapComponent = cfg.mapComponent();
 		for (var i = 0; i < len; i++) {
 			final var comp = components[i];
-				Filter filter = null;
-				var name = comp.getName();
+			Filter filter = null;
+			var name = comp.getName();
 			if(mapComponent != null)
 				try {
 					switch(mapComponent.apply(name,comp)) {
-				case null                -> { }
-				case final String     t -> name   = t;
-				case final Filter     t -> filter = t;
-				case final NameFilter t -> { name = t.name();  filter = t.filter(); }
-				default             -> { throw new IllegalStateException(); }
-				}
+					case null                -> { }
+					case final String     t -> name   = t;
+					case final Filter     t -> filter = t;
+					case final NameFilter t -> { name = t.name();  filter = t.filter(); }
+					default             -> { throw new IllegalStateException(); }
+					}
 				} catch(final Throwable t) {
 					if(t == MetaConfig.SKIP_FIELD) continue;
 					if(t instanceof final RuntimeException e) throw e;
@@ -114,7 +136,7 @@ record KeyValueObject(
 					if(t instanceof final RuntimeException e) throw e;
 					throw new RuntimeException(t);
 				}
-			if(!seenKeys.add(name)) continue;	// Prever getter
+			if(!seenKeys.add(name)) continue;	// Prefer getter
 			try {
 				result[cnt++] = Meta.createFastFieldGetter(JSONString.buildJsonKey(name, true), f, filter);
 			} catch (final Throwable e) {

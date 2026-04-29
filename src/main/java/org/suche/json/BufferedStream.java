@@ -26,6 +26,24 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 	private static final long       BACKSLASH_PATTERN = 0x5C5C5C5C5C5C5C5CL; // '\' in jedem Byte
 	private static final long       NON_ASCII_PATTERN = 0x8080808080808080L; // Sign-Bit in jedem Byte
 
+	// FNV-1a 64-bit prime
+	private static final long HASH_PRIME = 0x100000001b3L;
+	// FNV-1a offset basis
+	private static final long HASH_BASIS = 0xcbf29ce484222325L;
+
+	// Maskiert die ungenutzten Bytes im Tail-Word aus.
+	// Da offset maximal 7 ist, reicht ein Array der Größe 8.
+	private static final long[] TAIL_MASKS = {
+			0x0000000000000000L,
+			0x00000000000000FFL,
+			0x000000000000FFFFL,
+			0x0000000000FFFFFFL,
+			0x00000000FFFFFFFFL,
+			0x000000FFFFFFFFFFL,
+			0x0000FFFFFFFFFFFFL,
+			0x00FFFFFFFFFFFFFFL
+	};
+
 	Map<Object, Object> internPool;
 	byte[]                       strBuf          = new byte[1024];
 	private byte[][]             stringPoolKeys;
@@ -562,6 +580,40 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		this.escapedParsedLen = dstLen;
 	}
 
+	static int computeHash(final byte[] buf, final int off, final int len) {
+		var hash64 = HASH_BASIS;
+
+		var pos = off;
+		final var limit = off + len;
+		final var safeLimit = limit - 8;
+
+		// --- Fast-Path mit VarHandle ---
+		while (pos <= safeLimit) {
+			final var word = (long) LONG_VIEW.get(buf, pos);
+			hash64 ^= word;
+			hash64 *= HASH_PRIME;
+			pos += 8;
+		}
+
+		// --- Slow-Path: Tail (Restliche Bytes) ---
+		final var remaining = limit - pos;
+		if (remaining > 0) {
+			var tailWord = 0L;
+			// WICHTIG: Hier müssen wir byteweise lesen!
+			// Ein LONG_VIEW.get() würde hier eine IndexOutOfBoundsException werfen,
+			// wenn wir uns ganz am Ende des Arrays befinden und keine 8 Bytes mehr übrig sind.
+			for (var i = 0; i < remaining; i++) {
+				tailWord |= (buf[pos + i] & 0xFFL) << (i * 8);
+			}
+
+			hash64 ^= tailWord;
+			hash64 *= HASH_PRIME;
+		}
+
+		// 64-Bit Hash auf 32-Bit Integer falten
+		return (int) (hash64 ^ (hash64 >>> 32));
+	}
+
 	// SWAR Optimized
 	private String parseStringSlow(final int start, final int lPos, boolean isAscii) throws IOException {
 		var parsedLen = lPos - start;
@@ -640,30 +692,102 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		return internBytes(strBuf, 0, parsedLen, hash, isAscii);
 	}
 
-	// because of "short" key's SWAR setup is slower than byte scan.
-	final int parseStringKeyAsIndex(final Object context, final ObjectMeta meta) throws IOException {
-		pos++;
-		var lPos = pos;
-		final var start = lPos;
+	private int parseStringKeyAsIndexSlow(final Object context, final ObjectMeta meta, final int start, long hash64) throws IOException {
 		final var buf = buffer;
-		var hash = 0;
 
-		while (lPos < limit) {
-			final var b = buf[lPos];
+		while (pos < limit) {
+			final var b = buf[pos];
+
 			if (b == '"') {
-				final var len = lPos - start;
-				pos = lPos + 1;
-				final var idx = meta.prepareKey(hash, buf, start, len);
+				final var len = pos - start;
+				pos++;
+
+				// Fold the 64-bit hash state down to a 32-bit integer for the lookup tables
+				final var finalHash = (int) (hash64 ^ (hash64 >>> 32));
+
+				final var idx = meta.prepareKey(finalHash, buf, start, len);
 				if (idx != -1) return idx;
-				final var key = internBytes(buf, start, len, hash, true);
+
+				final var key = internBytes(buf, start, len, finalHash, true);
 				return meta.prepareKey(context, key);
 			}
+
 			if (b == '\\' || b < 0) break;
-			hash = 31 * hash + b;
-			lPos++;
+
+			// Continue the FNV-1a 64-bit hashing sequentially
+			hash64 ^= (b & 0xFFL);
+			hash64 *= HASH_PRIME;
+			pos++;
 		}
-		final var key = parseStringSlow(start, lPos, true);
+
+		// Ultimate fallback if escapes are present or buffer needs a refill.
+		// parseStringSlow computes its own fallback hash, which is fine for this rare edge case.
+		final var key = parseStringSlow(start, pos, true);
 		return meta.prepareKey(context, key);
+	}
+
+	final int parseStringKeyAsIndex(final Object context, final ObjectMeta meta) throws IOException {
+		pos++; // Skip the opening quote
+		final var start = pos;
+		final var safeLimit = limit - 8;
+		final var buf = buffer;
+
+		// 64-Bit Hash-Akkumulator
+		var hash64 = HASH_BASIS;
+
+		// --- SWAR Fast-Path mit 64-Bit Block-Hashing ---
+		while (pos <= safeLimit) {
+			final var word = (long) LONG_VIEW.get(buf, pos);
+
+			if ((word & NON_ASCII_PATTERN) != 0) break; // UTF-8 Slow-Path
+
+			final var quoteXor = word ^ QUOTE_PATTERN;
+			final var hasQuote = (quoteXor - 0x0101010101010101L) & ~quoteXor & NON_ASCII_PATTERN;
+
+			final var backslashXor = word ^ BACKSLASH_PATTERN;
+			final var hasBackslash = (backslashXor - 0x0101010101010101L) & ~backslashXor & NON_ASCII_PATTERN;
+
+			if ((hasQuote != 0) || (hasBackslash != 0)) {
+				// Wir haben ein Quote oder Escape gefunden.
+				final var match = hasQuote != 0 ?
+						(hasBackslash != 0 ? Long.lowestOneBit(hasQuote | hasBackslash) : hasQuote)
+						: hasBackslash;
+
+				final var offset = Long.numberOfTrailingZeros(match) >>> 3;
+
+			// Hashe exakt die verbleibenden Bytes vor dem Sonderzeichen
+			final var tailWord = word & TAIL_MASKS[offset];
+			hash64 ^= tailWord;
+			hash64 *= HASH_PRIME;
+
+			pos += offset;
+
+			if (buf[pos] != '"') {
+				break; // Backslash gefunden, ab in den Slow-Path
+			}
+			final var len = pos - start;
+			pos++; // Das schließende '"' überspringen
+
+			// Falte den 64-Bit Hash elegant zu einem 32-Bit Integer (für Tabellen/Maps)
+			final var finalHash = (int) (hash64 ^ (hash64 >>> 32));
+
+			final var idx = meta.prepareKey(finalHash, buf, start, len);
+			if (idx != -1) return idx;
+
+			final var key = internBytes(buf, start, len, finalHash, true);
+			return meta.prepareKey(context, key);
+			}
+			// Voller 8-Byte Block ohne Sonderzeichen!
+			// Hash in 2 Taktzyklen: XOR und Multiply. Keine Schleife!
+			hash64 ^= word;
+			hash64 *= HASH_PRIME;
+
+			pos += 8;
+		}
+
+		// Den errechneten 64-Bit Hash als 32-Bit Integer an den Slow-Path übergeben
+		final var passedHash = (int) (hash64 ^ (hash64 >>> 32));
+		return parseStringKeyAsIndexSlow(context, meta, start, passedHash);
 	}
 
 	// SWAR Optimized

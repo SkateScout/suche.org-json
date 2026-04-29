@@ -6,11 +6,11 @@ import java.util.Arrays;
 import org.suche.json.ObjectMeta.ComponentMeta;
 
 record FastKeyTable(byte[][] keys, int[] indices, int mask) {
-	static int computeHash(final byte[] buf, final int off, final int len) {
-		var h = 0;
-		for (var i = 0; i < len; i++) h = 31 * h + buf[off + i];
-		return h;
-	}
+	// static int computeHash(final byte[] buf, final int off, final int len) {
+	// 	var h = 0;
+	// 	for (var i = 0; i < len; i++) h = 31 * h + buf[off + i];
+	// 	return h;
+	// }
 
 	static FastKeyTable build(final ComponentMeta[] components) {
 		if (components == null || components.length == 0) return new FastKeyTable(new byte[0][], new int[0], 0);
@@ -23,7 +23,7 @@ record FastKeyTable(byte[][] keys, int[] indices, int mask) {
 
 		for (var i = 0; i < components.length; i++) {
 			final var keyBytes = components[i].name().getBytes(java.nio.charset.StandardCharsets.UTF_8);
-			final var h = computeHash(keyBytes, 0, keyBytes.length);
+			final var h = BufferedStream.computeHash(keyBytes, 0, keyBytes.length);
 			var idx = h & mask;
 			while (keys[idx] != null) idx = (idx + 1) & mask;
 			keys[idx] = keyBytes;
@@ -46,7 +46,7 @@ record FastKeyTable(byte[][] keys, int[] indices, int mask) {
 	int get(final String key) {
 		final var b = key.getBytes(StandardCharsets.UTF_8);
 		final var l = b.length;
-		final var h = FastKeyTable.computeHash(b, 0, l);
+		final var h = BufferedStream.computeHash(b, 0, l);
 		return get(h,b,0,l);
 	}
 }

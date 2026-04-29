@@ -3,6 +3,7 @@ package org.suche.json.benchmark;
 import java.io.ByteArrayOutputStream;
 import java.util.concurrent.TimeUnit;
 
+import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Fork;
 import org.openjdk.jmh.annotations.Level;
@@ -60,20 +61,20 @@ public class JsonSerializationBenchmark {
 		testData = jacksonMapper.readValue(jsonData, Object.class);
 	}
 
-	// @Benchmark
+	@Benchmark
 	public void benchmarkJackson(final Blackhole bh) throws Exception {
 		jacksonOs.reset();
 		jacksonMapper.writeValue(jacksonOs, testData);
 		bh.consume(jacksonOs.size());
 	}
 
-	// @Benchmark
+	@Benchmark
 	public void benchmarkFastjson2(final Blackhole bh) {
 		final var bytes = JSON.toJSONBytes(testData);
 		bh.consume(bytes);
 	}
 
-	// @Benchmark
+	@Benchmark
 	public void benchmarkMyEngine(final Blackhole bh) throws Exception {
 		myOs.reset();
 		try (var s = myEngine.jsonOutputStream(myOs)) { s.writeObject(testData); }

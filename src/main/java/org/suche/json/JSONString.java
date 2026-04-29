@@ -29,18 +29,22 @@ final class JSONString {
 		final var safeLimit = dstLen - 6;
 
 		while (sOff < sLen && dstOff < safeLimit) {
+			// --- FAST PATH: ASCII COPY LOOP ---
+			// Calculate the maximum safe distance to avoid any bounds checks inside the loop.
+			// This unlocks C2 JIT auto-vectorization (SIMD) for pure ASCII string copying.
+			final var runLimit = sOff + Math.min(sLen - sOff, safeLimit - dstOff);
 			var c = s.charAt(sOff);
 
-			// Fast-path: The C2 JIT compiler can aggressively unroll this loop
-			// because the condition is reduced to a single array lookup without branching.
-			while (c < 128 && ESCAPE_TABLE[c] == 0) {
+			while (sOff < runLimit) {
+				if (c >= 128 || ESCAPE_TABLE[c] != 0) break;
 				dst[dstOff++] = (byte) c;
-				if (++sOff >= sLen || dstOff >= safeLimit) break;
-				c = s.charAt(sOff);
+				sOff++;
+				if (sOff < runLimit) c = s.charAt(sOff);
 			}
 
 			if (sOff >= sLen || dstOff >= safeLimit) break;
 
+			// --- SLOW PATH: ESCAPES AND UNICODE ---
 			if (c < 128) {
 				final var esc = ESCAPE_TABLE[c];
 				if (esc > 0) {
@@ -80,7 +84,7 @@ final class JSONString {
 	}
 
 	static byte[] buildJsonKey(final String name, final boolean keyWrap) {
-		final var temp = new byte[name.length() * 6 + 4];
+		final var temp = new byte[name.length() * 6 + 6];
 		var pos = 0;
 		if (keyWrap) temp[pos++] = '"';
 		final var res = encodeChunk(name, 0, name.length(), temp, pos, temp.length);

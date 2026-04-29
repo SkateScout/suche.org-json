@@ -255,8 +255,8 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		final var b = buffer[pos];
 		var targetMeta = engine.metaOf(targetType);
 
-		// FIX: Wenn targetType Object.class ist, liefert metaOf() die IDX_MAP.
-		// Wenn wir aber ein Array lesen, MÜSSEN wir auf IDX_COLLECTION umschalten!
+		// If targetType is Object.class, metaOf() returns IDX_MAP.
+		// But if we are reading an array, we MUST switch to IDX_COLLECTION!
 		if (b == '[' && targetMeta != null && (targetMeta.cacheIndex == ObjectMeta.IDX_MAP || targetMeta.cacheIndex == ObjectMeta.IDX_GENERIC)) {
 			targetMeta = metaCache[ObjectMeta.IDX_COLLECTION];
 		}
@@ -278,7 +278,6 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		}
 		return parsePrimitiveInline(b, targetType);
 	}
-
 
 	@SuppressWarnings("unchecked")
 	public <T> T[] readRecords(final Class<T> targetClass) throws IOException {
@@ -428,7 +427,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		final var childDesc  = meta.fieldDescriptor(0);
 		var idx = 0;
 		byte state = 0;
-		// LAZY EVALUATION VARIABLES (Werden nur berechnet, wenn zwingend nötig)
+		// LAZY EVALUATION VARIABLES (Calculated only when strictly necessary)
 		long objPassDesc = 0, arrPassDesc = 0;
 		ObjectMeta objFallbackMeta = null, arrFallbackMeta = null;
 		var isPrimitive = false;
