@@ -389,7 +389,8 @@ public final class JsonOutputStream implements AutoCloseable {
 	}
 
 	void write(final byte   b) throws IOException {
-		if (pos == buffer.length) flushBuffer(); buffer[pos++] = b;
+		if (pos == buffer.length) flushBuffer();
+		buffer[pos++] = b;
 	}
 
 	private void mayFlush(final int require) throws IOException {

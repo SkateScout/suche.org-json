@@ -270,7 +270,6 @@ final class ObjectMeta {
 		this.childMetas       = componentMetaToObjectMeta(e, fieldDescriptors);
 	}
 
-	@Deprecated(forRemoval = true, since = "Switch to getChildDescriptor / getComponentDescriptor")
 	Class<?> type(final int index) { return types[1==types.length?0:index]; }
 	long getChildDescriptor(final int index) { return (this.metaType == TYPE_MAP ? this.componentDescriptor : (fieldDescriptors == null ? 0L : fieldDescriptors[index])); }
 	long getComponentDescriptor() { return componentDescriptor; }

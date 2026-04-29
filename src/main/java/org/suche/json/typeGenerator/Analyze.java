@@ -25,9 +25,7 @@ public final class Analyze {
 			final var entry = iterator.next();
 			final var className = entry.getKey();
 			final var oi = entry.getValue();
-
-			if (oi.properties == null || oi.properties.size() < PROPERTY_COUNT_THRESHOLD) continue;
-
+			if (oi.properties.size() < PROPERTY_COUNT_THRESHOLD) continue;
 			var firstType = -1;
 			var allSame = true;
 			PropertyInfo sampleProp = null;
@@ -51,7 +49,6 @@ public final class Analyze {
 
 	private static void rewriteObjectToMapReferences(final Map<String, ObjectInfo> classes, final String targetClass, final PropertyInfo mapValueProp) {
 		for (final var oi : classes.values()) {
-			if (oi.properties == null) continue;
 			for (final var prop : oi.properties.values()) {
 				if ((prop.types & PropertyInfo.T_OBJECT) != 0 && prop.classes != null && prop.classes.contains(targetClass)) {
 					prop.classes.remove(targetClass);
@@ -87,7 +84,6 @@ public final class Analyze {
 		globalNames.addAll(sealedInterfaces.keySet());
 		final var enumGroups = new HashMap<Set<String>, java.util.List<PropertyInfo>>();
 		for (final var oi : classes.values()) {
-			if (oi.properties == null) continue;
 			for (final var prop : oi.properties.values()) {
 				if (prop.useCount >= 2048 && !prop.autoStringAborted && prop.autoStringValues != null && !prop.autoStringValues.isEmpty()) {
 					enumGroups.computeIfAbsent(prop.autoStringValues, _ -> new ArrayList<>()).add(prop);
@@ -133,7 +129,7 @@ public final class Analyze {
 		globalNames.addAll(enums.keySet());
 
 		for (final var oi : classes.values())
-			if (oi.properties != null) for (final var p : oi.properties.values()) collectSealedInterfaces(p, sealedInterfaces, globalNames);
+			for (final var p : oi.properties.values()) collectSealedInterfaces(p, sealedInterfaces, globalNames);
 
 		if (json instanceof Collection || (json != null && json.getClass().isArray())) {
 			final var rootProp = new PropertyInfo("root");

@@ -34,7 +34,6 @@ public class SourceGenerator {
 		var oneProp = false;
 		for (final var className : permitsList) {
 			if(!(classes.get(className) instanceof final ObjectInfo oi)
-					|| oi.properties == null
 					|| oi.properties.size() == 0) {
 				noneEmpty = false;
 				break;
