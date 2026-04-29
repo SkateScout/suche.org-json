@@ -1,6 +1,5 @@
 package org.suche.json;
 
-import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
@@ -8,7 +7,7 @@ import java.util.function.Supplier;
 /** Elastic Soft-Limit Pool */
 final class ObjectPool<T> {
 	interface CleanOnRelease { void clean(); }
-	private final Queue   <T>   pool   ;
+	private final ConcurrentLinkedQueue<T>   pool   ;
 	private final Supplier<T>   factory;
 	private final int           limit  ;
 	private final AtomicInteger count  ;
@@ -37,7 +36,7 @@ final class ObjectPool<T> {
 		if(object instanceof final CleanOnRelease e) e.clean();
 		// Allow short time more objects, will later with acquire removed.
 		if (this.count.get() < this.limit) {
-			this.pool.offer(object);
+			if(!this.pool.offer(object)) throw new IllegalStateException("Should never happend since unbound ConcurrentLinkedQueue");
 			this.count.incrementAndGet();
 		}
 	}

@@ -141,8 +141,6 @@ final class EngineImpl implements InternalEngine {
 			// Circular reference detected! Returning the ID early is sufficient for linking.
 			if ((t.metaObject != null) || t.building) return t.cacheIndex;
 
-
-
 			t.building = true;
 			final ObjectMeta r;
 			if (clazz.isPrimitive() || clazz.isArray() || 0 != (clazz.getModifiers() & MOG_IGNORE)) r = ObjectMeta.NULL;
@@ -151,9 +149,7 @@ final class EngineImpl implements InternalEngine {
 			else r = ObjectMeta.ofPojo(this, clazz, t.cacheIndex);
 
 			t.metaObject = r;
-			if (r != ObjectMeta.NULL) {
-				metaCache[t.cacheIndex] = r;
-			}
+			if (r != ObjectMeta.NULL) metaCache[t.cacheIndex] = r;
 			t.building = false;
 			return t.cacheIndex;
 		}
