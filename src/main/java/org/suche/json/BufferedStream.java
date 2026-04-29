@@ -537,7 +537,8 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 			}
 		}
 		if (dstLen + 4 > strBuf.length) expandStrBuf(dstLen + 4);
-		if(cp < 0x80) {
+		if(cp < 0x80) strBuf[dstLen++] = (byte) cp;
+		else {
 			isAscii = false;
 			if(cp < 0x800) {
 				strBuf[dstLen++] = (byte) (0xC0 | (cp >> 6));
@@ -555,7 +556,6 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		this.escapedIsAscii   = isAscii;
 		this.escapedParsedLen = dstLen;
 	}
-
 
 	private String parseStringSlow(final int start, final int lPos, boolean isAscii) throws IOException {
 		var parsedLen = lPos - start;

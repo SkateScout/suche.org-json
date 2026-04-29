@@ -36,7 +36,10 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			}
 			stack[depth].set(typeDesc, obj, meta, targetIdx);
 		}
-		void clear() { for (var i = 0; i <= depth; i++) stack[i].clean(); depth = -1; }
+		void clear() {
+			for (var i = 0; i <= depth; i++) stack[i].clean();
+			depth = -1;
+		}
 	}
 
 	private JsonInputStream() {}

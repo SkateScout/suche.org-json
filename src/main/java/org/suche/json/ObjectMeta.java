@@ -20,8 +20,6 @@ import org.suche.json.CompactMap.PRIMITIVE;
 import org.suche.json.ConstructorGenerator.ObjectArrayFactory;
 import org.suche.json.MetaPool.ParseContext;
 
-interface ObjBooleanConsumer<T> { void accept(T t, boolean value); }
-
 final class ObjectMeta {
 	static         final int IDX_GENERIC = 0;	// Must be 0 for speedup with bit checks
 	static         final int  IDX_MAP = 1, IDX_COLLECTION = 2, IDX_SET = 3, IDX_OBJ_ARRAY = 4;

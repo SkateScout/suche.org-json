@@ -119,7 +119,7 @@ public final class Analyze {
 
 	public static void main(final String[] argc) throws Throwable {
 		final var basePackageName = "org.suche.json.mode.testDataset1";
-		final var srcPath = Path.of("src/generated/java");
+		final var srcPath = Path.of("src/generated/java/model.jar");
 
 		final var json = readJson(Path.of("/1.json"));
 
