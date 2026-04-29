@@ -28,8 +28,9 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		CTX[] stack = stack64;
 		int depth = -1;
 		CtxStack() { for (var i = 0; i < 64; i++) stack[i] = new CTX(); }
-		void push(final long typeDesc, final Object obj, final Object meta, final int targetIdx) {
+		void push(final long typeDesc, final Object obj, final Object meta, final int targetIdx, final int limit) {
 			if (++depth >= stack.length) {
+				if(depth > limit) throw new StackOverflowError();
 				final var oldLen = stack.length;
 				stack = Arrays.copyOf(stack, oldLen * 2);
 				for (var i = oldLen; i < stack.length; i++) stack[i] = new CTX();
@@ -83,6 +84,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 	}
 
 	private Object runStateEngine(final long startTypeDesc, final Object startObj, final Object startMeta, final int startIdx) throws Throwable {
+		final var stackLimit = engine.config().maxDepth();
 		var curTypeDesc = startTypeDesc;
 		var curObj = startObj;
 		var curMeta = (ObjectMeta) startMeta;
@@ -104,7 +106,6 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				}
 			}
 			case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9' -> {
-				// TODO why is here no curTypeDesc type ?
 				parseNumericPrimitive(curMeta, curObj, curIdx, null);
 				curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
 				consumeCommaIfPresent();
@@ -120,7 +121,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				consumeCommaIfPresent();
 			}
 			case '{' -> {
-				engineStack.push(curTypeDesc, curObj, curMeta, curIdx);	// No issue if later an exception came
+				engineStack.push(curTypeDesc, curObj, curMeta, curIdx, stackLimit);	// No issue if later an exception came
 				if (curTypeDesc >= 0L && curIdx < 0) throw new IllegalStateException("Expected key");
 				curTypeDesc = curMeta.fieldDescriptor(curIdx);
 				pos++;
@@ -156,7 +157,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 					curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
 					consumeCommaIfPresent();
 				} else {
-					engineStack.push(curTypeDesc, curObj, curMeta, curIdx);
+					engineStack.push(curTypeDesc, curObj, curMeta, curIdx, stackLimit);
 					curTypeDesc = childDesc;
 					curMeta = metaCache[(int) (curTypeDesc >> 1)];
 					curObj = curMeta.start(this);

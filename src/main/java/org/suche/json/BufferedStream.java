@@ -2,6 +2,9 @@ package org.suche.json;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Map;
@@ -9,15 +12,19 @@ import java.util.Map;
 import org.suche.annotation.NonNull;
 
 sealed abstract class BufferedStream  implements MetaPool permits JsonInputStream {
-	private static final int BUFFER_SIZE = 128*1024;
-	private static final double[] POW10 = { 1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18 };
-	private static final long[] POW10_L = {
+	private static final int        BUFFER_SIZE = 128*1024;
+	private static final double[]   POW10 = { 1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18 };
+	private static final long[]     POW10_L = {
 			1L, 10L, 100L, 1000L, 10000L, 100000L, 1000000L, 10000000L, 100000000L,
 			1000000000L, 10000000000L, 100000000000L, 1000000000000L, 10000000000000L,
 			100000000000000L, 1000000000000000L, 10000000000000000L, 100000000000000000L, 1000000000000000000L
 	};
-	private static final int POOL_SIZE = 128;
-	private static final int STRING_POOL_SIZE = 4096;
+	private static final int        POOL_SIZE = 128;
+	private static final int        STRING_POOL_SIZE = 4096;
+	private static final VarHandle  LONG_VIEW          = MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.LITTLE_ENDIAN);
+	private static final long       QUOTE_PATTERN     = 0x2222222222222222L; // '"' in jedem Byte
+	private static final long       BACKSLASH_PATTERN = 0x5C5C5C5C5C5C5C5CL; // '\' in jedem Byte
+	private static final long       NON_ASCII_PATTERN = 0x8080808080808080L; // Sign-Bit in jedem Byte
 
 	Map<Object, Object> internPool;
 	byte[]                       strBuf          = new byte[1024];
@@ -555,6 +562,7 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		this.escapedParsedLen = dstLen;
 	}
 
+	// SWAR Optimized
 	private String parseStringSlow(final int start, final int lPos, boolean isAscii) throws IOException {
 		var parsedLen = lPos - start;
 		if (parsedLen > strBuf.length) expandStrBuf(parsedLen);
@@ -562,6 +570,30 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		this.pos = lPos;
 
 		while (true) {
+			final var safeLimit = limit - 8;
+			// --- SWAR Fast-Copy Loop ---
+			// Process and copy 8 bytes at a time for maximum memory bandwidth utilization
+			while (pos <= safeLimit) {
+				final var word = (long) LONG_VIEW.get(buffer, pos);
+				final var quoteXor = word ^ QUOTE_PATTERN;
+				final var hasQuote = (quoteXor - 0x0101010101010101L) & ~quoteXor & NON_ASCII_PATTERN;
+				final var backslashXor = word ^ BACKSLASH_PATTERN;
+				final var hasBackslash = (backslashXor - 0x0101010101010101L) & ~backslashXor & NON_ASCII_PATTERN;
+				if ((hasQuote != 0) || (hasBackslash != 0)) {
+					// Quote or escape sequence found within the next 8 bytes.
+					// Break into the scalar loop to process the exact position.
+					break;
+				}
+				// Update ASCII tracking. If any byte is negative, the sign bit remains set.
+				if ((word & NON_ASCII_PATTERN) != 0) isAscii = false;
+				if (parsedLen + 8 > strBuf.length) expandStrBuf(parsedLen + 8);
+				// Copy exactly 8 bytes into the target buffer in a single CPU instruction
+				LONG_VIEW.set(strBuf, parsedLen, word);
+				parsedLen += 8;
+				pos += 8;
+			}
+
+			// Scalar fallback for the remaining bytes up to the control character or buffer edge
 			while (pos < limit) {
 				final var b = buffer[pos];
 				if (b < 0) isAscii = false;
@@ -570,15 +602,19 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 				strBuf[parsedLen++] = b;
 				pos++;
 			}
+
 			if (pos >= limit) {
 				ensure(1);
-				if (pos >= limit) throw new IllegalStateException();
+				if (pos >= limit) throw new IllegalStateException("Unexpected end of stream inside string");
 				continue;
 			}
+
 			var b = buffer[pos++];
 			if (b == '"') break;
-			if (pos >= limit) { ensure(1); if (pos >= limit) throw new IllegalStateException(); }
+
+			if (pos >= limit) { ensure(1); if (pos >= limit) throw new IllegalStateException("Unexpected end of stream after escape"); }
 			b = buffer[pos++];
+
 			switch (b) {
 			case '"', '\\', '/' -> { }
 			case 'b' -> b = '\b';
@@ -591,18 +627,20 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 				parsedLen  = escapedParsedLen;
 				isAscii &= escapedIsAscii;
 			}
-			default -> throw new IllegalStateException();
+			default -> throw new IllegalStateException("Invalid escape sequence");
 			}
 
 			if (parsedLen == strBuf.length) expandStrBuf(parsedLen + 1);
 			strBuf[parsedLen++] = b;
 			if (b < 0) isAscii = false;
 		}
+
 		var hash = 0;
 		for (var i = 0; i < parsedLen; i++) hash = 31 * hash + strBuf[i];
 		return internBytes(strBuf, 0, parsedLen, hash, isAscii);
 	}
 
+	// because of "short" key's SWAR setup is slower than byte scan.
 	final int parseStringKeyAsIndex(final Object context, final ObjectMeta meta) throws IOException {
 		pos++;
 		var lPos = pos;
@@ -628,30 +666,46 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		return meta.prepareKey(context, key);
 	}
 
+	// SWAR Optimized
 	final String parseStringValue() throws IOException {
-		var       lPos   = pos + 1;
-		final var lLimit = limit;
-		final var start  = lPos;
-		final var buf    = buffer;
-		var       hash   = 0;
-
-		while (lPos < lLimit) {
-			final var b = buf[lPos];
-			if (b == '"') {
-				pos = lPos + 1;
-				return internBytes(buf, start, lPos - start, hash, true);
+		pos++; // Überspringe das einleitende '"'
+		final var start     = pos;
+		final var safeLimit = limit - 8;
+		while (pos <= safeLimit) { // SWAR fast scan
+			// Lade 8 Bytes in einem Rutsch
+			final var word = (long) LONG_VIEW.get(buffer, pos);
+			if ((word & NON_ASCII_PATTERN) != 0) break; // If byte witch bit 7 set, switch to slow scanning
+			// 2. Check: Suche nach '"'
+			final var quoteXor = word ^ QUOTE_PATTERN;
+			final var hasQuote = (quoteXor - 0x0101010101010101L) & ~quoteXor & NON_ASCII_PATTERN;
+			// 3. Check: Suche nach '\'
+			final var backslashXor = word ^ BACKSLASH_PATTERN;
+			final var hasBackslash = (backslashXor - 0x0101010101010101L) & ~backslashXor & NON_ASCII_PATTERN;
+			if ((hasQuote != 0) || (hasBackslash != 0)) {
+				// Ein Treffer liegt vor! Finde heraus, welches Zeichen zuerst kam.
+				// Kombiniere die Bitmasken, um das erste gesetzte Bit zu finden.
+				final var match = hasQuote != 0 ? (hasBackslash != 0 ? Long.lowestOneBit(hasQuote | hasBackslash) : hasQuote) : hasBackslash;
+				// Ermittle den exakten Byte-Offset (0 bis 7)
+				final var offset = (Long.numberOfTrailingZeros(match) >>> 3);
+				pos += offset;
+				if (buffer[pos] == '"') {
+					final var len = pos - start;
+					pos++; // Das schließende '"' überspringen
+					// Only ISO-8859-1 is used avoid JDK UTF-8 conversion.
+					return new String(buffer, start, len, StandardCharsets.ISO_8859_1);
+				}
+				break; // Ein Backslash wurde gefunden, ab in den Slow-Path
 			}
-			if (b == '\\' || b < 0) break;
-			hash = 31 * hash + b;
-			lPos++;
+			pos += 8;	// No " or \ found, 8 bytes can be used
 		}
-		return parseStringSlow(start, lPos, true);
+		// --- SLOW-PATH FALLBACK ---
+		// Greift, wenn wir nahe ans Puffer-Ende kommen, UTF-8 auftaucht oder Escapes aufgelöst werden müssen.
+		return parseStringSlow(start, pos, true);
 	}
 
 	// ######################################################################################
 	// ######################################################################################
 	// ######################################################################################
-
 
 	// Bit 9 (\t), 10 (\n), 13 (\r), 32 (Space)
 	static final long WHITESPACE_MASK = (1L << 9) | (1L << 10) | (1L << 13) | (1L << 32);
