@@ -36,7 +36,7 @@ final class ObjectPool<T> {
 		if(object == null) return;
 		if(object instanceof final CleanOnRelease e) e.clean();
 		// Allow short time more objects, will later with acquire removed.
-		if (object != null && this.count.get() < this.limit) {
+		if (this.count.get() < this.limit) {
 			this.pool.offer(object);
 			this.count.incrementAndGet();
 		}

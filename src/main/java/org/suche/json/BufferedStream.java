@@ -156,7 +156,7 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		}
 	}
 
-	@Override public ParseContext takeContext(final int ignoredCapacity, final boolean map) {
+	@Override public ParseContext takeContext(final boolean map) {
 		// Wir ignorieren die Capacity hier, da Arrays lazy in ObjectMeta allokiert werden
 		final ParseContext ctx;
 		if (ctxPoolSize > 0) {
@@ -164,14 +164,12 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		} else {
 			ctx = new ParseContext();
 		}
-
-		// Context zu 100% nackt ausliefern
-		ctx.cnt = 0;
+		ctx.cnt        = 0;
 		ctx.singleType = MetaPool.T_EMPTY;
 		ctx.currentKey = null;
-		ctx.objs  = null;
-		ctx.prims = null;
-		ctx.map = map ? 1 : 0;
+		ctx.objs       = null;
+		ctx.prims      = null;
+		ctx.map        = map ? 1 : 0;
 		return ctx;
 	}
 

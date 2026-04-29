@@ -18,7 +18,7 @@ final class EngineImpl implements InternalEngine {
 
 	private static class TypeRecord {
 		final Class<?> clazz;
-		final Object mutex = new Object();
+		final Object   mutex = new Object();
 		ObjectMeta metaObject;
 		KeyValueObject[] kv;
 		// MethodHandle filter;
@@ -173,17 +173,6 @@ final class EngineImpl implements InternalEngine {
 	@Override public <C> void registerTransformer(final Class<C> c, final UnaryOperator<Object> f) { getTypeRecord(c).transformer = f; if (c.getClassLoader() == null || c.isArray()) hasCoreTransformer = true; }
 	@Override public JsonInputStream jsonInputStream(final InputStream is) { return JsonInputStream.of(is, this); }
 	@Override public MetaConfig config() { return cfg; }
-
-	// @Override public MethodHandle getFilter(final Class<?> c) {
-	// 	final var t = getTypeRecord(c);
-	// 	var m = t.filter;
-	// 	if (m == null) {
-	// 		m = Meta.newFilter(c);
-	// 		if (m == null) m = MethodHandles.identity(Object.class);
-	// 		t.filter = m;
-	// 	}
-	// 	return m;
-	// }
 
 	@Override
 	public KeyValueObject[] ofComplex(final Class<?> c) {

@@ -141,7 +141,8 @@ final class ObjectMeta {
 	private static ObjectMeta[] componentMetaToObjectMeta(final InternalEngine e, final long[] fieldDescriptors) {
 		if(fieldDescriptors == null || fieldDescriptors.length == 0) return NO_childMetas;
 		final var childMetas = new ObjectMeta[fieldDescriptors.length];
-		for (var i = 0; i < fieldDescriptors.length; i++) {
+		if(e == null) for (var i = 0; i < fieldDescriptors.length; i++) childMetas[i] = null;
+		else for (var i = 0; i < fieldDescriptors.length; i++) {
 			final var metaId = (int)(fieldDescriptors[i] >>> 1);
 			childMetas[i] = (metaId == ObjectMeta.IDX_GENERIC) ? null : e.metaCache()[metaId];
 		}
@@ -379,10 +380,10 @@ final class ObjectMeta {
 
 	Object start(final MetaPool s) {
 		return switch (metaType) {
-		case TYPE_MAP, TYPE_OBJ_ARRAY, TYPE_COLLECTION -> s.takeContext(startSize(s.depth()), TYPE_MAP == metaType);
+		case TYPE_MAP, TYPE_OBJ_ARRAY, TYPE_COLLECTION -> s.takeContext(TYPE_MAP == metaType);
 		case TYPE_INSTANTIATOR -> {
 			final var len = fieldDescriptors != null ? fieldDescriptors.length : 0;
-			final var ctx = s.takeContext(len, false);
+			final var ctx = s.takeContext(false);
 			if (ctx.objs == null) ctx.objs = s.takeArray(len);
 			if (needsPrims && ctx.prims == null) ctx.prims = s.takeLongArray(len);
 			ctx.cnt = len;
@@ -488,7 +489,7 @@ final class ObjectMeta {
 		if (this.enumConstants != null && index < enumConstants.length && this.enumConstants[index] != null) value = Meta.resolveEnum(this.enumConstants[index], value);
 		switch (metaType) {
 		case TYPE_INSTANTIATOR -> ((ParseContext) context).objs[index] = value;
-		case TYPE_MAP -> {
+		case TYPE_MAP          -> {
 			final var ctx = (ParseContext) context;
 			if (ctx.objs == null || ctx.cnt + 2 > ctx.objs.length) ctx.ensureObjs(s, Math.max(ctx.cnt + 2, startSize(s.depth())));
 			ctx.objs[ctx.cnt++] = ctx.currentKey;
@@ -502,7 +503,7 @@ final class ObjectMeta {
 			ctx.objs[index] = value;
 			if (index >= ctx.cnt) ctx.cnt = index + 1;
 		}
-		case TYPE_SET -> ((Collection<Object>) context).add(value);
+		case TYPE_SET          -> ((Collection<Object>) context).add(value);
 		}
 	}
 

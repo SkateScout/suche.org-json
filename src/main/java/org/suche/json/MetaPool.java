@@ -66,7 +66,7 @@ interface MetaPool {
 
 	Object[]     takeArray    (int minCapacity);
 	long[]       takeLongArray(int minCapacity);
-	ParseContext takeContext  (int minCapacity, boolean map);
+	ParseContext takeContext  (boolean map);
 
 	void         returnArray    (Object[] arr, int used);
 	void         returnLongArray(long  [] arr);

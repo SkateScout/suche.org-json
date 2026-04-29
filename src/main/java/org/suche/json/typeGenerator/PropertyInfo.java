@@ -112,7 +112,11 @@ public final class PropertyInfo {
 			types |= T_LONG;
 			yield false;
 		}
-		case final Boolean t -> { types |= T_BOOLEAN; if(!t) hasDefault = true; yield false; }
+		case final Boolean t -> {
+			types |= T_BOOLEAN;
+			if(!t) hasDefault = true;
+			yield false;
+		}
 		case final String t -> registerString(t);
 		case final Collection<?> t -> registerCollection(fName, globalEnums, t);
 		case final Map<?,?> m -> registerMap(fName, globalEnums, m);
