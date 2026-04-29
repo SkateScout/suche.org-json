@@ -26,8 +26,7 @@ public final class PropertyInfo {
 	static final String ENUM_KEY   = "__enum__";
 	static final String VALUE_KEY  = "value";
 	static final int    NUMERICS_MASK   = (PropertyInfo.T_BYTE | PropertyInfo.T_SHORT | PropertyInfo.T_INT | PropertyInfo.T_LONG | PropertyInfo.T_FLOAT | PropertyInfo.T_DOUBLE);
-
-	final String fieldName;
+	public final String fieldName;
 	int         types      = 0;
 	boolean     hasDefault = false;
 	int         useCount;
@@ -107,9 +106,9 @@ public final class PropertyInfo {
 			final var l = t.longValue();
 			if(0 == d) hasDefault = true;
 			if(((long)d) != l) { types |= T_DOUBLE; yield false; }
-			if(l >= Byte.MIN_VALUE && l <= Byte.MAX_VALUE) { types |= T_BYTE; yield false; }
-			if(l >= Short.MIN_VALUE && l <= Short.MAX_VALUE) { types |= T_SHORT; yield false; }
-			if(l >= Integer.MIN_VALUE && l <= Integer.MAX_VALUE) { types |= T_INT; yield false; }
+			if(l >= Byte   .MIN_VALUE && l <= Byte   .MAX_VALUE) { types |= T_BYTE ; yield false; }
+			if(l >= Short  .MIN_VALUE && l <= Short  .MAX_VALUE) { types |= T_SHORT; yield false; }
+			if(l >= Integer.MIN_VALUE && l <= Integer.MAX_VALUE) { types |= T_INT  ; yield false; }
 			types |= T_LONG;
 			yield false;
 		}
@@ -128,8 +127,8 @@ public final class PropertyInfo {
 		final var numerics = exactType & NUMERICS_MASK;
 		if (numerics != 0 && numerics == exactType) exactType = Integer.highestOneBit(exactType);
 		return switch (exactType) {
-		case T_DOUBLE  -> nullable ? "Double" : "double";
-		case T_LONG    -> nullable ? "Long" : "long";
+		case T_DOUBLE  -> nullable ? "Double"  : "double";
+		case T_LONG    -> nullable ? "Long"    : "long";
 		case T_INT     -> nullable ? "Integer" : "int";
 		case T_BOOLEAN -> nullable ? "Boolean" : "boolean";
 		case T_STRING  -> "String";
@@ -138,6 +137,20 @@ public final class PropertyInfo {
 		case T_ARRAY   -> (arrayElements == null ? "Object[]" : arrayElements.resolveJavaType(maxUseCount, forceObject) + "[]");
 		case T_OBJECT  -> (classes != null && classes.size() == 1) ? classes.iterator().next() : (interfaceName != null ? interfaceName : "Object");
 		default        -> "Object";
+		};
+	}
+
+	String getReferencedClass() {
+		final var exactType = this.types & ~T_NULL;
+		final var numerics = exactType & NUMERICS_MASK;
+		if (numerics != 0 && numerics == exactType) return null;
+		return switch (exactType) {
+		case T_ENUM    -> interfaceName != null ? interfaceName : (enumClasses == null ? null : enumClasses.iterator().next());
+		case T_MAP     -> (mapValues     == null ? null : mapValues    .getReferencedClass());
+		case T_ARRAY   -> (arrayElements == null ? null : arrayElements.getReferencedClass());
+		case T_OBJECT  -> (classes != null && classes.size() == 1) ? classes.iterator().next() : interfaceName;
+		case T_BOOLEAN,T_STRING -> null;
+		default                 -> null;
 		};
 	}
 }

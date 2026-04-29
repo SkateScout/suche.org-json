@@ -1,7 +1,6 @@
 package org.suche.json.typeGenerator;
 
 import java.util.ArrayDeque;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -10,10 +9,8 @@ import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
 import java.util.TreeMap;
-import java.util.TreeSet;
 
 final class ObjectInfo {
-	private static final String RECORD_PREFIX    = "public record ";
 	final String className;
 
 	boolean hasConflict = false;
@@ -21,18 +18,6 @@ final class ObjectInfo {
 
 	ObjectInfo(final String name) { this.className = name; }
 	int getMaxUseCount() { return properties.values().stream().mapToInt(p -> p.useCount).max().orElse(0); }
-
-	int printRecord(final Map<String, String> javaSources, final Map<String, Set<String>> sealedInterfaces) {
-		final var count = getMaxUseCount();
-		final var fields = new ArrayList<String>();
-		properties.forEach((name, prop) -> fields.add(prop.resolveJavaType(count, false) + " " + name));
-		final var out = new StringBuilder(RECORD_PREFIX).append(className).append("(").append(String.join(", ", fields)).append(")");
-		final var implement = new TreeSet<String>();
-		sealedInterfaces.forEach((iName, permits) -> { if(permits.contains(className)) implement.add(iName); });
-		if(!implement.isEmpty()) out.append(" implements ").append(String.join(", ", implement));
-		javaSources.put(className, out.append(" { }").toString());
-		return 1;
-	}
 
 	private static void mapInfo(final Map<String, ObjectInfo> classes, final Map<String, ObjectInfo> info, final String parentPath, final Map<?,?> m, final Map<String, Set<String>> enums, final Queue<Map.Entry<String, Object>> todo) {
 		@SuppressWarnings("unchecked") final var t = (Map<String,Object>)m;

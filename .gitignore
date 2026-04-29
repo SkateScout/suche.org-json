@@ -74,3 +74,8 @@ bin/
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+
+MAVEN-COMMANDS.md
+src/generated/
+src/test/java/org/suche/idee/
