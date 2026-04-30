@@ -2,9 +2,6 @@ package org.suche.json;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.VarHandle;
-import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Map;
@@ -21,10 +18,6 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 	};
 	private static final int        POOL_SIZE = 128;
 	private static final int        STRING_POOL_SIZE = 4096;
-	private static final VarHandle  LONG_VIEW          = MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.LITTLE_ENDIAN);
-	private static final long       QUOTE_PATTERN     = 0x2222222222222222L; // '"' in jedem Byte
-	private static final long       BACKSLASH_PATTERN = 0x5C5C5C5C5C5C5C5CL; // '\' in jedem Byte
-	private static final long       NON_ASCII_PATTERN = 0x8080808080808080L; // Sign-Bit in jedem Byte
 
 	// FNV-1a 64-bit prime
 	private static final long HASH_PRIME = 0x100000001b3L;
@@ -93,7 +86,6 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		this.maxDepth          = cfg.maxDepth();
 		this.maxCollectionSize = cfg.maxCollectionSize();
 		this.maxStringLength   = cfg.maxStringLength();
-		this.maxCollectionSize = cfg.maxCollectionSize();
 		this.maxRecursiveDepth = c.maxRecursiveDepth();
 
 		this.engine            = c;
@@ -589,7 +581,7 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 
 		// --- Fast-Path mit VarHandle ---
 		while (pos <= safeLimit) {
-			final var word = (long) LONG_VIEW.get(buf, pos);
+			final var word = (long) JSONString.LONG_VIEW.get(buf, pos);
 			hash64 ^= word;
 			hash64 *= HASH_PRIME;
 			pos += 8;
@@ -626,21 +618,21 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 			// --- SWAR Fast-Copy Loop ---
 			// Process and copy 8 bytes at a time for maximum memory bandwidth utilization
 			while (pos <= safeLimit) {
-				final var word = (long) LONG_VIEW.get(buffer, pos);
-				final var quoteXor = word ^ QUOTE_PATTERN;
-				final var hasQuote = (quoteXor - 0x0101010101010101L) & ~quoteXor & NON_ASCII_PATTERN;
-				final var backslashXor = word ^ BACKSLASH_PATTERN;
-				final var hasBackslash = (backslashXor - 0x0101010101010101L) & ~backslashXor & NON_ASCII_PATTERN;
+				final var word = (long) JSONString.LONG_VIEW.get(buffer, pos);
+				final var quoteXor = word ^ JSONString.QUOTE_PATTERN;
+				final var hasQuote = (quoteXor - 0x0101010101010101L) & ~quoteXor & JSONString.NON_ASCII_PATTERN;
+				final var backslashXor = word ^ JSONString.BACKSLASH_PATTERN;
+				final var hasBackslash = (backslashXor - 0x0101010101010101L) & ~backslashXor & JSONString.NON_ASCII_PATTERN;
 				if ((hasQuote != 0) || (hasBackslash != 0)) {
 					// Quote or escape sequence found within the next 8 bytes.
 					// Break into the scalar loop to process the exact position.
 					break;
 				}
 				// Update ASCII tracking. If any byte is negative, the sign bit remains set.
-				if ((word & NON_ASCII_PATTERN) != 0) isAscii = false;
+				if ((word & JSONString.NON_ASCII_PATTERN) != 0) isAscii = false;
 				if (parsedLen + 8 > strBuf.length) expandStrBuf(parsedLen + 8);
 				// Copy exactly 8 bytes into the target buffer in a single CPU instruction
-				LONG_VIEW.set(strBuf, parsedLen, word);
+				JSONString.LONG_VIEW.set(strBuf, parsedLen, word);
 				parsedLen += 8;
 				pos += 8;
 			}
@@ -737,15 +729,15 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 
 		// --- SWAR Fast-Path mit 64-Bit Block-Hashing ---
 		while (pos <= safeLimit) {
-			final var word = (long) LONG_VIEW.get(buf, pos);
+			final var word = (long) JSONString.LONG_VIEW.get(buf, pos);
 
-			if ((word & NON_ASCII_PATTERN) != 0) break; // UTF-8 Slow-Path
+			if ((word & JSONString.NON_ASCII_PATTERN) != 0) break; // UTF-8 Slow-Path
 
-			final var quoteXor = word ^ QUOTE_PATTERN;
-			final var hasQuote = (quoteXor - 0x0101010101010101L) & ~quoteXor & NON_ASCII_PATTERN;
+			final var quoteXor = word ^ JSONString.QUOTE_PATTERN;
+			final var hasQuote = (quoteXor - 0x0101010101010101L) & ~quoteXor & JSONString.NON_ASCII_PATTERN;
 
-			final var backslashXor = word ^ BACKSLASH_PATTERN;
-			final var hasBackslash = (backslashXor - 0x0101010101010101L) & ~backslashXor & NON_ASCII_PATTERN;
+			final var backslashXor = word ^ JSONString.BACKSLASH_PATTERN;
+			final var hasBackslash = (backslashXor - 0x0101010101010101L) & ~backslashXor & JSONString.NON_ASCII_PATTERN;
 
 			if ((hasQuote != 0) || (hasBackslash != 0)) {
 				// Wir haben ein Quote oder Escape gefunden.
@@ -797,14 +789,14 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		final var safeLimit = limit - 8;
 		while (pos <= safeLimit) { // SWAR fast scan
 			// Lade 8 Bytes in einem Rutsch
-			final var word = (long) LONG_VIEW.get(buffer, pos);
-			if ((word & NON_ASCII_PATTERN) != 0) break; // If byte witch bit 7 set, switch to slow scanning
+			final var word = (long) JSONString.LONG_VIEW.get(buffer, pos);
+			if ((word & JSONString.NON_ASCII_PATTERN) != 0) break; // If byte witch bit 7 set, switch to slow scanning
 			// 2. Check: Suche nach '"'
-			final var quoteXor = word ^ QUOTE_PATTERN;
-			final var hasQuote = (quoteXor - 0x0101010101010101L) & ~quoteXor & NON_ASCII_PATTERN;
+			final var quoteXor = word ^ JSONString.QUOTE_PATTERN;
+			final var hasQuote = (quoteXor - 0x0101010101010101L) & ~quoteXor & JSONString.NON_ASCII_PATTERN;
 			// 3. Check: Suche nach '\'
-			final var backslashXor = word ^ BACKSLASH_PATTERN;
-			final var hasBackslash = (backslashXor - 0x0101010101010101L) & ~backslashXor & NON_ASCII_PATTERN;
+			final var backslashXor = word ^ JSONString.BACKSLASH_PATTERN;
+			final var hasBackslash = (backslashXor - 0x0101010101010101L) & ~backslashXor & JSONString.NON_ASCII_PATTERN;
 			if ((hasQuote != 0) || (hasBackslash != 0)) {
 				// Ein Treffer liegt vor! Finde heraus, welches Zeichen zuerst kam.
 				// Kombiniere die Bitmasken, um das erste gesetzte Bit zu finden.

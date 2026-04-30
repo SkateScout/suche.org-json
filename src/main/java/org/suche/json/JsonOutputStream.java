@@ -40,7 +40,6 @@ public final class JsonOutputStream implements AutoCloseable {
 	private static final byte[] MIN_LONG    = "-9223372036854775808".getBytes();
 	private static final long[] POW10_L     = { 1L, 10L, 100L, 1000L, 10000L, 100000L, 1000000L, 10000000L, 100000000L };
 	private static final Object EXHAUSTED   = new Object();
-	private static final byte   TYPE_MAP           = 1;
 	private static final byte   TYPE_COL           = 2;
 	private static final byte   TYPE_RECORD        = 3;
 	private static final byte   TYPE_ARRAY         = 4;
@@ -63,12 +62,12 @@ public final class JsonOutputStream implements AutoCloseable {
 		int    idx;
 		int    len;
 
-		void set(final byte type, final Object obj, final Object meta, final int len) {
-			this.type = type;
-			this.obj  = obj;
-			this.meta = meta;
+		void set(final byte pType, final Object pObj, final Object pMeta, final int pLen) {
+			this.type = pType;
+			this.obj  = pObj;
+			this.meta = pMeta;
 			this.idx  = 0;
-			this.len  = len;
+			this.len  = pLen;
 		}
 
 		void clear() { this.obj = null; this.meta = null; }
@@ -156,8 +155,8 @@ public final class JsonOutputStream implements AutoCloseable {
 		}
 	}
 
-	void init(final InternalEngine pEngine, final OutputStream out, final TimeFormat timeFormat, final Flags... flags) {
-		init0(pEngine, out, timeFormat);
+	void init(final InternalEngine pEngine, final OutputStream out, final TimeFormat pTimeFormat, final Flags... flags) {
+		init0(pEngine, out, pTimeFormat);
 		var preSkipNull  = true;
 		var preSkipFalse = true;
 		var preSkipEmpty = true;
@@ -176,8 +175,8 @@ public final class JsonOutputStream implements AutoCloseable {
 		this.fractionalLimit = frac;
 	}
 
-	private void init(final InternalEngine e, final OutputStream out, final TimeFormat timeFormat, final int flags) {
-		init0(e, out, timeFormat);
+	private void init(final InternalEngine e, final OutputStream newOut, final TimeFormat pTimeFormat, final int flags) {
+		init0(e, newOut, pTimeFormat);
 		var frac = 6;
 		this.skipNull  = (flags & PRINT_NULL)  == 0;
 		this.skipFalse = (flags & PRINT_FALSE) == 0;
@@ -263,12 +262,18 @@ public final class JsonOutputStream implements AutoCloseable {
 				}
 				case TYPE_COMPACT_MAP,TYPE_POOLED_MAP -> {
 					final var array = (Object[]) c.obj;
-					while (c.idx < c.len) {
-						final var key =           array[c.idx++];
-						final var val = transform(array[c.idx++]);
+					final var length = c.len;
+					var index = c.idx;
+					while (index < length) {
+						final var key =           array[index++];
+						final var val = transform(array[index++]);
 						if (isSkipped(val)) continue;
 						writeMapKey(key);
-						if (!writePrimitiveInline(val)) { nextVal = val; break; }
+						if (!writePrimitiveInline(val)) {
+							nextVal = val;
+							c.idx = index;
+							break;
+						}
 					}
 				}
 				case TYPE_OBJ_ARRAY   -> {
@@ -288,19 +293,6 @@ public final class JsonOutputStream implements AutoCloseable {
 						if (isSkipped(val)) continue;
 						writeCommaIfNeeded();
 						if (!writePrimitiveInline(val)) { nextVal = val; break; }
-					}
-				}
-				case TYPE_MAP         -> {
-					final Iterator<?> it = (Iterator<?>) c.meta;
-					while (it.hasNext()) {
-						c.idx++;
-						final Map.Entry<?, ?> entry = (Map.Entry<?, ?>) it.next();
-						final var val = transform(entry.getValue());
-						if (!isSkipped(val)) {
-							writeMapKey(entry.getKey());
-							nextVal = val;
-							break;
-						}
 					}
 				}
 				case TYPE_COL         -> {
@@ -340,7 +332,7 @@ public final class JsonOutputStream implements AutoCloseable {
 		}
 	}
 
-	private boolean isContainerType(final byte type) {
+	static boolean isContainerType(final byte type) {
 		return type == TYPE_COL || type == TYPE_LIST || type == TYPE_ARRAY || type == TYPE_OBJ_ARRAY;
 	}
 
@@ -361,9 +353,9 @@ public final class JsonOutputStream implements AutoCloseable {
 		ObjectWriter<Date    > writeDate;
 		ObjectWriter<Temporal> writeTemp;
 
-		TimeFormatDefault(final ObjectWriter<Date> writeDate, final ObjectWriter<Temporal> writeTemp) {
-			this.writeDate = writeDate;
-			this.writeTemp = writeTemp;
+		TimeFormatDefault(final ObjectWriter<Date> pWriteDate, final ObjectWriter<Temporal> pWriteTemp) {
+			this.writeDate = pWriteDate;
+			this.writeTemp = pWriteTemp;
 		}
 		@Override public void writeDate(final JsonOutputStream s, final Date     v) throws IOException { writeDate.accept(s, v); }
 		@Override public void writeTemp(final JsonOutputStream s, final Temporal v) throws IOException { writeTemp.accept(s, v); }
@@ -438,24 +430,6 @@ public final class JsonOutputStream implements AutoCloseable {
 		buffer[pos++] = '"';
 	}
 
-	void writeEscapedStringKey(final String s, final boolean second) throws IOException {
-		final var sLen = s.length();
-		mayFlush(sLen+4);
-		if(second) buffer[pos++] = ',';
-		buffer[pos++] = '"';
-		var sOff = 0;
-		while (sOff < sLen) {
-			final var res = JSONString.encodeChunk(s, sOff, sLen, buffer, pos, buffer.length);
-			sOff += (int) (res >> 32);
-			pos  += (int) res;
-			if (sOff < sLen) flushBuffer();
-		}
-		if (pos == buffer.length) flushBuffer();
-		buffer[pos++] = '"';
-		buffer[pos++] = ':';
-	}
-
-
 	private void writeFractionalLimited(final String s) throws IOException {
 		if (fractionalLimit < 0) { writeBaseAscii(s); return; }
 		final var dot = s.indexOf('.');
@@ -481,14 +455,34 @@ public final class JsonOutputStream implements AutoCloseable {
 		writeBaseAscii(chars, 0, getCleanLen(chars, targetLimit, dot));
 	}
 
-	private int getCleanLen(final String s, int len, final int dotIdx) {
+	private static int getCleanLen(final String s, int len, final int dotIdx) {
 		while (len > dotIdx && (s.charAt(len - 1) == '0' || s.charAt(len - 1) == '.')) if (s.charAt(--len) == '.') break;
 		return len;
 	}
 
-	private int getCleanLen(final char[] c, int len, final int dotIdx) {
+	private static int getCleanLen(final char[] c, int len, final int dotIdx) {
 		while (len > dotIdx && (c[len - 1] == '0' || c[len - 1] == '.')) if (c[--len] == '.') break;
 		return len;
+	}
+
+	private static final byte[] ZEROS = {'0','0','0','0','0','0','0','0','0'};
+
+	private static final int[] POW10 = { 1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000 };
+
+	private static int getDigits(final int v) {
+		// 1. Bit-Länge ermitteln (Hardware LZCNT - 1 Taktzyklus)
+		final var bitLength = 32 - Integer.numberOfLeadingZeros(v);
+
+		// 2. Annäherung der Basis-10 Länge berechnen.
+		// Multiplikation mit log10(2) angenähert durch (x * 1233) >>> 12
+		// Das ergibt fast immer die exakte Anzahl der Ziffern, ist aber extrem schnell.
+		var guess = (bitLength * 1233) >>> 12;
+
+		// 3. Korrektur-Check (Ein einziges, extrem vorhersehbares IF)
+		// Da guess entweder exakt stimmt oder genau 1 zu niedrig ist,
+		// prüfen wir das gegen unsere POW10 Tabelle.
+		if (v >= POW10[guess])  guess++;
+		return guess;
 	}
 
 	private void writeDouble(double d) throws IOException {
@@ -500,15 +494,28 @@ public final class JsonOutputStream implements AutoCloseable {
 		if (d >= 1e14 || d <= -1e14 || (Math.abs(d) < 1e-4)) { writeFractionalLimited(Double.toString(d)); return; }
 		if (d < 0) { write((byte) '-'); d = -d; }
 		final var multiplier = POW10_L[limit];
-		final var total = Math.round(d * multiplier);
+		final var total = (long) (d * multiplier + 0.5d);
 		final var intPart = total / multiplier;
 		var fracPart = total % multiplier;
 		writeNumber(intPart);
+
+		if (fracPart == 0) return;
 		write((byte) '.');
-		if (fracPart == 0) { write((byte) '0'); return; }
-		var tempLimit = multiplier / 10;
-		while (tempLimit > 1 && fracPart < tempLimit) { write((byte) '0'); tempLimit /= 10; }
-		while (fracPart % 10 == 0) fracPart /= 10;
+
+		// 1. Führende Nullen berechnen und schreiben
+		final var zeros = limit - getDigits((int)fracPart);
+		if (zeros > 0) {
+			if (pos + zeros > buffer.length) flushBuffer();
+			System.arraycopy(ZEROS, 0, buffer, pos, zeros);
+			pos += zeros;
+		}
+
+		// 2. Trailing Zeros entfernen (wird nur ausgeführt, wenn fracPart > 0 ist, was wir oben gesichert haben)
+		while (fracPart % 10 == 0) {
+			fracPart /= 10;
+		}
+
+		// 3. Den bereinigten Rest schreiben
 		writeNumber(fracPart);
 	}
 
@@ -657,6 +664,9 @@ public final class JsonOutputStream implements AutoCloseable {
 		case final CompactList<?>    t -> push((byte)'[', TYPE_OBJ_ARRAY, t.getRawData(), null, t.size());
 		case final Object[]          t -> push((byte)'[', TYPE_OBJ_ARRAY, t, null, t.length);
 		case final CompactMap<?,?>   t -> push((byte)'{', TYPE_COMPACT_MAP, t.getRawData(), null, t.size() * 2);
+		// Record could have an interface for Map/Collection but direct access is faster
+		case final Record            t -> { final var parts = engine.ofComplex(t.getClass()); push((byte)'{', TYPE_RECORD, t, parts, parts.length); }
+
 		case final java.util.List<?> t when t instanceof java.util.RandomAccess -> push((byte)'[', TYPE_LIST, t, null, t.size());
 		case final Map<?,?> t -> {
 			final var size = t.size();
@@ -669,7 +679,6 @@ public final class JsonOutputStream implements AutoCloseable {
 		}
 
 		case final Collection<?>     t -> push((byte)'[', TYPE_COL   , t, t.iterator(),  t.size());
-		case final Record            t -> { final var parts = engine.ofComplex(t.getClass()); push((byte)'{', TYPE_RECORD, t, parts, parts.length); }
 		case final Short             t -> writeNumber(t.longValue());
 		case final Float             t -> writeDouble(t.doubleValue());
 		case final BigInteger        t -> writeBaseAscii(t.toString());
@@ -697,8 +706,73 @@ public final class JsonOutputStream implements AutoCloseable {
 		else  									       writeEscapedString(val.toString());
 	}
 
+	private final Object[] keyCacheKeys = new Object[512];
+	private final byte[][] keyCacheVals = new byte[512][];
+
+	void writeEscapedStringKey(final String s, final boolean second) throws IOException {
+		final var sLen = s.length();
+		mayFlush(sLen+4);
+		if(second) buffer[pos++] = ',';
+		buffer[pos++] = '"';
+		var sOff = 0;
+		while (sOff < sLen) {
+			final var res = JSONString.encodeChunk(s, sOff, sLen, buffer, pos, buffer.length);
+			sOff += (int) (res >> 32);
+			pos  += (int) res;
+			if (sOff < sLen) flushBuffer();
+		}
+		if (pos == buffer.length) flushBuffer();
+		buffer[pos++] = '"';
+		buffer[pos++] = ':';
+	}
+
 	private void writeMapKey(final Object key) throws IOException {
-		final var t = (key instanceof final String s ? s : String.valueOf(key));
-		writeEscapedStringKey(t, commaNeeded());
+		// 1. Fast-Path für Strings
+		String outKey;
+		var commaNeeded = commaNeeded();
+		if (key instanceof final String str) {
+			final var sLen = str.length();
+			if (sLen < 32) {
+				// Garantieren, dass alles in den Puffer passt:
+				// Komma (1) + Quotes (2) + Worst-Case Escapes (sLen * 6) + Doppelpunkt (1)
+				mayFlush(sLen * 6 + 4);
+				final var hash = System.identityHashCode(key);
+				final var idx  = hash & 511;
+				if (commaNeeded) { buffer[pos++] = ','; commaNeeded = false; }
+				if (keyCacheKeys[idx] == key) {
+					final var cached = keyCacheVals[idx];
+					// Schneller Copy-Vorgang direkt in den Puffer, ohne Bounds-Check
+					System.arraycopy(cached, 0, buffer, pos, cached.length);
+					pos += cached.length;
+					return;
+				}
+
+				// --- Cache Miss: Direktes Encoding in den Puffer ---
+				final var startPos = pos; // Startpunkt für den Cache (NACH dem Komma!)
+				buffer[pos++] = '"';
+
+				// encodeChunk schreibt direkt in this.buffer.
+				// Gibt die geschriebenen Bytes im unteren 32-Bit-Teil (dstOff) zurück.
+				final var res = JSONString.encodeChunk(str, 0, sLen, buffer, pos, buffer.length);
+				pos += (int) res;
+
+				buffer[pos++] = '"';
+				buffer[pos++] = ':';
+
+				// Exakt passendes Array für den Cache erzeugen und kopieren
+				final var encodedLen = pos - startPos;
+				final var encoded = new byte[encodedLen];
+				System.arraycopy(buffer, startPos, encoded, 0, encodedLen);
+
+				keyCacheKeys[idx] = key;
+				keyCacheVals[idx] = encoded;
+				return;
+			}
+			outKey = str;
+			// String >= 32 Zeichen (Fallback)
+		} else outKey = String.valueOf(key);
+
+		// Non-String Keys (Fallback)
+		writeEscapedStringKey(outKey, commaNeeded);
 	}
 }

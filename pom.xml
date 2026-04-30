@@ -45,6 +45,16 @@
 	</dependencies>
 	<build>
 		<plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
+                <configuration>
+	                <!-- Optional change to remove space between - -
+                    <argLine>- -add-opens java.base/java.lang=ALL-UNNAMED</argLine>
+    	            -->
+                </configuration>
+            </plugin>
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-compiler-plugin</artifactId>
@@ -54,6 +64,9 @@
 					<target>26</target>
 					<compilerArgs>
 						<arg>-Xlint:unchecked</arg>
+	                <!-- Optional change to remove space between - -
+    	                <argLine>- -add-opens java.base/java.lang=ALL-UNNAMED</argLine>
+    		            -->
 					</compilerArgs>
 					<annotationProcessorPaths>
 						<path>
