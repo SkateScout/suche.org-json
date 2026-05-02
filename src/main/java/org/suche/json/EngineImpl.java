@@ -63,8 +63,8 @@ final class EngineImpl implements InternalEngine {
 	@Override public void    failOnUnknownProperties(final boolean v) { this.failOnUnknownProperties = v; }
 	@Override public boolean failOnUnknownProperties() { return failOnUnknownProperties; }
 
-	final Collection<Predicate<Class<?>>> AUTO_POJO = new CopyOnWriteArrayList<>();
-	@Override public void autoPojo(final Predicate<Class<?>> p) { AUTO_POJO.add(p); }
+	final Collection<Predicate<Class<?>>> autoPojo = new CopyOnWriteArrayList<>();
+	@Override public void autoPojo(final Predicate<Class<?>> p) { autoPojo.add(p); }
 
 	// Used by metaIdOf getDynamicMetaId(Synchronized)
 	synchronized int registerMeta(final ObjectMeta meta) {
@@ -178,7 +178,7 @@ final class EngineImpl implements InternalEngine {
 			if (t.kv != null) return t.kv == KeyValueObject.NULL ? null : t.kv;
 			KeyValueObject[] rp = null;
 			if (Record.class.isAssignableFrom(c)) rp = KeyValueObject.ofRecord(c.asSubclass(Record.class), cfg);
-			else for (final var p : AUTO_POJO) if (p.test(c)) rp = KeyValueObject.registerComplex(c, cfg);
+			else for (final var p : autoPojo) if (p.test(c)) rp = KeyValueObject.registerComplex(c, cfg);
 			t.kv = rp == null ? KeyValueObject.NULL : rp;
 			return rp;
 		}

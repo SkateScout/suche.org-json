@@ -17,13 +17,13 @@ class JsonDateTime {
 	interface Format { void apply(JsonOutputStream s,Temporal t) throws IOException; }
 
 	public enum TimeFormat {
-		EPOCH_DAY((s,v)-> s.writeNumber(Instant.from(v).getEpochSecond()/(24*3600))),
-		EPOCH_SEC((s,v)-> s.writeNumber(Instant.from(v).getEpochSecond())),
-		EPOCH_MIN((s,v)-> s.writeNumber(Instant.from(v).getEpochSecond()/60)),
-		EPOCH_MS ((s,v)-> s.writeNumber(Instant.from(v).toEpochMilli  ())),
+		EPOCH_DAY((s,v)-> s.writeNumber((char)0, Instant.from(v).getEpochSecond()/(24*3600))),
+		EPOCH_SEC((s,v)-> s.writeNumber((char)0, Instant.from(v).getEpochSecond())),
+		EPOCH_MIN((s,v)-> s.writeNumber((char)0, Instant.from(v).getEpochSecond()/60)),
+		EPOCH_MS ((s,v)-> s.writeNumber((char)0, Instant.from(v).toEpochMilli  ())),
 		TXT      (JsonOutputStream::writeTimestampasText);
 		Format format;
-		TimeFormat(final Format format) { this.format = format; }
+		TimeFormat(final Format pFormat) { this.format = pFormat; }
 	}
 
 	static void writeTimestamp(final JsonOutputStream s, final Temporal t, final TimeFormat tf) throws IOException {
@@ -64,6 +64,6 @@ class JsonDateTime {
 		case EPOCH_MIN -> sec / 60L;
 		default        -> (sec * 1000) + (nano / 1_000_000);
 		};
-		s.writeNumber(outVal);
+		s.writeNumber((char)0, outVal);
 	}
 }

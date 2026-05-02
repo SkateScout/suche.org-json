@@ -6,12 +6,6 @@ import java.util.Arrays;
 import org.suche.json.ObjectMeta.ComponentMeta;
 
 record FastKeyTable(byte[][] keys, int[] indices, int mask) {
-	// static int computeHash(final byte[] buf, final int off, final int len) {
-	// 	var h = 0;
-	// 	for (var i = 0; i < len; i++) h = 31 * h + buf[off + i];
-	// 	return h;
-	// }
-
 	static FastKeyTable build(final ComponentMeta[] components) {
 		if (components == null || components.length == 0) return new FastKeyTable(new byte[0][], new int[0], 0);
 		var cap = 16;

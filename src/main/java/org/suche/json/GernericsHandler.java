@@ -25,6 +25,26 @@ final class GernericsHandler {
 		return Object.class;
 	}
 
+	private static Type fromParameterizedType(final ParameterizedType pt, final Class<?> targetClass, final Map<TypeVariable<?>, Type> typeMap) {
+		final var raw = (Class<?>) pt.getRawType();
+		if (raw == targetClass) return resolveParameterizedType(pt, typeMap);
+		// Aktualisiere die Type-Map mit den Argumenten dieser ParameterizedType-Ebene
+		final var vars = raw.getTypeParameters();
+		final var args = pt.getActualTypeArguments();
+		final var nextMap = new HashMap<>(typeMap);
+		for (var i = 0; i < vars.length; i++) {
+			var arg = args[i];
+			// Wenn das Argument selbst eine Variable von unten ist, auflösen!
+			while (arg instanceof final TypeVariable<?> tv && nextMap.containsKey(tv)) arg = nextMap.get(tv);
+			nextMap.put(vars[i], arg);
+		}
+
+		for (final var intf : raw.getGenericInterfaces())
+			if (findExactSuperType(intf, targetClass, nextMap) instanceof final Type found) return found;
+		if (raw.getGenericSuperclass() instanceof final Type sup) return findExactSuperType(sup, targetClass, nextMap);
+		return null;
+	}
+
 	private static Type findExactSuperType(final Type currentType, final Class<?> targetClass, final Map<TypeVariable<?>, Type> typeMap) {
 		if (currentType instanceof final Class<?> c) {
 			if (c == targetClass) return c;
@@ -33,24 +53,7 @@ final class GernericsHandler {
 			return null;
 		}
 
-		if (currentType instanceof final ParameterizedType pt) {
-			final var raw = (Class<?>) pt.getRawType();
-			if (raw == targetClass) return resolveParameterizedType(pt, typeMap);
-			// Aktualisiere die Type-Map mit den Argumenten dieser ParameterizedType-Ebene
-			final var vars = raw.getTypeParameters();
-			final var args = pt.getActualTypeArguments();
-			final var nextMap = new HashMap<>(typeMap);
-			for (var i = 0; i < vars.length; i++) {
-				var arg = args[i];
-				// Wenn das Argument selbst eine Variable von unten ist, auflösen!
-				while (arg instanceof final TypeVariable<?> tv && nextMap.containsKey(tv)) arg = nextMap.get(tv);
-				nextMap.put(vars[i], arg);
-			}
-
-			for (final var intf : raw.getGenericInterfaces())
-				if (findExactSuperType(intf, targetClass, nextMap) instanceof final Type found) return found;
-			if (raw.getGenericSuperclass() instanceof final Type sup) return findExactSuperType(sup, targetClass, nextMap);
-		}
+		if (currentType instanceof final ParameterizedType pt) return fromParameterizedType(pt, targetClass, typeMap);
 		return null;
 	}
 
@@ -83,21 +86,4 @@ final class GernericsHandler {
 			}
 		}
 	}
-
-	/* Only for simple direct cases
-	static Class<?> extractValueType(final Type genericType, final Class<?> rawType) {
-		if (genericType instanceof final ParameterizedType pt) {
-			final var args = pt.getActualTypeArguments();
-			if (Map.class.isAssignableFrom(rawType) && args.length >= 2) {
-				if (args[1] instanceof final Class<?> c) return c;
-				if (args[1] instanceof final ParameterizedType nested) return (Class<?>) nested.getRawType();
-			} else if (Collection.class.isAssignableFrom(rawType) && args.length >= 1) {
-				if (args[0] instanceof final Class<?> c) return c;
-				if (args[0] instanceof final ParameterizedType nested) return (Class<?>) nested.getRawType();
-			}
-		}
-		return Object.class;
-	}
-
-	 */
 }

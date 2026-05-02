@@ -33,7 +33,6 @@ public sealed interface JsonEngine permits InternalEngine {
 sealed interface InternalEngine extends JsonEngine permits EngineImpl {
 	ObjectMeta       metaOf   (Class<?> clazz);
 	MetaConfig       config   ();
-	// MethodHandle     getFilter(final Class<?> c);
 	KeyValueObject[] ofComplex( final Class<?> c);
 	UnaryOperator<Object> transformer(Class<?> c);
 	boolean                 hasCoreTransformer();

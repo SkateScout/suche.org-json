@@ -24,7 +24,7 @@ public final class CompactMap<K, V> extends AbstractMap<K, V> implements ConextB
 	private final Object[]             data;
 	private final long[]               prims;
 	private final byte                 singleType;
-	private       Set<K>               keySet; // LAZY INIT
+	private       Set<K>               keys; // LAZY INIT
 	private       Set<Map.Entry<K, V>> entrySet;
 
 	@Override public Object rawValueAt(final int logicalIdx) { return data[(logicalIdx << 1) + 1]; }
@@ -33,20 +33,20 @@ public final class CompactMap<K, V> extends AbstractMap<K, V> implements ConextB
 
 	Object[] getRawData() { return data; }
 
-	CompactMap(final byte singleType, final Object[] data, final long[] prims) {
-		this.singleType = singleType;
-		this.data       = data;
-		this.prims      = prims;
-		for(var i=0;i < data.length; i += 2) if(data[i] == null) throw new IllegalArgumentException("Missing key "+i/2+" "+Arrays.toString(data));
+	CompactMap(final byte pSingleType, final Object[] pData, final long[] pPrims) {
+		this.singleType = pSingleType;
+		this.data       = pData;
+		this.prims      = pPrims;
+		for(var i=0;i < pData.length; i += 2) if(pData[i] == null) throw new IllegalArgumentException("Missing key "+i/2+" "+Arrays.toString(pData));
 	}
 
 	@SuppressWarnings("unchecked")
 	@Override public Set<K> keySet() {
-		if(keySet == null) {
-			keySet = new TreeSet<>();
-			for(var i=0;i < data.length; i += 2) if(data[i] != null) keySet.add((K)data[i]);
+		if(keys == null) {
+			keys = new TreeSet<>();
+			for(var i=0;i < data.length; i += 2) if(data[i] != null) keys.add((K)data[i]);
 		}
-		return keySet;
+		return keys;
 	}
 
 	@Override public int size() { return data.length >> 1; }

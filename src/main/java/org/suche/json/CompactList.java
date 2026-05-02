@@ -139,7 +139,11 @@ public final class CompactList<V> extends AbstractList<V> implements ConextBacke
 	private final long  [] prims;
 	private final byte     singleType;
 
-	@Override public Object rawValueAt(final int logicalIdx) { return data[logicalIdx]; }
+	@Override public boolean  isEmpty   () { return data.length == 0; }
+	@Override public V        get       (final int index) { return resolve(index); }
+	Object[] getRawData() { return data; }
+	@Override public int      size      () { return data.length; }
+	@Override public Object   rawValueAt(final int logicalIdx) { return data[logicalIdx]; }
 	@Override public long  [] prims     () { return prims     ; }
 	@Override public byte     singleType() { return singleType; }
 
@@ -152,18 +156,11 @@ public final class CompactList<V> extends AbstractList<V> implements ConextBacke
 		return (V) val;
 	}
 
-	@Override
-	public V get(final int index) { return resolve(index); }
-
-	Object[] getRawData() { return data; }
 
 	CompactList(final byte pSingleType, final Object[] data, final long[] prims) {
 		this.singleType = pSingleType;
 		this.data       = data;
 		this.prims      = prims;
 	}
-
-	@Override public int size() { return data.length; }
-
 
 }

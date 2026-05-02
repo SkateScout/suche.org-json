@@ -15,6 +15,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Date;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.function.BiConsumer;
 import java.util.function.Supplier;
@@ -114,8 +115,8 @@ public final class JsonOutputStream implements AutoCloseable {
 	private boolean skipNull, skipFalse, skipEmpty;
 	private int          fractionalLimit;
 	private static final Supplier<Object> ERROR = () -> { throw new IllegalStateException("Cyclic reference"); };
-	public Supplier<Object> cycleMarker = ERROR;
-	public Object queuedComplex;
+	Supplier<Object> cycleMarker = ERROR;
+	Object queuedComplex;
 
 	private final Object[][]     arrayPool       = new Object[32][];
 	private int                  arrayPoolSize   = 0;
@@ -137,11 +138,11 @@ public final class JsonOutputStream implements AutoCloseable {
 
 	private final Object DEFAULTOBJ   = new Object();
 
-	private void init0(final InternalEngine pEngine, final OutputStream out, final TimeFormat timeFormat) {
+	private void init0(final InternalEngine pEngine, final OutputStream pOut, final TimeFormat pTimeFormat) {
 		this.engine             = pEngine;
-		this.out                = out;
+		this.out                = pOut;
 		this.pos                = 0;
-		this.timeFormat         = timeFormat==null ? TimeFormatDefault.EPOCH_MILLIS : timeFormat;
+		this.timeFormat         = pTimeFormat==null ? TimeFormatDefault.EPOCH_MILLIS : pTimeFormat;
 		this.stack.depth        = -1;
 		this.hasCoreTransformer = pEngine.hasCoreTransformer();
 	}
@@ -155,8 +156,8 @@ public final class JsonOutputStream implements AutoCloseable {
 		}
 	}
 
-	void init(final InternalEngine pEngine, final OutputStream out, final TimeFormat pTimeFormat, final Flags... flags) {
-		init0(pEngine, out, pTimeFormat);
+	void init(final InternalEngine pEngine, final OutputStream pOut, final TimeFormat pTimeFormat, final Flags... flags) {
+		init0(pEngine, pOut, pTimeFormat);
 		var preSkipNull  = true;
 		var preSkipFalse = true;
 		var preSkipEmpty = true;
@@ -214,19 +215,6 @@ public final class JsonOutputStream implements AutoCloseable {
 		return f != null ? f.apply(val) : val;
 	}
 
-	private boolean handleCycle(final Object obj) throws IOException {
-		for (var i = 0; i <= stack.depth; i++) {
-			if (stack.stack[i].obj == obj) {
-				final var replacement = cycleMarker.get();
-				if (replacement == null) write(NULL_BYTES);
-				else if (replacement instanceof final String s) writeEscapedString(s);
-				else writeObject(replacement);
-				return true;
-			}
-		}
-		return false;
-	}
-
 	public void writeObject( final Object root) throws IOException {
 		final var transformed = transform(root);
 		try {
@@ -241,9 +229,9 @@ public final class JsonOutputStream implements AutoCloseable {
 					while (c.idx < c.len) {
 						final var comp = comps[c.idx++];
 						switch (comp.type()) {
-						case 1 -> { write(comp.jsonKeyBytes(commaNeeded())); writeNumber(comp.intGetter   ().applyAsInt   (c.obj)); }
-						case 2 -> { write(comp.jsonKeyBytes(commaNeeded())); writeNumber(comp.longGetter  ().applyAsLong  (c.obj)); }
-						case 3 -> { write(comp.jsonKeyBytes(commaNeeded())); writeDouble(comp.doubleGetter().applyAsDouble(c.obj)); }
+						case 1 -> { write(comp.jsonKeyBytes(commaNeeded())); writeNumber((char)0, comp.intGetter   ().applyAsInt   (c.obj)); }
+						case 2 -> { write(comp.jsonKeyBytes(commaNeeded())); writeNumber((char)0, comp.longGetter  ().applyAsLong  (c.obj)); }
+						case 3 -> { write(comp.jsonKeyBytes(commaNeeded())); writeDouble((char)0, comp.doubleGetter().applyAsDouble(c.obj)); }
 						case 4 -> {
 							final var bVal = comp.boolGetter().test(c.obj);
 							if (skipFalse && !bVal) continue;
@@ -324,7 +312,7 @@ public final class JsonOutputStream implements AutoCloseable {
 				} else handleValue(nextVal);
 			}
 		} catch (final RuntimeException t) { throw t;
-		} catch (final Throwable        t) {
+		} catch (final Exception        t) {
 			if (t instanceof final IOException e) throw e;
 			final var x = new RuntimeException(t);
 			x.setStackTrace(t.getStackTrace());
@@ -346,8 +334,8 @@ public final class JsonOutputStream implements AutoCloseable {
 	public enum TimeFormatDefault implements TimeFormat {
 		ISO_STRING   ((s,v)-> s.writeTimestampasText(v.toInstant())
 				,     JsonOutputStream::writeTimestampasText),
-		EPOCH_MILLIS ((s,v)-> s.writeNumber(v.getTime())         , (s,v)-> s.writeNumber(java.time.Instant.from(v).toEpochMilli  ())),
-		EPOCH_SECONDS((s,v)-> s.writeNumber(v.getTime() / 1000L) , (s,v)-> s.writeNumber(java.time.Instant.from(v).getEpochSecond())),
+		EPOCH_MILLIS ((s,v)-> s.writeNumber((char)0, v.getTime())         , (s,v)-> s.writeNumber((char)0, java.time.Instant.from(v).toEpochMilli  ())),
+		EPOCH_SECONDS((s,v)-> s.writeNumber((char)0, v.getTime() / 1000L) , (s,v)-> s.writeNumber((char)0, java.time.Instant.from(v).getEpochSecond())),
 		;
 
 		ObjectWriter<Date    > writeDate;
@@ -362,7 +350,7 @@ public final class JsonOutputStream implements AutoCloseable {
 	}
 
 	void write(final byte[] bytes) throws IOException {
-		final var len = bytes.length;
+		final var len  = bytes.length;
 		final var space = buffer.length - pos;
 		if (len <= space) {
 			System.arraycopy(bytes, 0, buffer, pos, len);
@@ -399,6 +387,7 @@ public final class JsonOutputStream implements AutoCloseable {
 		for (var i = start; i < end; i++) write((byte) c[i]       );
 	}
 
+	//Used by handleSimple(BigInteger), writeFractionalLimited(Number)
 	private void writeBaseAscii(final String s) throws IOException {
 		final var l = s.length();
 		if (pos + l <= buffer.length) {
@@ -408,9 +397,7 @@ public final class JsonOutputStream implements AutoCloseable {
 			}
 		} else {
 			// Slow path: Bounds check for each character
-			for (var i = 0; i < l; i++) {
-				write((byte) s.charAt(i));
-			}
+			for (var i = 0; i < l; i++) write((byte) s.charAt(i));
 		}
 	}
 	void writeBoolean(final boolean b) throws IOException { write(b ? TRUE_BYTES : FALSE_BYTES); }
@@ -430,6 +417,7 @@ public final class JsonOutputStream implements AutoCloseable {
 		buffer[pos++] = '"';
 	}
 
+	// Used by writeSimple(Number.toString)
 	private void writeFractionalLimited(final String s) throws IOException {
 		if (fractionalLimit < 0) { writeBaseAscii(s); return; }
 		final var dot = s.indexOf('.');
@@ -442,9 +430,10 @@ public final class JsonOutputStream implements AutoCloseable {
 		if (carry) {
 			final var lastIdx = targetLimit - 1;
 			for (var i = lastIdx; i >= 0; i--) {
-				if (chars[i] == '.') continue;
-				if (chars[i] < '9') { chars[i]++; carry = false; break; }
-				chars[i] = '0';
+				if (chars[i] != '.') {
+					if (chars[i] < '9') { chars[i]++; carry = false; break; }
+					chars[i] = '0';
+				}
 			}
 			if (carry) {
 				write((byte) '1');
@@ -485,52 +474,125 @@ public final class JsonOutputStream implements AutoCloseable {
 		return guess;
 	}
 
-	private void writeDouble(double d) throws IOException {
-		if (Double.isNaN(d) || Double.isInfinite(d)) { write(NULL_BYTES); return; }
+	private static final byte[] MIN_INT = "-2147483648".getBytes();
+
+	void writeNumber(final char prefix, int val) throws IOException {
+		if (pos + 14 > buffer.length) flushBuffer();
+		if(0 != prefix) buffer[pos++] = (byte)prefix;
+		if (val == 0) {
+			buffer[pos++] = '0';
+			return;
+		}
+		if (val == Integer.MIN_VALUE) {
+			final var len = MIN_INT.length;
+			System.arraycopy(MIN_INT, 0, buffer, pos, len);
+			pos += len;
+			return;
+		}
+		if (val < 0) { buffer[pos++] = (byte) '-'; val = -val; }
+		final var start = pos + 9;
+		var i = start;
+		while (val >= 100) {
+			final var q = val % 100;
+			val /= 100;
+			buffer[--i] = DIGITS[q * 2 + 1];
+			buffer[--i] = DIGITS[q * 2];
+		}
+		if (val < 10)  buffer[--i] = (byte) ('0' + val);
+		else {
+			buffer[--i] = DIGITS[val * 2 + 1];
+			buffer[--i] = DIGITS[val * 2];
+		}
+		final var len = start - i;
+		System.arraycopy(buffer, i, buffer, pos, len);
+		pos += len;
+	}
+
+	void writeNumber(final char prefix, long val) throws IOException {
+		if (val >= Integer.MIN_VALUE && val <= Integer.MAX_VALUE) { writeNumber(prefix, (int) val); return; }
+		if (pos + 22 > buffer.length) flushBuffer();
+		if(0 != prefix) buffer[pos++] = (byte)prefix;
+
+		if (val == Long.MIN_VALUE) {
+			final var len = MIN_LONG.length;
+			System.arraycopy(MIN_LONG, 0, buffer, pos, len);
+			pos += len;
+			return;
+		}
+		if (val < 0) { buffer[pos++] = (byte) '-'; val = -val; }
+		final var start = pos + 19;
+		var i = start;
+		while (val >= 100) {
+			final var q = (int) (val % 100);
+			val /= 100;
+			buffer[--i] = DIGITS[q * 2 + 1];
+			buffer[--i] = DIGITS[q * 2];
+		}
+		if (val < 10)  buffer[--i] = (byte) ('0' + val);
+		else {
+			final var q = (int) val;
+			buffer[--i] = DIGITS[q * 2 + 1];
+			buffer[--i] = DIGITS[q * 2];
+		}
+		final var len = start - i;
+		System.arraycopy(buffer, i, buffer, pos, len);
+		pos += len;
+	}
+
+	private void writeDouble(final char prefix, double d) throws IOException {
+		if (pos + 28 > buffer.length) flushBuffer();
+		if(0 != prefix) buffer[pos++] = (byte)prefix;
+		if (Double.isNaN(d) || Double.isInfinite(d)) {
+			final var len = NULL_BYTES.length;
+			System.arraycopy(NULL_BYTES, 0, buffer, pos, len);
+			pos += len;
+			return;
+		}
 		final var l = (long) d;
-		if (d == l) { writeNumber(l); return; }
+		if (d == l) { writeNumber((char)0, l); return; }
 		var limit = fractionalLimit >= 0 ? fractionalLimit : 6;
 		if (limit >= POW10_L.length) limit = POW10_L.length - 1;
 		if (d >= 1e14 || d <= -1e14 || (Math.abs(d) < 1e-4)) { writeFractionalLimited(Double.toString(d)); return; }
-		if (d < 0) { write((byte) '-'); d = -d; }
+		if (d < 0) {
+			buffer[pos++] = '-';
+			d = -d;
+		}
 		final var multiplier = POW10_L[limit];
-		final var total = (long) (d * multiplier + 0.5d);
-		final var intPart = total / multiplier;
+		final var total      = (long) (d * multiplier + 0.5d);
+		final var intPart    = total / multiplier;
 		var fracPart = total % multiplier;
-		writeNumber(intPart);
-
+		writeNumber((char)0, intPart);
 		if (fracPart == 0) return;
-		write((byte) '.');
-
+		buffer[pos++] = '.';
 		// 1. Führende Nullen berechnen und schreiben
 		final var zeros = limit - getDigits((int)fracPart);
 		if (zeros > 0) {
-			if (pos + zeros > buffer.length) flushBuffer();
 			System.arraycopy(ZEROS, 0, buffer, pos, zeros);
 			pos += zeros;
 		}
-
 		// 2. Trailing Zeros entfernen (wird nur ausgeführt, wenn fracPart > 0 ist, was wir oben gesichert haben)
-		while (fracPart % 10 == 0) {
-			fracPart /= 10;
-		}
-
+		while (fracPart % 10 == 0) fracPart /= 10;
 		// 3. Den bereinigten Rest schreiben
-		writeNumber(fracPart);
+		writeNumber((char)0, fracPart);
 	}
 
 	void writeTimestampasText(final Temporal t) throws IOException {
-		if (t == null) { write(JsonOutputStream.NULL_BYTES); return; }
+		mayFlush(26);	// "2000-01-01T00:00:00.001Z"
+		if (t == null) {
+			final var len = NULL_BYTES.length;
+			System.arraycopy(NULL_BYTES, 0, buffer, pos, len);
+			pos += len;
+			return;
+		}
 		final var inst = switch (t) {
 		case final Instant        v -> v;
 		case final LocalDate      v -> v.atStartOfDay(JsonDateTime.BERLIN).toInstant();
 		case final LocalDateTime  v -> v.atZone(JsonDateTime.BERLIN).toInstant();
 		case final ZonedDateTime  v -> v.toInstant();
 		case final OffsetDateTime v -> v.toInstant();
-		default -> throw new IllegalStateException(t.getClass().getName());
+		default                     -> throw new IllegalStateException(t.getClass().getName());
 		};
 		final var utc = LocalDateTime.ofInstant(inst, ZoneOffset.UTC);
-		mayFlush(26);	// "2000-01-01T00:00:00.001Z"
 		buffer[pos++] = (byte)'"';
 		final var year = utc.getYear();
 		final var century = year / 100;
@@ -557,145 +619,124 @@ public final class JsonOutputStream implements AutoCloseable {
 		buffer[pos++] = ((byte)'"');
 	}
 
-	private void write3(final int val) throws IOException {
+	private void write3(final int val) {
 		buffer[pos++] = (byte)('0' + (val / 100));
 		final var q = val % 100;
 		buffer[pos++] = DIGITS[q * 2];
 		buffer[pos++] = DIGITS[q * 2 + 1];
 	}
 
-	private void write2(final int q) throws IOException {
+	private void write2(final int q) {
 		buffer[pos++] = DIGITS[q * 2];
 		buffer[pos++] = DIGITS[q * 2 + 1];
 	}
 
-
-	void writeNumber(int val) throws IOException {
-		if (val == 0) { write((byte)'0'); return; }
-		if (val == Integer.MIN_VALUE) { write("-2147483648".getBytes()); return; }
-		if (pos + 12 > buffer.length) flushBuffer();
-		if (val < 0) { buffer[pos++] = (byte) '-'; val = -val; }
-		final var start = pos + 9;
-		var i = start;
-		while (val >= 100) {
-			final var q = val % 100;
-			val /= 100;
-			buffer[--i] = DIGITS[q * 2 + 1];
-			buffer[--i] = DIGITS[q * 2];
-		}
-		if (val < 10)  buffer[--i] = (byte) ('0' + val);
-		else {
-			buffer[--i] = DIGITS[val * 2 + 1];
-			buffer[--i] = DIGITS[val * 2];
-		}
-		final var len = start - i;
-		System.arraycopy(buffer, i, buffer, pos, len);
-		pos += len;
-	}
-
-	void writeNumber(long val) throws IOException {
-		if (val >= Integer.MIN_VALUE && val <= Integer.MAX_VALUE) { writeNumber((int) val); return; }
-		if (val == Long.MIN_VALUE) { write(MIN_LONG); return; }
-		if (pos + 20 > buffer.length) flushBuffer();
-		if (val < 0) { buffer[pos++] = (byte) '-'; val = -val; }
-		final var start = pos + 19;
-		var i = start;
-		while (val >= 100) {
-			final var q = (int) (val % 100);
-			val /= 100;
-			buffer[--i] = DIGITS[q * 2 + 1];
-			buffer[--i] = DIGITS[q * 2];
-		}
-		if (val < 10)  buffer[--i] = (byte) ('0' + val);
-		else {
-			final var q = (int) val;
-			buffer[--i] = DIGITS[q * 2 + 1];
-			buffer[--i] = DIGITS[q * 2];
-		}
-		final var len = start - i;
-		System.arraycopy(buffer, i, buffer, pos, len);
-		pos += len;
-	}
-
-	boolean commaNeeded() throws IOException { return(pos == 0 || (buffer[pos - 1] != '[' && buffer[pos - 1] != '{')); }
+	boolean commaNeeded() { return(pos == 0 || (buffer[pos - 1] != '[' && buffer[pos - 1] != '{')); }
 
 	void writeCommaIfNeeded() throws IOException { if (pos == 0 || (buffer[pos - 1] != '[' && buffer[pos - 1] != '{')) write((byte)','); }
 
-	// TODO replace with classDesc -> switch over int
 	boolean isSkipped(final Object v) {
-		if (v == null) return skipNull;
-		final Class<?> c = v.getClass(); // Liest den Klass-Pointer in O(1)
-		if (c == String.class)  return skipEmpty && ((String) v).isEmpty();
-		if (c == Integer.class || c == Long.class || c == Double.class) return false;
-		if (c == Boolean.class) return skipFalse && !((Boolean) v);
-		if (skipEmpty) {
-			if (c == CompactList.class) return ((CompactList<?>) v).size() == 0;
-			if (c == CompactMap.class)  return ((CompactMap<?, ?>) v).size() == 0;
-			if (c == Object[].class)    return ((Object[]) v).length == 0;
-			if (v instanceof final Collection<?> col) return col.isEmpty();
-			if (v instanceof final Map<?, ?> m)       return m.isEmpty();
-			if (c.isArray())                          return Array.getLength(v) == 0;
-			if (v instanceof final Record r)          return engine.ofComplex(r.getClass()).length == 0;
+		switch(v) {
+		case null                    -> { return skipNull;                   }
+		case final String          t -> { return skipEmpty && t.isEmpty();   }
+		case final Integer         _ -> { return false;                      }
+		case final Long            _ -> { return false;                      }
+		case final Double          _ -> { return false;                      }
+		case final Boolean         t -> { return skipFalse && !t;            }
+		case final CompactList< ?> t -> { return skipEmpty && t.isEmpty(); }
+		case final CompactMap<?,?> t -> { return skipEmpty && t.size() == 0; }
+		case final Object[]        t -> { return skipEmpty && t.length == 0; }
+		case final Collection<?>   t -> { return skipEmpty && t.isEmpty();   }
+		case final Map<?, ?>       t -> { return skipEmpty && t.isEmpty();   }
+		case final Record          t -> { return skipEmpty && engine.ofComplex(t.getClass()).length == 0; }
+		default -> {
+			final Class<?> c = v.getClass(); // Liest den Klass-Pointer in O(1)
+			if (c.isArray())              return skipEmpty && Array.getLength(v) == 0;
+			return false;
 		}
-		return false;
+		}
 	}
 
 	private boolean writePrimitiveInline(final Object val) throws IOException {
-		if (val == null) { write(NULL_BYTES); return true; }
-		final Class<?> c = val.getClass();
-		if (c == String .class) { writeEscapedString ((String ) val); return true; }
-		if (c == Integer.class) { writeNumber       (((Integer) val).intValue()); return true; }
-		if (c == Long   .class) { writeNumber       (((Long   ) val)); return true; }
-		if (c == Boolean.class) { writeBoolean      ((Boolean ) val); return true; }
-		if (c == Double .class) { writeDouble       (((Double ) val)); return true; }
+		switch(val) {
+		case null            -> write(NULL_BYTES);
+		case final String  t -> writeEscapedString (t);
+		case final Integer t -> writeNumber       ((char)0, t);
+		case final Long    t -> writeNumber       ((char)0, t);
+		case final Boolean t -> writeBoolean      (t);
+		case final Double  t -> writeDouble       ((char)0, t);
+		default              -> { return false; }
+		}
+		return true;
+	}
+
+	private void safeEmptyArray() {
+		buffer[pos++] = '[';
+		buffer[pos++] = ']';
+	}
+
+	private void handleMap(final Map<?,?> t) throws IOException {
+		final var size = t.size();
+		if (size == 0) { safeEmptyArray(); return; } // Optionaler Fast-Path
+		final var flat = takeArray(size * 2);
+		mapDumper.target = flat;
+		mapDumper.idx    = 0;
+		t.forEach(mapDumper);
+		push((byte)'{', TYPE_POOLED_MAP, flat, null, size * 2);
+	}
+
+	private void safeNull() {
+		System.arraycopy(NULL_BYTES, 0, buffer, pos, 4);
+		pos += 4;
+	}
+
+	private boolean handleCycle(final Object obj) throws IOException {
+		for (var i = 0; i <= stack.depth; i++) {
+			if (stack.stack[i].obj == obj) {
+				final var replacement = cycleMarker.get();
+				if (replacement == null) safeNull();
+				else if (replacement instanceof final String s) writeEscapedString(s);
+				else writeObject(replacement);
+				return true;
+			}
+		}
 		return false;
 	}
 
 	private boolean handleSimple(final Object val) throws IOException {
+		if (pos + 32 > buffer.length) flushBuffer();
 		if (handleCycle(val)) return true;
-		var ret = true;
 		switch(val) {
-		case null                      -> write(NULL_BYTES);
+		case null                      -> safeNull();
 		case final String            t -> writeEscapedString(t);
-		case final Integer           t -> writeNumber(t.intValue());
-		case final Boolean           t -> write(t ? TRUE_BYTES : FALSE_BYTES);
-		case final Long              t -> writeNumber(t);
-		case final Double            t -> writeDouble(t);
-		case final CompactList<?>    t -> push((byte)'[', TYPE_OBJ_ARRAY, t.getRawData(), null, t.size());
-		case final Object[]          t -> push((byte)'[', TYPE_OBJ_ARRAY, t, null, t.length);
+		case final Long              t -> writeNumber((char)0, t);					// Ensure 22
+		case final Double            t -> writeDouble((char)0, t);					// Ensure 28
+		case final CompactList<?>    t -> push((byte)'[', TYPE_OBJ_ARRAY  , t.getRawData(), null, t.size());
 		case final CompactMap<?,?>   t -> push((byte)'{', TYPE_COMPACT_MAP, t.getRawData(), null, t.size() * 2);
+		case final Object[]          t -> push((byte)'[', TYPE_OBJ_ARRAY  , t, null, t.length);
 		// Record could have an interface for Map/Collection but direct access is faster
 		case final Record            t -> { final var parts = engine.ofComplex(t.getClass()); push((byte)'{', TYPE_RECORD, t, parts, parts.length); }
-
-		case final java.util.List<?> t when t instanceof java.util.RandomAccess -> push((byte)'[', TYPE_LIST, t, null, t.size());
-		case final Map<?,?> t -> {
-			final var size = t.size();
-			if (size == 0) { write(new byte[]{'{','}'}); return true; } // Optionaler Fast-Path
-			final var flat = takeArray(size * 2);
-			mapDumper.target = flat;
-			mapDumper.idx    = 0;
-			t.forEach(mapDumper);
-			push((byte)'{', TYPE_POOLED_MAP, flat, null, size * 2);
-		}
-
+		case final List<?>           t when t instanceof java.util.RandomAccess -> push((byte)'[', TYPE_LIST, t, null, t.size());
 		case final Collection<?>     t -> push((byte)'[', TYPE_COL   , t, t.iterator(),  t.size());
-		case final Short             t -> writeNumber(t.longValue());
-		case final Float             t -> writeDouble(t.doubleValue());
+		case final Map<?,?>          t -> handleMap(t);
+		case final Integer           t -> writeNumber((char)0, t);					// Ensure 14
+		case final Boolean           t -> write(t ? TRUE_BYTES : FALSE_BYTES);
+		case final Short             t -> writeNumber((char)0, t.longValue());		// Ensure 22
+		case final Float             t -> writeDouble((char)0, t.doubleValue());	// Ensure 28
 		case final BigInteger        t -> writeBaseAscii(t.toString());
 		case final Number            t -> writeFractionalLimited(t.toString());
 		case final Enum<?>           t -> writeEscapedString(t.name());
-		case final Date              t -> timeFormat.writeDate(this, t);
-		case final Temporal          t -> timeFormat.writeTemp(this, t);
-		case final int    []         t -> { write((byte)'['); if(t.length>0) { writeNumber(t[0]); for(var i=1; i<t.length; i++) { write((byte)','); writeNumber(t[i]); } } write((byte)']'); }
-		case final long   []         t -> { write((byte)'['); if(t.length>0) { writeNumber(t[0]); for(var i=1; i<t.length; i++) { write((byte)','); writeNumber(t[i]); } } write((byte)']'); }
-		case final double []         t -> { write((byte)'['); if(t.length>0) { writeDouble(t[0]); for(var i=1; i<t.length; i++) { write((byte)','); writeDouble(t[i]); } } write((byte)']'); }
+		case final Date              t -> timeFormat.writeDate(this, t);			//  Ensure 26
+		case final Temporal          t -> timeFormat.writeTemp(this, t);			//  Ensure 26
+		case final double []         t -> { if(t.length>0) { writeDouble('[', t[0]); for(var i=1; i<t.length; i++) { writeDouble(',',t[i]); } write((byte)']'); } else safeEmptyArray(); }
+		case final long   []         t -> { if(t.length>0) { writeNumber('[', t[0]); for(var i=1; i<t.length; i++) { writeNumber(',',t[i]); } write((byte)']'); } else safeEmptyArray(); }
+		case final int    []         t -> { if(t.length>0) { writeNumber('[', t[0]); for(var i=1; i<t.length; i++) { writeNumber(',',t[i]); } write((byte)']'); } else safeEmptyArray(); }
+		case final short  []         t -> { if(t.length>0) { writeNumber('[', t[0]); for(var i=1; i<t.length; i++) { writeNumber(',',t[i]); } write((byte)']'); } else safeEmptyArray(); }
+		case final float  []         t -> { if(t.length>0) { writeDouble('[', t[0]); for(var i=1; i<t.length; i++) { writeDouble(',',t[i]); } write((byte)']'); } else safeEmptyArray(); }
 		case final boolean[]         t -> { write((byte)'['); if(t.length>0) { write(t[0] ? TRUE_BYTES : FALSE_BYTES); for(var i=1; i<t.length; i++) { write((byte)','); write(t[i] ? TRUE_BYTES : FALSE_BYTES); } } write((byte)']'); }
-		case final short  []         t -> { write((byte)'['); if(t.length>0) { writeNumber(t[0]); for(var i=1; i<t.length; i++) { write((byte)','); writeNumber(t[i]); } } write((byte)']'); }
-		case final float  []         t -> { write((byte)'['); if(t.length>0) { writeDouble(t[0]); for(var i=1; i<t.length; i++) { write((byte)','); writeDouble(t[i]); } } write((byte)']'); }
-		default                        -> ret = false;
+		default                        -> { if(val.getClass().isArray()) { push((byte)'[', TYPE_ARRAY, val, null, Array.getLength(val)); return true; } return false; }
 		}
-		if(!ret && val.getClass().isArray()) { push((byte)'[', TYPE_ARRAY, val, null, Array.getLength(val)); return true; }
-		return ret;
+		return true;
 	}
 
 	private void handleValue(final Object val) throws IOException {
@@ -729,7 +770,7 @@ public final class JsonOutputStream implements AutoCloseable {
 	private void writeMapKey(final Object key) throws IOException {
 		// 1. Fast-Path für Strings
 		String outKey;
-		var commaNeeded = commaNeeded();
+		final var commaNeeded = commaNeeded();
 		if (key instanceof final String str) {
 			final var sLen = str.length();
 			if (sLen < 32) {
@@ -738,7 +779,7 @@ public final class JsonOutputStream implements AutoCloseable {
 				mayFlush(sLen * 6 + 4);
 				final var hash = System.identityHashCode(key);
 				final var idx  = hash & 511;
-				if (commaNeeded) { buffer[pos++] = ','; commaNeeded = false; }
+				if (commaNeeded) buffer[pos++] = ',';
 				if (keyCacheKeys[idx] == key) {
 					final var cached = keyCacheVals[idx];
 					// Schneller Copy-Vorgang direkt in den Puffer, ohne Bounds-Check
