@@ -5,11 +5,13 @@ import java.lang.invoke.VarHandle;
 import java.nio.ByteOrder;
 
 final class JSONString {
-	static final byte[]     hex               = "0123456789abcdef".getBytes();
+	static final byte[]     hex                     = "0123456789abcdef".getBytes();
 	static final VarHandle  LONG_VIEW               = MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.LITTLE_ENDIAN);
 	static final long       QUOTE_PATTERN           = 0x2222222222222222L; // '"' in every byte
 	static final long       BACKSLASH_PATTERN       = 0x5C5C5C5C5C5C5C5CL; // '\' in every byte
 	static final long       NON_ASCII_PATTERN       = 0x8080808080808080L; // Sign-Bit in every byte
+	static final long       SWARN_MASK_HIGH         = 0x8080808080808080L; // Sign-Bit in every byte
+	static final long       CONTROL_PATTERN         = 0x6060606060606060L;
 	static final long       SWARN                   = 0x0101010101010101L;
 
 	sealed interface JSONStringProvider permits JSONStringVanilla, JSONStringAddOpens {

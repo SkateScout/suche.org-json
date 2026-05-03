@@ -139,28 +139,49 @@ public final class CompactList<V> extends AbstractList<V> implements ConextBacke
 	private final long  [] prims;
 	private final byte     singleType;
 
-	@Override public boolean  isEmpty   () { return data.length == 0; }
+	@Override public boolean  isEmpty   () {
+		return switch(singleType) {
+		case MetaPool.T_EMPTY  -> true;
+		case MetaPool.T_LONG   -> prims.length==0;
+		case MetaPool.T_DOUBLE -> prims.length==0;
+		default                -> data .length==0;
+		};
+	}
+
+	@Override public int      size      () {
+		return switch(singleType) {
+		case MetaPool.T_EMPTY  -> 0;
+		case MetaPool.T_LONG   -> prims.length;
+		case MetaPool.T_DOUBLE -> prims.length;
+		default                -> data .length;
+		};
+	}
 	@Override public V        get       (final int index) { return resolve(index); }
+
 	Object[] getRawData() { return data; }
-	@Override public int      size      () { return data.length; }
 	@Override public Object   rawValueAt(final int logicalIdx) { return data[logicalIdx]; }
+
 	@Override public long  [] prims     () { return prims     ; }
 	@Override public byte     singleType() { return singleType; }
 
-
 	@SuppressWarnings("unchecked")
 	private V resolve(final int valIndex) {
-		final var val = data[valIndex];
-		if (val == PRIMITIVE.LONG)   return (V) Long  .valueOf(                        prims[valIndex] );
-		if (val == PRIMITIVE.DOUBLE) return (V) Double.valueOf(Double.longBitsToDouble(prims[valIndex]));
-		return (V) val;
+		return switch(singleType) {
+		case MetaPool.T_EMPTY  -> throw new IndexOutOfBoundsException("empty");
+		case MetaPool.T_LONG   -> (V) Long  .valueOf(                        prims[valIndex] );
+		case MetaPool.T_DOUBLE -> (V) Double.valueOf(Double.longBitsToDouble(prims[valIndex]));
+		default                -> {
+			final var val = data[valIndex];
+			if (val == PRIMITIVE.LONG)   yield (V) Long  .valueOf(                        prims[valIndex] );
+			if (val == PRIMITIVE.DOUBLE) yield (V) Double.valueOf(Double.longBitsToDouble(prims[valIndex]));
+			yield (V) val;
+		}
+		};
 	}
 
-
-	CompactList(final byte pSingleType, final Object[] data, final long[] prims) {
+	CompactList(final byte pSingleType, final Object[] pData, final long[] PPrims) {
 		this.singleType = pSingleType;
-		this.data       = data;
-		this.prims      = prims;
+		this.data       = pData;
+		this.prims      = PPrims;
 	}
-
 }

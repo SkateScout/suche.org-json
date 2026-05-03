@@ -9,6 +9,7 @@ import java.lang.reflect.Parameter;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -394,6 +395,43 @@ final class ObjectMeta {
 		};
 	}
 
+	private Object endCollection(final MetaPool s, final Object context) {
+		final var ctx = (ParseContext) context;
+		final var cnt = ctx.cnt;
+		if (skipDefaultValues && cnt == 0) { s.returnContext(ctx); return null; }
+		if(cnt == 0) {
+			s.returnContext(ctx);
+			return Collections.emptyList();
+		}
+		lastSize(s.depth(), cnt);
+		if(ctx.prims != null && ctx.prims.length == cnt) {
+			if(ctx.singleType == MetaPool.T_LONG || ctx.singleType == MetaPool.T_DOUBLE) {
+				final var ret = new CompactList<>(ctx.singleType, null, ctx.prims);
+				ctx.prims = new long[cnt];
+				s.returnContext(ctx);
+				return ret;
+			}
+			if(ctx.objs.length == cnt) {
+				final var ret = new CompactList<>(ctx.singleType, ctx.objs, ctx.prims);
+				ctx.prims = new long  [cnt];
+				ctx.objs  = new Object[cnt];
+				s.returnContext(ctx);
+				return ret;
+			}
+		}
+		if(ctx.singleType == MetaPool.T_LONG || ctx.singleType == MetaPool.T_DOUBLE) {
+			final var ret =  new CompactList<>(ctx.singleType, null, Arrays.copyOf(ctx.prims, ctx.cnt));
+			s.returnContext(ctx);
+			return ret;
+
+		}
+		final var p = ctx.prims == null ? null : Arrays.copyOf(ctx.prims, ctx.cnt);
+		final var o = ctx.objs  == null ? null : Arrays.copyOf(ctx.objs , ctx.cnt);
+		final var ret = new CompactList<>(ctx.singleType, o, p);
+		s.returnContext(ctx);
+		return ret;
+	}
+
 	@SuppressWarnings("unchecked")
 	Object end(final MetaPool s, final Object context) throws Throwable {
 		return switch (metaType) {
@@ -426,24 +464,7 @@ final class ObjectMeta {
 			s.returnContext(ctx);
 			yield result;
 		}
-		case TYPE_COLLECTION -> {
-			final var ctx = (ParseContext) context;
-			if (skipDefaultValues && ctx.cnt == 0) { s.returnContext(ctx); yield null; }
-			lastSize(s.depth(), ctx.cnt);
-			final Object[] data;
-			final long[] primsData;
-			if (ctx.singleType == MetaPool.T_MIXED || ctx.singleType == MetaPool.T_EMPTY) {
-				data = ctx.objs == null ? new Object[0] : Arrays.copyOf(ctx.objs, ctx.cnt);
-				primsData = ctx.prims == null ? null : Arrays.copyOf(ctx.prims, ctx.cnt);
-			} else {
-				data = new Object[ctx.cnt];
-				if (ctx.singleType == MetaPool.T_LONG) Arrays.fill(data, PRIMITIVE.LONG);
-				else if (ctx.singleType == MetaPool.T_DOUBLE) Arrays.fill(data, PRIMITIVE.DOUBLE);
-				primsData = Arrays.copyOf(ctx.prims, ctx.cnt);
-			}
-			s.returnContext(ctx);
-			yield new CompactList<>(ctx.singleType, data, primsData);
-		}
+		case TYPE_COLLECTION -> endCollection(s, context);
 		case TYPE_SET -> skipDefaultValues && ((Collection<Object>) context).isEmpty() ? null : context;
 		case TYPE_SEALED -> SealedUnionMapper.end(s, context, baseType, permitted, keys, types);
 		default -> throw new IllegalArgumentException();

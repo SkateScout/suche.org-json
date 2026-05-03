@@ -13,7 +13,7 @@ final class JSONStringVanilla implements JSONStringProvider {
 	static final JSONStringVanilla INSTANCE = new JSONStringVanilla();
 
 	static {
-		Arrays.fill(ESCAPE_TABLE, (byte) -1);
+		Arrays.fill(ESCAPE_TABLE, (byte) -1);	// 0x00 - 0x19 == -1
 		for (var i = 32; i < 128; i++) ESCAPE_TABLE[i] = 0;
 		ESCAPE_TABLE['"']  = '"';
 		ESCAPE_TABLE['\\'] = '\\';

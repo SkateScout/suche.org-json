@@ -636,25 +636,21 @@ public final class JsonOutputStream implements AutoCloseable {
 	void writeCommaIfNeeded() throws IOException { if (pos == 0 || (buffer[pos - 1] != '[' && buffer[pos - 1] != '{')) write((byte)','); }
 
 	boolean isSkipped(final Object v) {
-		switch(v) {
-		case null                    -> { return skipNull;                   }
-		case final String          t -> { return skipEmpty && t.isEmpty();   }
-		case final Integer         _ -> { return false;                      }
-		case final Long            _ -> { return false;                      }
-		case final Double          _ -> { return false;                      }
-		case final Boolean         t -> { return skipFalse && !t;            }
-		case final CompactList< ?> t -> { return skipEmpty && t.isEmpty(); }
-		case final CompactMap<?,?> t -> { return skipEmpty && t.size() == 0; }
-		case final Object[]        t -> { return skipEmpty && t.length == 0; }
-		case final Collection<?>   t -> { return skipEmpty && t.isEmpty();   }
-		case final Map<?, ?>       t -> { return skipEmpty && t.isEmpty();   }
-		case final Record          t -> { return skipEmpty && engine.ofComplex(t.getClass()).length == 0; }
-		default -> {
-			final Class<?> c = v.getClass(); // Liest den Klass-Pointer in O(1)
-			if (c.isArray())              return skipEmpty && Array.getLength(v) == 0;
-			return false;
-		}
-		}
+		return switch(v) {
+		case null                    -> skipNull;
+		case final String          t -> skipEmpty && t.isEmpty();
+		case final Integer         _ -> false;
+		case final Long            _ -> false;
+		case final Double          _ -> false;
+		case final Boolean         t -> skipFalse && !t;
+		case final CompactList< ?> t -> skipEmpty && t.isEmpty();
+		case final CompactMap<?,?> t -> skipEmpty && t.size() == 0;
+		case final Object[]        t -> skipEmpty && t.length == 0;
+		case final Collection<?>   t -> skipEmpty && t.isEmpty();
+		case final Map<?, ?>       t -> skipEmpty && t.isEmpty();
+		case final Record          t -> skipEmpty && engine.ofComplex(t.getClass()).length == 0;
+		default                      -> (skipEmpty && v.getClass().isArray() && Array.getLength(v) == 0);
+		};
 	}
 
 	private boolean writePrimitiveInline(final Object val) throws IOException {
