@@ -411,7 +411,7 @@ final class ObjectMeta {
 				s.returnContext(ctx);
 				return ret;
 			}
-			if(ctx.objs.length == cnt) {
+			if(ctx.objs != null && ctx.objs.length == cnt) {
 				final var ret = new CompactList<>(ctx.singleType, ctx.objs, ctx.prims);
 				ctx.prims = new long  [cnt];
 				ctx.objs  = new Object[cnt];

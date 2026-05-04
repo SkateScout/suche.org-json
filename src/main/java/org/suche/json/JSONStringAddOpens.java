@@ -179,10 +179,7 @@ final class JSONStringAddOpens implements JSONStringProvider {
 						sOff   += safeChars;
 						dstOff += safeChars;
 					}
-
-					final var bytePos = sOff << 1;
 					final var c = (char) (word >>> (safeChars << 4));
-
 					if (c <= 255) {
 						// Sliding Window: Process Latin1 escapes inline
 						final var entry = JSONString.LATIN1_TABLE[c];

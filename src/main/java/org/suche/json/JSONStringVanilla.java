@@ -33,7 +33,7 @@ final class JSONStringVanilla implements JSONStringProvider {
 			var acc = 0L;
 			var accLen = 0;
 
-			while (sOff < sLen && dstOff < safeLimitD) {
+			while (dstOff < safeLimitD) {	// sOff < sLen assured by line 30 and 85
 				// Flush, wenn der Accumulator Platz für UTF-16 (bis zu 4 Bytes) braucht
 				if (accLen > 4) {
 					JSONString.LONG_VIEW.set(dst, dstOff, acc);
