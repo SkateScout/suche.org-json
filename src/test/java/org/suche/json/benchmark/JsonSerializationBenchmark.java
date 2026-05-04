@@ -74,8 +74,19 @@ public class JsonSerializationBenchmark {
 		bh.consume(bytes);
 	}
 
+
 	@Benchmark
-	public void benchmarkMyEngine(final Blackhole bh) throws Exception {
+	@Fork(value = 1, jvmArgsAppend = {"--add-opens", "java.base/java.lang=ALL-UNNAMED"})
+	public void benchmarkMyEngineVanilla(final Blackhole bh) throws Exception {
+		myOs.reset();
+		try (var s = myEngine.jsonOutputStream(myOs)) { s.writeObject(testData); }
+		bh.consume(myOs.size());
+	}
+
+
+	@Benchmark
+	@Fork(value = 1)
+	public void benchmarkMyEngineAddOpens(final Blackhole bh) throws Exception {
 		myOs.reset();
 		try (var s = myEngine.jsonOutputStream(myOs)) { s.writeObject(testData); }
 		bh.consume(myOs.size());

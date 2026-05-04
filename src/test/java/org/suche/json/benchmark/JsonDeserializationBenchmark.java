@@ -66,8 +66,7 @@ public class JsonDeserializationBenchmark {
 	@State(Scope.Thread)
 	public static class EngineState {
 		public JsonEngine myEngine;
-		@Param({"128"})
-		public int recursion;
+		@Param({"0", "128"}) public int recursion;
 
 		@Setup(Level.Trial)
 		public void setupEngine() {
@@ -77,13 +76,20 @@ public class JsonDeserializationBenchmark {
 	}
 
 	@Benchmark
-	public void benchmarkMyEngine(final Blackhole bh, final EngineState state) throws Throwable {
+	@Fork(value = 1) // Startet eine nackte JVM OHNE AddOpens
+	public void benchmarkMyEngine_Vanilla(final Blackhole bh, final EngineState state) throws Throwable {
 		try (var is = state.myEngine.jsonInputStream(new ByteArrayInputStream(jsonData))) {
-			final var parsedTree = is.readObject(dest);
-			bh.consume(parsedTree);
+			bh.consume(is.readObject(dest));
 		}
 	}
 
+	@Benchmark
+	@Fork(value = 1, jvmArgsAppend = {"--add-opens", "java.base/java.lang=ALL-UNNAMED"})
+	public void benchmarkMyEngine_AddOpens(final Blackhole bh, final EngineState state) throws Throwable {
+		try (var is = state.myEngine.jsonInputStream(new ByteArrayInputStream(jsonData))) {
+			bh.consume(is.readObject(dest));
+		}
+	}
 	@Benchmark
 	public void benchmarkJackson(final Blackhole bh) throws Exception {
 		final var parsedTree = jacksonMapper.readValue(jsonData, dest);

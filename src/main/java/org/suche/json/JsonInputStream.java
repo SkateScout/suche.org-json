@@ -30,7 +30,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		CtxStack() { for (var i = 0; i < 64; i++) stack[i] = new CTX(); }
 		void push(final long typeDesc, final Object obj, final Object meta, final int targetIdx, final int limit) {
 			if (++depth >= stack.length) {
-				if(depth > limit) throw new StackOverflowError();
+				if(depth > limit) throwInvalid("StackOverflowError");
 				final var oldLen = stack.length;
 				stack = Arrays.copyOf(stack, oldLen * 2);
 				for (var i = oldLen; i < stack.length; i++) stack[i] = new CTX();
@@ -91,10 +91,14 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		var curIdx = startIdx;
 		engineStack.clear();
 		while (true) {
-			if (pos >= limit) { ensure(1); if (pos >= limit) throw new IllegalStateException(); }
-			var b = buffer[pos];
+			if (pos >= limit) { ensure(1); if (pos >= limit) throwInvalid("Unexpected end.5"); }
+			final var b = buffer[pos];
 			switch (b) {
-			case '\t', '\n', '\r', ' ' -> { for(pos++; pos < limit; pos++) if (((b = buffer[pos]) & 0xC0) != 0 || ((1L << b) & WHITESPACE_MASK) == 0) break; }
+			case '\t', '\n', '\r', ' ' -> {
+				pos++;
+				skipWhitespace();
+				//for(pos++; pos < limit; pos++) if (((b = buffer[pos]) & 0xC0) != 0 || ((1L << b) & WHITESPACE_MASK) == 0) break;
+			}
 			case '"' -> {
 				if (curTypeDesc >= 0L && curIdx < 0) {
 					curIdx = parseStringKeyAsIndex(curObj, curMeta);
@@ -122,10 +126,10 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			}
 			case '{' -> {
 				engineStack.push(curTypeDesc, curObj, curMeta, curIdx, stackLimit);	// No issue if later an exception came
-				if (curTypeDesc >= 0L && curIdx < 0) throw new IllegalStateException("Expected key");
+				if (curTypeDesc >= 0L && curIdx < 0) throwInvalid("Expected key");
 				curTypeDesc = curMeta.fieldDescriptor(curIdx);
 				pos++;
-				if (curTypeDesc < 0L || (curTypeDesc & 1L) != 0L) throw new IllegalStateException("Expected got unexpected '{'");
+				if (curTypeDesc < 0L || (curTypeDesc & 1L) != 0L) throwInvalid("Expected got unexpected '{'");
 				curMeta = metaCache[(int) (curTypeDesc >> 1)];
 				curObj = curMeta.start(this);
 				curIdx = -1;
@@ -145,11 +149,11 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				consumeCommaIfPresent();
 			}
 			case '[' -> {
-				if (curTypeDesc >= 0L && curIdx < 0) throw new IllegalStateException("Expected key");
+				if (curTypeDesc >= 0L && curIdx < 0) throwInvalid("Expected key");
 				pos++;
 				var childDesc = curMeta.fieldDescriptor(curIdx);
 				if (childDesc >= 0L) {
-					if (((int) (childDesc >> 1))!= ObjectMeta.IDX_MAP) throw new IllegalStateException("Expected object, got '['");
+					if (((int) (childDesc >> 1))!= ObjectMeta.IDX_MAP) throwInvalid("Expected object, got '['");
 					childDesc = ObjectMeta.DESC_COLLECTION;
 				}
 				if ((childDesc & 1L) != 0L) {
@@ -164,7 +168,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 					curIdx = 0;
 				}
 			}
-			default -> throw new IllegalStateException();
+			default -> throwInvalid("Unexpedted CHAR.1");
 			}
 		}
 	}
@@ -361,7 +365,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		final var context = meta.start(this);
 		final var limitDepth = this.maxDepth;
 		while (true) {
-			if (pos >= limit) { ensure(1); if (pos >= limit) throw new IllegalStateException(); }
+			if (pos >= limit) { ensure(1); if (pos >= limit) throwInvalid("Unexpedted END.2"); }
 			int targetIdx;
 			var b = buffer[pos];
 			if ((b & 0xC0) == 0 && ((1L << b) & WHITESPACE_MASK) != 0) skipWhitespace();
@@ -369,7 +373,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			targetIdx = parseStringKeyAsIndex(context, meta);
 			expect((byte) ':');
 			if (targetIdx < 0) { skipWhitespace(); skipValue(); consumeCommaIfPresent(); continue; }
-			if (pos >= limit) { ensure(1); if (pos >= limit) throw new IllegalStateException(); }
+			if (pos >= limit) { ensure(1); if (pos >= limit) throwInvalid("Unexpedted END.1"); }
 			b = buffer[pos];
 			if ((b & 0xC0) == 0 && ((1L << b) & WHITESPACE_MASK) != 0) {
 				skipWhitespace();
@@ -383,7 +387,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			case '"' -> meta.set(this, context, targetIdx, parseStringValue());
 			case '{' -> {
 				final var fieldDesc = meta.fieldDescriptor(targetIdx);
-				if (fieldDesc < 0L || (fieldDesc & 1L) != 0L) throw new IllegalStateException("Expected array, got '{'");
+				if (fieldDesc < 0L || (fieldDesc & 1L) != 0L) throwInvalid("Expected array, got '{'");
 				final var childMeta = meta.childMeta(targetIdx);
 				final var fallbackMeta = childMeta != null ? childMeta : metaCache[ObjectMeta.IDX_MAP];
 				if (recursionDeep >= limitDepth) {
@@ -397,7 +401,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			case '[' -> {
 				final var fieldDesc = meta.fieldDescriptor(targetIdx);
 				final var metaIdx = (int) (fieldDesc >>> 1);
-				if (fieldDesc >= 0L && metaIdx != ObjectMeta.IDX_GENERIC && metaIdx != ObjectMeta.IDX_MAP) throw new IllegalStateException("Expected object, got '['");
+				if (fieldDesc >= 0L && metaIdx != ObjectMeta.IDX_GENERIC && metaIdx != ObjectMeta.IDX_MAP) throwInvalid("Expected object, got '['");
 				if ((fieldDesc & 1L) != 0L) {
 					pos++;
 					meta.set(this, context, targetIdx, parsePrimitiveArray(fieldDesc));
@@ -414,7 +418,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 					}
 				}
 			}
-			default -> throw new IllegalStateException();
+			default -> throwInvalid("Unexpected CHAR");
 			}
 			if (pos < limit && buffer[pos] == ',') pos++;  else consumeCommaSlow();
 		}
@@ -433,43 +437,43 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		var isPrimitive = false;
 		var metaIdx = 0;
 		while (true) {
-			if (pos >= limit) { ensure(1); if (pos >= limit) throw new IllegalStateException(); }
+			if (pos >= limit) { ensure(1); if (pos >= limit) throwInvalid("Unexpected end"); }
 			switch (buffer[pos]) {
 			case '\t','\n','\r',' ' -> { pos++; }							// SKIP   Whitespace
 			case ']' -> { pos++; return meta.end(this, context); }	// ALWAYS Possible
 			case '-','0','1','2','3','4','5','6','7','8','9' -> {
-				if(state==1) throw new IllegalStateException("Komma or Closeing breaket instead of NUMERIC expected");
+				if(state==1) throwInvalid("Komma or Closeing breaket instead of NUMERIC expected");
 				state = 1;
 				parseNumericPrimitive(meta, context, idx, null);
 			}
 			case ',' -> {
 				idx++;
-				if(state==0) throw new IllegalStateException("VALUE instead of KOMMA expected");
+				if(state==0) throwInvalid("VALUE instead of KOMMA expected");
 				state = 0;
 				pos++;
 			}
 			case 'n' -> {
-				if(state==1) throw new IllegalStateException("Komma or Closeing breaket instead of NULL expected");
+				if(state==1) throwInvalid("Komma or Closeing breaket instead of NULL expected");
 				state = 1;
 				fillNullValue(childDesc, context, idx, meta);
 			}
 			case 't' -> {
-				if(state==1) throw new IllegalStateException("Komma or Closeing breaket instead of BOOLEAN expected");
+				if(state==1) throwInvalid("Komma or Closeing breaket instead of BOOLEAN expected");
 				state = 1;
 				meta.set(this, context, idx, parseTrue());
 			}
 			case 'f' -> {
-				if(state==1) throw new IllegalStateException("Komma or Closeing breaket instead of BOOLEAN expected");
+				if(state==1) throwInvalid("Komma or Closeing breaket instead of BOOLEAN expected");
 				state = 1;
 				meta.set(this, context, idx, parseFalse());
 			}
 			case '"' -> {
-				if(state==1) throw new IllegalStateException("Komma or Closeing breaket instead of STRING expected");
+				if(state==1) throwInvalid("Komma or Closeing breaket instead of STRING expected");
 				state = 1;
 				meta.set(this, context, idx, parseStringValue());
 			}
 			case '{' -> {
-				if(state==1) throw new IllegalStateException("Komma or Closeing breaket instead of OBJECT expected");
+				if(state==1) throwInvalid("Komma or Closeing breaket instead of OBJECT expected");
 				state = 1;
 				if (objFallbackMeta == null) {	// LAZY INIT
 					isPrimitive = (childDesc & 1L) != 0L;
@@ -482,7 +486,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 					arrPassDesc = isFallbackToCollection ? ObjectMeta.DESC_COLLECTION : (childDesc == 0L ? ObjectMeta.DESC_COLLECTION : childDesc);
 				}
 
-				if (childDesc < 0L || isPrimitive) throw new IllegalStateException("Expected array, got '{'");
+				if (childDesc < 0L || isPrimitive) throwInvalid("Expected array, got '{'");
 				if (recursionDeep >= limitDepth) {
 					meta.set(this, context, idx, runStateEngine(objPassDesc, objFallbackMeta.start(this), objFallbackMeta, -1));
 				} else {
@@ -491,7 +495,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				}
 			}
 			case '[' -> {
-				if(state==1) throw new IllegalStateException("Komma or Closeing breaket instead of ARRAY expected");
+				if(state==1) throwInvalid("Komma or Closeing breaket instead of ARRAY expected");
 				state = 1;
 				if (arrFallbackMeta == null) {	// LAZY INIT
 					isPrimitive = (childDesc & 1L) != 0L;
@@ -504,7 +508,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 					arrPassDesc     = isFallbackToCollection ?           ObjectMeta.DESC_COLLECTION : (childDesc == 0L ? ObjectMeta.DESC_COLLECTION : childDesc);
 				}
 
-				if ((childDesc >= 0L) && metaIdx != ObjectMeta.IDX_GENERIC && metaIdx != ObjectMeta.IDX_MAP) throw new IllegalStateException("Expected object, got '['");
+				if ((childDesc >= 0L) && metaIdx != ObjectMeta.IDX_GENERIC && metaIdx != ObjectMeta.IDX_MAP) throwInvalid("Expected object, got '['");
 				if (isPrimitive) {
 					pos++;
 					meta.set(this, context, idx, parsePrimitiveArray(childDesc));
@@ -515,7 +519,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 					meta.set(this, context, idx, parseArrayRecursive(arrFallbackMeta, recursionDeep + 1));
 				}
 			}
-			default -> throw new IllegalStateException("Unexpected byte["+buffer[pos]+"] instead of "+(state==0?"VALUE":"KOMMA/END"));
+			default -> throwInvalid("Unexpected byte["+buffer[pos]+"] instead of "+(state==0?"VALUE":"KOMMA/END"));
 			}
 		}
 	}

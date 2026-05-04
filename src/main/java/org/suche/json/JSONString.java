@@ -14,7 +14,34 @@ final class JSONString {
 	static final long       CONTROL_PATTERN         = 0x6060606060606060L;
 	static final long       SWARN                   = 0x0101010101010101L;
 
-	sealed interface JSONStringProvider permits JSONStringVanilla, JSONStringAddOpens {
+	static final long[] LATIN1_TABLE = new long[256];
+	static {
+		for (var c = 0; c < 256; c++) {
+			byte[] bytes;
+			if (c < 32 || c == '"' || c == '\\') {
+				// Escape-Logik (\n, \t, \ u00xx)
+				bytes = switch (c) {
+				case '"'  -> new byte[]{'\\', '"'};
+				case '\\' -> new byte[]{'\\', '\\'};
+				case '\b' -> new byte[]{'\\', 'b'};
+				case '\f' -> new byte[]{'\\', 'f'};
+				case '\n' -> new byte[]{'\\', 'n'};
+				case '\r' -> new byte[]{'\\', 'r'};
+				case '\t' -> new byte[]{'\\', 't'};
+				default   -> new byte[]{ '\\', 'u', '0', '0', JSONString.hex[(c >> 4) & 15], JSONString.hex[c & 15] };
+				};
+			} else if (c < 128) bytes = new byte[]{(byte) c}; // Pures ASCII
+			else                bytes = new byte[]{(byte)(0xC0 | (c >> 6)), (byte)(0x80 | (c & 0x3F))}; // 2-Byte UTF-8 für Latin1 > 127
+			var word = 0L;
+			// Bytes Little-Endian in den long packen
+			for (var i = 0; i < bytes.length; i++) word |= ((long) (bytes[i] & 0xFF)) << (8 * i);
+			// Länge in das HÖCHSTE Byte packen!
+			word |= ((long) bytes.length) << 56;
+			LATIN1_TABLE[c] = word;
+		}
+	}
+
+	sealed interface JSONStringProvider permits JSONStringVanilla, JSONStringAddOpens, JSONStringVectorAPI {
 		// Returns (sOff << 32) | dstOff
 		long encodeChunk(String s, int sOff, int sLen, byte[] dst, int dstOff, int dstLen);
 	}
@@ -22,9 +49,23 @@ final class JSONString {
 	private static final JSONStringProvider PROVIDER;
 
 	static {
-		JSONStringProvider selected;
-		try { selected = new JSONStringAddOpens(); } // 2. Test for Add-Opens access to String.value
-		catch (final RuntimeException _) { selected = JSONStringVanilla.INSTANCE; } // 3. Fallback to Vanilla (always works)
+		JSONStringProvider selected = null;
+		// Check for Add-Opens Version
+
+		try {
+			// Lädt die Klasse nur, wenn die JVM mit --enable-preview gestartet wurde
+			// und die JDK Version EXAKT zur Kompilier-Version passt.
+			final var clazz = Class.forName("org.suche.json.JSONStringVectorAPI");
+			selected = (JSONStringProvider) clazz.getDeclaredConstructor().newInstance();
+		} catch (final Throwable t) {
+			// Catch Throwable fängt UnsupportedClassVersionError (Minor 65535) oder NoClassDefFoundError ab.
+		}
+		if(selected == null) {
+			if(JSONStringAddOpens.ONCE != null) selected = JSONStringAddOpens.ONCE;
+			// Fallback to Vanilla (always works)
+			else                                selected = JSONStringVanilla.INSTANCE;
+		}
+		System.out.println("\n\n\nJSONString using "+selected.getClass().getCanonicalName()+"\n\n\n");
 		PROVIDER = selected;
 	}
 

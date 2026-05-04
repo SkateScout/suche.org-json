@@ -1,7 +1,5 @@
 package org.suche.json;
 
-import java.util.Arrays;
-
 import org.suche.json.JSONString.JSONStringProvider;
 
 final class JSONStringVanilla implements JSONStringProvider {
@@ -9,78 +7,106 @@ final class JSONStringVanilla implements JSONStringProvider {
 	// 0  = Safe ASCII character (can be copied directly)
 	// -1 = Unicode control character requiring \ u00XX escaping
 	// >0 = Direct escape character (e.g., 'n' for \n)
-	static final byte[] ESCAPE_TABLE = new byte[128];
 	static final JSONStringVanilla INSTANCE = new JSONStringVanilla();
-
-	static {
-		Arrays.fill(ESCAPE_TABLE, (byte) -1);	// 0x00 - 0x19 == -1
-		for (var i = 32; i < 128; i++) ESCAPE_TABLE[i] = 0;
-		ESCAPE_TABLE['"']  = '"';
-		ESCAPE_TABLE['\\'] = '\\';
-		ESCAPE_TABLE['\b'] = 'b';
-		ESCAPE_TABLE['\f'] = 'f';
-		ESCAPE_TABLE['\n'] = 'n';
-		ESCAPE_TABLE['\r'] = 'r';
-		ESCAPE_TABLE['\t'] = 't';
-	}
-
+	static final long[] LATIN1_TABLE = JSONString.LATIN1_TABLE;
 
 	@Override public long encodeChunk(final String s, int sOff, final int sLen, final byte[] dst, int dstOff, final int dstLen) {
-		final var startS    = sOff;
-		final var startD    = dstOff;
-		final var safeLimit = dstLen - 6;
+		final var startS     = sOff;
+		final var startD     = dstOff;
+		final var safeLimitD = dstLen - 16; // 16 Bytes Sicherheit für 8-Byte Accumulator-Writes
 
-		while (sOff < sLen && dstOff < safeLimit) {
-			// --- FAST PATH: ASCII COPY LOOP ---
-			// Calculate the maximum safe distance to avoid any bounds checks inside the loop.
-			// This unlocks C2 JIT auto-vectorization (SIMD) for pure ASCII string copying.
-			final var runLimit = sOff + Math.min(sLen - sOff, safeLimit - dstOff);
+		while (sOff < sLen && dstOff < safeLimitD) {
+
+			// --- 1. FAST PATH (Skalares Loop-Unrolling durch C2) ---
+			final var runLimit = sOff + Math.min(sLen - sOff, safeLimitD - dstOff);
 			var c = s.charAt(sOff);
-			byte esc = 0;
 			while (sOff < runLimit) {
-				if (c >= 128 || (esc = ESCAPE_TABLE[c]) != 0) break;
+				if(c<32 || c>=128 || c == '"' || c == '\\' ) break;
 				dst[dstOff++] = (byte) c;
 				sOff++;
 				if (sOff < runLimit) c = s.charAt(sOff);
 			}
 
-			if (sOff >= sLen || dstOff >= safeLimit) break;
+			if (sOff >= sLen || dstOff >= safeLimitD) break;
 
-			// --- SLOW PATH: ESCAPES AND UNICODE ---
-			if (c < 128) {
-				if (esc > 0) {
-					dst[dstOff++] = '\\';
-					dst[dstOff++] = esc;
-				} else {
-					dst[dstOff++] = '\\'; dst[dstOff++] = 'u';
-					dst[dstOff++] = '0';  dst[dstOff++] = '0';
-					dst[dstOff++] = JSONString.hex[(c >> 4) & 15]; dst[dstOff++] = JSONString.hex[c & 15];
+			// --- 2. UNIFIED ACCUMULATOR (Latin1 + Escapes + UTF-16) ---
+			var acc = 0L;
+			var accLen = 0;
+
+			while (sOff < sLen && dstOff < safeLimitD) {
+				// Flush, wenn der Accumulator Platz für UTF-16 (bis zu 4 Bytes) braucht
+				if (accLen > 4) {
+					JSONString.LONG_VIEW.set(dst, dstOff, acc);
+					dstOff += accLen;
+					acc = 0;
+					accLen = 0;
 				}
-				sOff++;
-			} else if (Character.isHighSurrogate(c) && sOff + 1 < sLen) {
-				final var low = s.charAt(sOff + 1);
-				if (Character.isLowSurrogate(low)) {
-					final var cp = Character.toCodePoint(c, low);
-					dst[dstOff++] = (byte) (0xF0 | (cp >> 18));
-					dst[dstOff++] = (byte) (0x80 | ((cp >> 12) & 0x3F));
-					dst[dstOff++] = (byte) (0x80 | ((cp >> 6) & 0x3F));
-					dst[dstOff++] = (byte) (0x80 | (cp & 0x3F));
-					sOff += 2;
-				} else {
-					dst[dstOff++] = '?';
+
+				if (c < 256) {
+					// Latin1 & Escapes via Lookup-Table
+					final var entry = LATIN1_TABLE[c];
+					final var len = (int) (entry >>> 56);
+					acc |= (entry & 0x00FFFFFFFFFFFFFFL) << (accLen << 3);
+					accLen += len;
 					sOff++;
+				} else // UTF-16 Bit-Packing
+					if (Character.isHighSurrogate(c) && sOff + 1 < sLen) {
+						final var low = s.charAt(sOff + 1);
+						if (Character.isLowSurrogate(low)) {
+							final var cp = Character.toCodePoint(c, low);
+							final var b1 = (byte) (0xF0 | (cp >> 18)) & 0xFFL;
+							final var b2 = (byte) (0x80 | ((cp >> 12) & 0x3F)) & 0xFFL;
+							final var b3 = (byte) (0x80 | ((cp >> 6) & 0x3F)) & 0xFFL;
+							final var b4 = (byte) (0x80 | (cp & 0x3F)) & 0xFFL;
+							acc |= (b1 | (b2 << 8) | (b3 << 16) | (b4 << 24)) << (accLen << 3);
+							accLen += 4;
+							sOff += 2;
+						} else {
+							acc |= ((long) '?') << (accLen << 3);
+							accLen++;
+							sOff++;
+						}
+					} else {
+						if (c >= 0x800) {
+							final var b1 = (byte) (0xE0 | (c >> 12)) & 0xFFL;
+							final var b2 = (byte) (0x80 | ((c >> 6) & 0x3F)) & 0xFFL;
+							final var b3 = (byte) (0x80 | (c & 0x3F)) & 0xFFL;
+							acc |= (b1 | (b2 << 8) | (b3 << 16)) << (accLen << 3);
+							accLen += 3;
+						} else {
+							final var b1 = (byte) (0xC0 | (c >> 6)) & 0xFFL;
+							final var b2 = (byte) (0x80 | (c & 0x3F)) & 0xFFL;
+							acc |= (b1 | (b2 << 8)) << (accLen << 3);
+							accLen += 2;
+						}
+						sOff++;
+					}
+
+				if (sOff >= sLen) break;
+
+				// Lade nächstes Zeichen
+				c = s.charAt(sOff);
+
+				// Zurück in den Fast-Path, wenn wieder sauberes ASCII vorliegt
+
+				if(c>=32 && c<128 && c != '"' && c != '\\' ) {
+					// if (c < 128 && ESCAPE_TABLE[c] == 0) {
+					if (accLen > 0) {
+						JSONString.LONG_VIEW.set(dst, dstOff, acc);
+						dstOff += accLen;
+					}
+					break;
 				}
-			} else {
-				if (c >= 0x800) {
-					dst[dstOff++] = (byte) (0xE0 | (c >> 12));
-					dst[dstOff++] = (byte) (0x80 | ((c >> 6) & 0x3F));
-				} else {
-					dst[dstOff++] = (byte) (0xC0 | (c >> 6));
-				}
-				dst[dstOff++] = (byte) (0x80 | (c & 0x3F));
-				sOff++;
+			}
+
+			// Abschließender Flush des Accumulators, falls wir das Ende des Strings erreicht haben
+			// oder den Puffer vorzeitig flushen müssen.
+			if (accLen > 0) {
+				JSONString.LONG_VIEW.set(dst, dstOff, acc);
+				dstOff += accLen;
 			}
 		}
+		// No Tail-Loop recalled after flush from OutputStream
 		return (((long) (sOff - startS)) << 32) | ((dstOff - startD) & 0xFFFFFFFFL);
 	}
 }
