@@ -4,11 +4,12 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>org.suche</groupId>
 	<artifactId>json</artifactId>
-	<version>0.0.1-SNAPSHOT</version>
-	<name>Suche.org/json</name>
+	<version>${revision}</version>
+    <name>Suche.org/json</name>
 	<description>Fast JSON Parser and Serializer</description>
 
 	<properties>
+        <revision>0.0.0-SNAPSHOT</revision>
 		<maven.compiler.release>26</maven.compiler.release>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 	</properties>
@@ -44,7 +45,29 @@
 		</dependency>
 	</dependencies>
 	<build>
+	    <finalName>${project.artifactId}-${git.closest.tag.name}</finalName>
 		<plugins>
+			<plugin>
+                <groupId>io.github.git-commit-id</groupId>
+                <artifactId>git-commit-id-maven-plugin</artifactId>
+                <version>9.0.1</version> <!-- Version für JDK 26 prüfen -->
+                <executions>
+                    <execution>
+                        <id>get-the-git-infos</id>
+                        <goals><goal>revision</goal></goals>
+                        <phase>initialize</phase>
+                    </execution>
+                </executions>
+                <configuration>
+                    <generateGitPropertiesFile>false</generateGitPropertiesFile>
+                    <includeOnlyProperties>
+                        <includeOnlyProperty>^git.tags$</includeOnlyProperty>
+                        <includeOnlyProperty>^git.closest.tag.name$</includeOnlyProperty>
+                    </includeOnlyProperties>
+                    <gitDescribe><tags>true</tags></gitDescribe>
+                    <commitIdGenerationMode>full</commitIdGenerationMode>
+                </configuration>
+            </plugin>		
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
