@@ -28,19 +28,6 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 	// FNV-1a offset basis
 	private static final long HASH_BASIS = 0xcbf29ce484222325L;
 
-	// Maskiert die ungenutzten Bytes im Tail-Word aus.
-	// Da offset maximal 7 ist, reicht ein Array der Größe 8.
-	private static final long[] TAIL_MASKS = {
-			0x0000000000000000L,
-			0x00000000000000FFL,
-			0x000000000000FFFFL,
-			0x0000000000FFFFFFL,
-			0x00000000FFFFFFFFL,
-			0x000000FFFFFFFFFFL,
-			0x0000FFFFFFFFFFFFL,
-			0x00FFFFFFFFFFFFFFL
-	};
-
 	Map<Object, Object> internPool;
 	byte[]                       strBuf          = new byte[1024];
 	private byte[][]             stringPoolKeys;
@@ -94,7 +81,6 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		this.maxCollectionSize = cfg.maxCollectionSize();
 		this.maxStringLength   = cfg.maxStringLength();
 		this.maxRecursiveDepth = c.maxRecursiveDepth();
-
 		this.engine            = c;
 		this.in                = i;
 		this.pos               = 0;

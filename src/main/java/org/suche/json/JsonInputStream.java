@@ -1,5 +1,6 @@
 package org.suche.json;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Arrays;
@@ -48,6 +49,21 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 	static JsonInputStream of(final InputStream in, final InternalEngine engine) {
 		final var s = STREAM_POOL.acquire();
 		s.init(in, engine);
+		s.engineStack.depth = -1;
+		s.lastArraySize = 16;
+		s.metaCache = engine.metaCache();
+		return s;
+	}
+
+	static JsonInputStream of(final byte[] bs, final InternalEngine engine) {
+		final var s = STREAM_POOL.acquire();
+		final var l = Math.min(bs.length, s.buffer.length);
+		final var in = bs.length <= s.buffer.length ? null : new ByteArrayInputStream(bs);
+		s.init(in, engine);
+		if(in == null) {
+			s.limit = l;
+			System.arraycopy(bs, 0, s.buffer, 0, l);
+		}
 		s.engineStack.depth = -1;
 		s.lastArraySize = 16;
 		s.metaCache = engine.metaCache();
@@ -253,7 +269,8 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 
 	// ############################### Public Part #############################################
 
-	public Object readObject(final Class<?> targetType) throws Throwable {
+	@SuppressWarnings("unchecked")
+	public <T> T readObject(final Class<T> targetType) throws Throwable {
 		skipWhitespace();
 		if (pos >= limit) return null;
 		final var b = buffer[pos];
@@ -270,17 +287,17 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 
 		if (this.maxRecursiveDepth <= 0) {
 			if (b == '{') pos++;
-			return runStateEngine(startTypeDesc, targetMeta != null ? targetMeta.start(this) : null, targetMeta, isArray ? 0 : -1);
+			return (T)runStateEngine(startTypeDesc, targetMeta != null ? targetMeta.start(this) : null, targetMeta, isArray ? 0 : -1);
 		}
 		if (b == '{') {
 			pos++;
-			return parseRecordRecursive(targetMeta != null ? targetMeta : metaCache[ObjectMeta.IDX_MAP], 0);
+			return (T)parseRecordRecursive(targetMeta != null ? targetMeta : metaCache[ObjectMeta.IDX_MAP], 0);
 		}
 		if (b == '[') {
 			pos++;
-			return parseArrayRecursive(targetMeta != null ? targetMeta : metaCache[ObjectMeta.IDX_COLLECTION], 0);
+			return (T)parseArrayRecursive(targetMeta != null ? targetMeta : metaCache[ObjectMeta.IDX_COLLECTION], 0);
 		}
-		return parsePrimitiveInline(b, targetType);
+		return (T) parsePrimitiveInline(b, targetType);
 	}
 
 	@SuppressWarnings("unchecked")

@@ -35,7 +35,7 @@ final class ObjectMeta {
 	static         final int TYPE_INSTANTIATOR = 1;
 	static         final int TYPE_MAP          = 2;
 	private static final int TYPE_DEFECT       = 3;
-	private static final int TYPE_SEALED       = 4;
+	static         final int TYPE_SEALED       = 4;
 	static         final int TYPE_OBJ_ARRAY    = 6;
 	static         final int TYPE_COLLECTION   = 7;
 	static         final int TYPE_SET          = 8;
@@ -406,13 +406,13 @@ final class ObjectMeta {
 		lastSize(s.depth(), cnt);
 		if(ctx.prims != null && ctx.prims.length == cnt) {
 			if(ctx.singleType == MetaPool.T_LONG || ctx.singleType == MetaPool.T_DOUBLE) {
-				final var ret = new CompactList<>(ctx.singleType, null, ctx.prims);
+				final var ret = new CompactList(ctx.singleType, null, ctx.prims);
 				ctx.prims = new long[cnt];
 				s.returnContext(ctx);
 				return ret;
 			}
 			if(ctx.objs != null && ctx.objs.length == cnt) {
-				final var ret = new CompactList<>(ctx.singleType, ctx.objs, ctx.prims);
+				final var ret = new CompactList(ctx.singleType, ctx.objs, ctx.prims);
 				ctx.prims = new long  [cnt];
 				ctx.objs  = new Object[cnt];
 				s.returnContext(ctx);
@@ -420,14 +420,14 @@ final class ObjectMeta {
 			}
 		}
 		if(ctx.singleType == MetaPool.T_LONG || ctx.singleType == MetaPool.T_DOUBLE) {
-			final var ret =  new CompactList<>(ctx.singleType, null, Arrays.copyOf(ctx.prims, ctx.cnt));
+			final var ret =  new CompactList(ctx.singleType, null, Arrays.copyOf(ctx.prims, ctx.cnt));
 			s.returnContext(ctx);
 			return ret;
 
 		}
 		final var p = ctx.prims == null ? null : Arrays.copyOf(ctx.prims, ctx.cnt);
 		final var o = ctx.objs  == null ? null : Arrays.copyOf(ctx.objs , ctx.cnt);
-		final var ret = new CompactList<>(ctx.singleType, o, p);
+		final var ret = new CompactList(ctx.singleType, o, p);
 		s.returnContext(ctx);
 		return ret;
 	}
@@ -448,7 +448,7 @@ final class ObjectMeta {
 			final var data = Arrays.copyOf(ctx.objs, ctx.cnt);
 			final var prims = ctx.prims == null ? null : Arrays.copyOf(ctx.prims, ctx.cnt >> 1);
 			s.returnContext(ctx);
-			yield new CompactMap<>(ctx.singleType, data, prims);
+			yield new CompactMap(ctx.singleType, data, prims);
 		}
 		case TYPE_OBJ_ARRAY -> {
 			final var ctx = (ParseContext) context;

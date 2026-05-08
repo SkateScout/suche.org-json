@@ -13,6 +13,15 @@ import java.util.function.UnaryOperator;
 import org.suche.json.JsonOutputStream.Flags;
 import org.suche.json.JsonOutputStream.TimeFormat;
 
+sealed interface InternalEngine extends JsonEngine permits EngineImpl {
+	ObjectMeta              metaOf   (Class<?> clazz);
+	MetaConfig              config   ();
+	KeyValueObject[]        ofComplex( final Class<?> c);
+	UnaryOperator<Object>   transformer(Class<?> c);
+	boolean                 hasCoreTransformer();
+	ObjectMeta[]            metaCache();
+}
+
 final class EngineImpl implements InternalEngine {
 	private static final int MOG_IGNORE = Modifier.INTERFACE | Modifier.ABSTRACT;
 
@@ -165,9 +174,10 @@ final class EngineImpl implements InternalEngine {
 	@Override public JsonOutputStream jsonOutputStream(final OutputStream out, final TimeFormat timeFormat, final int flags) { return JsonOutputStream.of(this, out, timeFormat, flags); }
 	@Override public JsonOutputStream jsonOutputStream(final OutputStream out) { return JsonOutputStream.of(this, out, null, 0); }
 	@Override public UnaryOperator<Object> transformer(final Class<?> c) { return getTypeRecord(c).transformer; }
-	@Override public boolean hasCoreTransformer() { return hasCoreTransformer; }
-	@Override public <C> void registerTransformer(final Class<C> c, final UnaryOperator<Object> f) { getTypeRecord(c).transformer = f; if (c.getClassLoader() == null || c.isArray()) hasCoreTransformer = true; }
+	@Override public boolean    hasCoreTransformer() { return hasCoreTransformer; }
+	@Override public <C> void   registerTransformer(final Class<C> c, final UnaryOperator<Object> f) { getTypeRecord(c).transformer = f; if (c.getClassLoader() == null || c.isArray()) hasCoreTransformer = true; }
 	@Override public JsonInputStream jsonInputStream(final InputStream is) { return JsonInputStream.of(is, this); }
+	@Override public JsonInputStream jsonInputStream(final byte[]      bs) { return JsonInputStream.of(bs, this); }
 	@Override public MetaConfig config() { return cfg; }
 
 	@Override

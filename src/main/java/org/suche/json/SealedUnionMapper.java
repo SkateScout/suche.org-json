@@ -165,9 +165,9 @@ final class SealedUnionMapper {
 			} else {
 				var val = unionObj[unionIdx];
 				if (val != null) {
-					if (val instanceof final CompactMap<?,?> m && comp.type() != Object.class && comp.type() != Map.class) {
+					if (val instanceof final CompactMap m && comp.type() != Object.class && comp.type() != Map.class) {
 						val = applyLateBindingIterative(s, m, comp.type());
-					} else if (val instanceof final CompactList<?> l && comp.type().isArray()) {
+					} else if (val instanceof final CompactList l && comp.type().isArray()) {
 						val = applyLateBindingIterative(s, l, comp.type());
 					} else {
 						val = coercePrimitive(val, comp.type());
@@ -226,14 +226,14 @@ final class SealedUnionMapper {
 		Object finalResult = null;
 		final var engine = s.engine();
 		try {
-			if (rootVal instanceof final CompactMap<?, ?> m) {
+			if (rootVal instanceof final CompactMap m) {
 				final var raw        = m.getRawData();
 				final var prims      = m.prims();
 				final var singleType = m.singleType();
 				final var meta        = getMeta(engine, raw, rootExpected);
 				if (meta == null || meta == ObjectMeta.GENERIC_MAP || meta == ObjectMeta.NULL) return rootVal;
 				stack.push(raw, prims, singleType, meta, meta.start(s), null, -1);
-			} else if (rootVal instanceof final CompactList<?> l) {
+			} else if (rootVal instanceof final CompactList l) {
 				final var raw = l.getRawData();
 				final var prims = l.prims();
 				final var singleType = l.singleType();
@@ -255,7 +255,7 @@ final class SealedUnionMapper {
 						} else if (val == CompactMap.PRIMITIVE.LONG) val = c.prims[currentIdx];
 						else if (val == CompactMap.PRIMITIVE.DOUBLE) val = Double.longBitsToDouble(c.prims[currentIdx]);
 
-						if (val instanceof final CompactMap<?, ?> m && c.compType != Object.class && c.compType != java.util.Map.class) {
+						if (val instanceof final CompactMap m && c.compType != Object.class && c.compType != java.util.Map.class) {
 							final var childRaw = m.getRawData();
 							final var childPrims = m.prims();
 							final var childSingleType = m.singleType();
@@ -265,7 +265,7 @@ final class SealedUnionMapper {
 							} else {
 								stack.push(childRaw, childPrims, childSingleType, childMeta, childMeta.start(s), null, currentIdx);
 							}
-						} else if (val instanceof final CompactList<?> l && c.compType.isArray()) {
+						} else if (val instanceof final CompactList l && c.compType.isArray()) {
 							final var childRaw = l.getRawData();
 							final var childPrims = l.prims();
 							final var childSingleType = l.singleType();
@@ -304,7 +304,7 @@ final class SealedUnionMapper {
 					if (targetIdx >= 0) {
 
 						final Class<?> expectedType = c.meta.type(targetIdx); // TODO replace with typedesc + fetch class from engine
-						if (val instanceof final CompactMap<?, ?> m && expectedType != Object.class && expectedType != java.util.Map.class) {
+						if (val instanceof final CompactMap m && expectedType != Object.class && expectedType != java.util.Map.class) {
 							final var childRaw = m.getRawData();
 							final var childPrims = m.prims();
 							final var childSingleType = m.singleType();
@@ -315,7 +315,7 @@ final class SealedUnionMapper {
 								break;
 							}
 							c.meta.set(s, c.context, targetIdx, val);
-						} else if (val instanceof final CompactList<?> l && expectedType.isArray()) {
+						} else if (val instanceof final CompactList l && expectedType.isArray()) {
 							final var childRaw = l.getRawData();
 							final var childPrims = l.prims();
 							final var childSingleType = l.singleType();

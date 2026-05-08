@@ -637,19 +637,19 @@ public final class JsonOutputStream implements AutoCloseable {
 
 	boolean isSkipped(final Object v) {
 		return switch(v) {
-		case null                    -> skipNull;
-		case final String          t -> skipEmpty && t.isEmpty();
-		case final Integer         _ -> false;
-		case final Long            _ -> false;
-		case final Double          _ -> false;
-		case final Boolean         t -> skipFalse && !t;
-		case final CompactList< ?> t -> skipEmpty && t.isEmpty();
-		case final CompactMap<?,?> t -> skipEmpty && t.size() == 0;
-		case final Object[]        t -> skipEmpty && t.length == 0;
-		case final Collection<?>   t -> skipEmpty && t.isEmpty();
-		case final Map<?, ?>       t -> skipEmpty && t.isEmpty();
-		case final Record          t -> skipEmpty && engine.ofComplex(t.getClass()).length == 0;
-		default                      -> (skipEmpty && v.getClass().isArray() && Array.getLength(v) == 0);
+		case null                  -> skipNull;
+		case final String        t -> skipEmpty && t.isEmpty();
+		case final Integer       _ -> false;
+		case final Long          _ -> false;
+		case final Double        _ -> false;
+		case final Boolean       t -> skipFalse && !t;
+		case final CompactList   t -> skipEmpty && t.isEmpty();
+		case final CompactMap    t -> skipEmpty && t.size() == 0;
+		case final Object[]      t -> skipEmpty && t.length == 0;
+		case final Collection<?> t -> skipEmpty && t.isEmpty();
+		case final Map<?, ?>     t -> skipEmpty && t.isEmpty();
+		case final Record        t -> skipEmpty && engine.ofComplex(t.getClass()).length == 0;
+		default                    -> (skipEmpty && v.getClass().isArray() && Array.getLength(v) == 0);
 		};
 	}
 
@@ -678,6 +678,7 @@ public final class JsonOutputStream implements AutoCloseable {
 		mapDumper.target = flat;
 		mapDumper.idx    = 0;
 		t.forEach(mapDumper);
+		mapDumper.target = null;
 		push((byte)'{', TYPE_POOLED_MAP, flat, null, size * 2);
 	}
 
@@ -703,34 +704,34 @@ public final class JsonOutputStream implements AutoCloseable {
 		if (pos + 32 > buffer.length) flushBuffer();
 		if (handleCycle(val)) return true;
 		switch(val) {
-		case null                      -> safeNull();
-		case final String            t -> writeEscapedString(t);
-		case final Long              t -> writeNumber((char)0, t);					// Ensure 22
-		case final Double            t -> writeDouble((char)0, t);					// Ensure 28
-		case final CompactList<?>    t -> push((byte)'[', TYPE_OBJ_ARRAY  , t.getRawData(), null, t.size());
-		case final CompactMap<?,?>   t -> push((byte)'{', TYPE_COMPACT_MAP, t.getRawData(), null, t.size() * 2);
-		case final Object[]          t -> push((byte)'[', TYPE_OBJ_ARRAY  , t, null, t.length);
+		case null                  -> safeNull();
+		case final String        t -> writeEscapedString(t);
+		case final Long          t -> writeNumber((char)0, t);					// Ensure 22
+		case final Double        t -> writeDouble((char)0, t);					// Ensure 28
+		case final CompactList   t -> push((byte)'[', TYPE_OBJ_ARRAY  , t.getRawData(), null, t.size());
+		case final CompactMap    t -> push((byte)'{', TYPE_COMPACT_MAP, t.getRawData(), null, t.size() * 2);
+		case final Object[]      t -> push((byte)'[', TYPE_OBJ_ARRAY  , t, null, t.length);
 		// Record could have an interface for Map/Collection but direct access is faster
-		case final Record            t -> { final var parts = engine.ofComplex(t.getClass()); push((byte)'{', TYPE_RECORD, t, parts, parts.length); }
-		case final List<?>           t when t instanceof java.util.RandomAccess -> push((byte)'[', TYPE_LIST, t, null, t.size());
-		case final Collection<?>     t -> push((byte)'[', TYPE_COL   , t, t.iterator(),  t.size());
-		case final Map<?,?>          t -> handleMap(t);
-		case final Integer           t -> writeNumber((char)0, t);					// Ensure 14
-		case final Boolean           t -> write(t ? TRUE_BYTES : FALSE_BYTES);
-		case final Short             t -> writeNumber((char)0, t.longValue());		// Ensure 22
-		case final Float             t -> writeDouble((char)0, t.doubleValue());	// Ensure 28
-		case final BigInteger        t -> writeBaseAscii(t.toString());
-		case final Number            t -> writeFractionalLimited(t.toString());
-		case final Enum<?>           t -> writeEscapedString(t.name());
-		case final Date              t -> timeFormat.writeDate(this, t);			//  Ensure 26
-		case final Temporal          t -> timeFormat.writeTemp(this, t);			//  Ensure 26
-		case final double []         t -> { if(t.length>0) { writeDouble('[', t[0]); for(var i=1; i<t.length; i++) { writeDouble(',',t[i]); } write((byte)']'); } else safeEmptyArray(); }
-		case final long   []         t -> { if(t.length>0) { writeNumber('[', t[0]); for(var i=1; i<t.length; i++) { writeNumber(',',t[i]); } write((byte)']'); } else safeEmptyArray(); }
-		case final int    []         t -> { if(t.length>0) { writeNumber('[', t[0]); for(var i=1; i<t.length; i++) { writeNumber(',',t[i]); } write((byte)']'); } else safeEmptyArray(); }
-		case final short  []         t -> { if(t.length>0) { writeNumber('[', t[0]); for(var i=1; i<t.length; i++) { writeNumber(',',t[i]); } write((byte)']'); } else safeEmptyArray(); }
-		case final float  []         t -> { if(t.length>0) { writeDouble('[', t[0]); for(var i=1; i<t.length; i++) { writeDouble(',',t[i]); } write((byte)']'); } else safeEmptyArray(); }
-		case final boolean[]         t -> { write((byte)'['); if(t.length>0) { write(t[0] ? TRUE_BYTES : FALSE_BYTES); for(var i=1; i<t.length; i++) { write((byte)','); write(t[i] ? TRUE_BYTES : FALSE_BYTES); } } write((byte)']'); }
-		default                        -> { if(val.getClass().isArray()) { push((byte)'[', TYPE_ARRAY, val, null, Array.getLength(val)); return true; } return false; }
+		case final Record        t -> { final var parts = engine.ofComplex(t.getClass()); push((byte)'{', TYPE_RECORD, t, parts, parts.length); }
+		case final List<?>       t when t instanceof java.util.RandomAccess -> push((byte)'[', TYPE_LIST, t, null, t.size());
+		case final Collection<?> t -> push((byte)'[', TYPE_COL   , t, t.iterator(),  t.size());
+		case final Map<?,?>      t -> handleMap(t);
+		case final Integer       t -> writeNumber((char)0, t);					// Ensure 14
+		case final Boolean       t -> write(t ? TRUE_BYTES : FALSE_BYTES);
+		case final Short         t -> writeNumber((char)0, t.longValue());		// Ensure 22
+		case final Float         t -> writeDouble((char)0, t.doubleValue());	// Ensure 28
+		case final BigInteger    t -> writeBaseAscii(t.toString());
+		case final Number        t -> writeFractionalLimited(t.toString());
+		case final Enum<?>       t -> writeEscapedString(t.name());
+		case final Date          t -> timeFormat.writeDate(this, t);			//  Ensure 26
+		case final Temporal      t -> timeFormat.writeTemp(this, t);			//  Ensure 26
+		case final double []     t -> { if(t.length>0) { writeDouble('[', t[0]); for(var i=1; i<t.length; i++) { writeDouble(',',t[i]); } write((byte)']'); } else safeEmptyArray(); }
+		case final long   []     t -> { if(t.length>0) { writeNumber('[', t[0]); for(var i=1; i<t.length; i++) { writeNumber(',',t[i]); } write((byte)']'); } else safeEmptyArray(); }
+		case final int    []     t -> { if(t.length>0) { writeNumber('[', t[0]); for(var i=1; i<t.length; i++) { writeNumber(',',t[i]); } write((byte)']'); } else safeEmptyArray(); }
+		case final short  []     t -> { if(t.length>0) { writeNumber('[', t[0]); for(var i=1; i<t.length; i++) { writeNumber(',',t[i]); } write((byte)']'); } else safeEmptyArray(); }
+		case final float  []     t -> { if(t.length>0) { writeDouble('[', t[0]); for(var i=1; i<t.length; i++) { writeDouble(',',t[i]); } write((byte)']'); } else safeEmptyArray(); }
+		case final boolean[]     t -> { write((byte)'['); if(t.length>0) { write(t[0] ? TRUE_BYTES : FALSE_BYTES); for(var i=1; i<t.length; i++) { write((byte)','); write(t[i] ? TRUE_BYTES : FALSE_BYTES); } } write((byte)']'); }
+		default                    -> { if(val.getClass().isArray()) { push((byte)'[', TYPE_ARRAY, val, null, Array.getLength(val)); return true; } return false; }
 		}
 		return true;
 	}
