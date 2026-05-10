@@ -23,6 +23,12 @@ public sealed interface JSONObject permits CompactMap {
 	/** Safely retrieves a nested JsonObject. Throws ClassCastException if the type mismatches. */
 	JSONObject getJSONObject(String key);
 
+	default JSONObject computeIfAbsentJSONObject(final String key) {
+		var r = optJSONObject(key);
+		if(r == null) put(key, r = new CompactMap());
+		return r;
+	}
+
 	/** Safely retrieves a nested JsonObject, returning null if missing or not an object. */
 	JSONObject optJSONObject(String key);
 
@@ -64,7 +70,7 @@ public sealed interface JSONObject permits CompactMap {
 
 	// --- Primitive Retrieval (Optional returning Wrapper/Null) ---
 
-	default String  optString (final String key) { return optString(key, null); }
+	default String  optString (final String key) { return optString (key, null); }
 	default long    optLong   (final String key) { return optLong   (key, 0); }
 	default int     optInt    (final String key) { return optInt    (key, 0); }
 	default short   optShort  (final String key) { return optShort  (key, (short)0); }

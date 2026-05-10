@@ -27,9 +27,9 @@ interface MetaPool {
 			if (objs == null) objs = s.takeArray(requiredCapacity);
 
 			if (singleType == MetaPool.T_LONG) {
-				for (var i = 0; i < cnt; i++) objs[i] = org.suche.json.CompactMap.PRIMITIVE.LONG;
+				for (var i = 0; i < cnt; i++) objs[i] = org.suche.json.PRIMITIVE.LONG;
 			} else if (singleType == MetaPool.T_DOUBLE) {
-				for (var i = 0; i < cnt; i++) objs[i] = org.suche.json.CompactMap.PRIMITIVE.DOUBLE;
+				for (var i = 0; i < cnt; i++) objs[i] = org.suche.json.PRIMITIVE.DOUBLE;
 			}
 			singleType = MetaPool.T_MIXED;
 		}

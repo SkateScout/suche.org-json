@@ -57,6 +57,7 @@ public sealed interface JSONArray extends List<Object>, ContextBacked permits Co
 	default float        optFloat  (final int idx) { final var v = oDouble(idx); return(null==v?0:v.floatValue()); }
 
 	void put(int idx, int val);
+	void removeByIndex(final int index);
 
 	default List<Object> toList    () { return this; }
 }

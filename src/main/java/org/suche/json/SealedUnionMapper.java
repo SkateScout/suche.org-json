@@ -252,8 +252,8 @@ final class SealedUnionMapper {
 							val = c.prims[currentIdx];
 						} else if (c.singleType == MetaPool.T_DOUBLE) {
 							val = Double.longBitsToDouble(c.prims[currentIdx]);
-						} else if (val == CompactMap.PRIMITIVE.LONG) val = c.prims[currentIdx];
-						else if (val == CompactMap.PRIMITIVE.DOUBLE) val = Double.longBitsToDouble(c.prims[currentIdx]);
+						} else if (val == PRIMITIVE.LONG) val = c.prims[currentIdx];
+						else if (val == PRIMITIVE.DOUBLE) val = Double.longBitsToDouble(c.prims[currentIdx]);
 
 						if (val instanceof final CompactMap m && c.compType != Object.class && c.compType != java.util.Map.class) {
 							final var childRaw = m.getRawData();
@@ -294,8 +294,8 @@ final class SealedUnionMapper {
 						val = c.prims[logicalIdx];
 					} else if (c.singleType == MetaPool.T_DOUBLE) {
 						val = Double.longBitsToDouble(c.prims[logicalIdx]);
-					} else if (val == CompactMap.PRIMITIVE.LONG) val = c.prims[logicalIdx];
-					else if (val == CompactMap.PRIMITIVE.DOUBLE) val = Double.longBitsToDouble(c.prims[logicalIdx]);
+					} else if (val == PRIMITIVE.LONG) val = c.prims[logicalIdx];
+					else if (val == PRIMITIVE.DOUBLE) val = Double.longBitsToDouble(c.prims[logicalIdx]);
 
 					c.idx += 2;
 

@@ -11,16 +11,6 @@ import java.util.Set;
 import java.util.function.BiConsumer;
 
 public final class CompactMap extends AbstractMap<String, Object> implements ContextBacked, JSONObject {
-	public static final class PRIMITIVE extends Number {
-		private static final long serialVersionUID = 1L;
-		private PRIMITIVE() { }
-		public static final PRIMITIVE LONG    = new PRIMITIVE();
-		public static final PRIMITIVE DOUBLE  = new PRIMITIVE();
-		@Override public int    intValue   () { throw JsonEngine.illegalStateException("Unresolved lazy primitive"); }
-		@Override public long   longValue  () { throw JsonEngine.illegalStateException("Unresolved lazy primitive"); }
-		@Override public float  floatValue () { throw JsonEngine.illegalStateException("Unresolved lazy primitive"); }
-		@Override public double doubleValue() { throw JsonEngine.illegalStateException("Unresolved lazy primitive"); }
-	}
 	private Object[]                  data;
 	private long  []                  prims;
 	private byte                      singleType;

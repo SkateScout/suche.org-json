@@ -112,7 +112,7 @@ public final class JsonOutputStream implements AutoCloseable {
 	private OutputStream out;
 	private final CtxStack  stack = new CtxStack();
 	private TimeFormat   timeFormat;
-	private boolean skipNull, skipFalse, skipEmpty;
+	private boolean skipNull, skipFalse, skipEmpty, skip0;
 	private int          fractionalLimit;
 	private static final Supplier<Object> ERROR = () -> { throw new IllegalStateException("Cyclic reference"); };
 	Supplier<Object> cycleMarker = ERROR;
@@ -248,7 +248,7 @@ public final class JsonOutputStream implements AutoCloseable {
 						if (nextVal != EXHAUSTED) break;
 					}
 				}
-				case TYPE_COMPACT_MAP,TYPE_POOLED_MAP -> {
+				case TYPE_POOLED_MAP -> {
 					final var array = (Object[]) c.obj;
 					final var length = c.len;
 					var index = c.idx;
@@ -257,20 +257,92 @@ public final class JsonOutputStream implements AutoCloseable {
 						final var val = transform(array[index++]);
 						if (isSkipped(val)) continue;
 						writeMapKey(key);
-						if (!writePrimitiveInline(val)) {
-							nextVal = val;
-							c.idx = index;
-							break;
+						if (!writePrimitiveInline(val)) { nextVal = val; c.idx = index; break; }
+					}
+				}
+				case TYPE_COMPACT_MAP -> {
+					final var cMap  = (CompactMap) c.obj;
+					final var data  = cMap.getRawData();
+					final var prims = cMap.prims();
+					final var sType = cMap.singleType();
+					mapLoop: while (c.idx < c.len) {
+						final var entryIdx = c.idx++;
+						final var key = data[entryIdx << 1];
+						if (key == null) continue mapLoop; // Überspringt gelöschte Keys
+						if (sType == MetaPool.T_LONG) {
+							final var v = prims[entryIdx];
+							if (v != 0 || !skip0) { writeMapKey(key); writeNumber((char)0, v); }
+							continue mapLoop;
+						}
+						if (sType == MetaPool.T_DOUBLE) {
+							writeMapKey(key);
+							writeDouble((char)0, Double.longBitsToDouble(prims[entryIdx]));
+							continue mapLoop;
+						}
+						// Mixed Mode
+						final var val = data[(entryIdx << 1) + 1];
+						if (val == PRIMITIVE.LONG) {
+							writeMapKey(key);
+							writeNumber((char)0, prims[entryIdx]);
+							continue mapLoop;
+						}
+						if (val == PRIMITIVE.DOUBLE) {
+							writeMapKey(key);
+							writeDouble((char)0, Double.longBitsToDouble(prims[entryIdx]));
+							continue mapLoop;
+						}
+						// Object Fallback
+						final var tVal = transform(val);
+						if (isSkipped(tVal)) continue mapLoop;
+						writeMapKey(key);
+						if (!writePrimitiveInline(tVal)) {
+							nextVal = tVal;
+							break mapLoop; // Bricht die while-Schleife ab, um nextVal zu verarbeiten
 						}
 					}
 				}
-				case TYPE_OBJ_ARRAY   -> {
-					final var array = (Object[]) c.obj;
-					while (c.idx < c.len) {
-						final var val = transform(array[c.idx++]);
-						if (isSkipped(val)) continue;
-						writeCommaIfNeeded();
-						if (!writePrimitiveInline(val)) { nextVal = val; break; }
+				case TYPE_OBJ_ARRAY -> {
+					if (c.obj instanceof final CompactList cList) {
+						final var data  = cList.getRawData();
+						final var prims = cList.prims();
+						final var sType = cList.singleType();
+						listLoop: while (c.idx < c.len) {
+							final var i = c.idx++;
+							if (sType == MetaPool.T_LONG) {
+								writeNumber(commaNeeded() ? ',' : 0, prims[i]);
+								continue listLoop;
+							}
+							if (sType == MetaPool.T_DOUBLE) {
+								writeDouble(commaNeeded() ? ',' : 0, Double.longBitsToDouble(prims[i]));
+								continue listLoop;
+							}
+							// Mixed Mode
+							var val = data[i];
+							if (val == PRIMITIVE.LONG) {
+								writeNumber(commaNeeded()?',':0, prims[i]);
+								continue listLoop;
+							}
+							if (val == PRIMITIVE.DOUBLE) {
+								writeDouble(commaNeeded()?',':0, Double.longBitsToDouble(prims[i]));
+								continue listLoop;
+							}
+							// Object Fallback
+							val = transform(val);
+							if (isSkipped(val)) continue listLoop;
+							writeCommaIfNeeded();
+							if (!writePrimitiveInline(val)) {
+								nextVal = val;
+								break listLoop;
+							}
+						}
+					} else {
+						final var array = (Object[]) c.obj;
+						while (c.idx < c.len) {
+							final var val = transform(array[c.idx++]);
+							if (isSkipped(val)) continue;
+							writeCommaIfNeeded();
+							if (!writePrimitiveInline(val)) { nextVal = val; break; }
+						}
 					}
 				}
 				case TYPE_LIST        -> {
@@ -639,9 +711,9 @@ public final class JsonOutputStream implements AutoCloseable {
 		return switch(v) {
 		case null                  -> skipNull;
 		case final String        t -> skipEmpty && t.isEmpty();
-		case final Integer       _ -> false;
-		case final Long          _ -> false;
-		case final Double        _ -> false;
+		case final Integer       t -> t!=0 || !skip0;
+		case final Long          t -> t!=0 || !skip0;
+		case final Double        t -> t!=0 || !skip0;
 		case final Boolean       t -> skipFalse && !t;
 		case final CompactList   t -> skipEmpty && t.isEmpty();
 		case final CompactMap    t -> skipEmpty && t.size() == 0;
@@ -708,8 +780,8 @@ public final class JsonOutputStream implements AutoCloseable {
 		case final String        t -> writeEscapedString(t);
 		case final Long          t -> writeNumber((char)0, t);					// Ensure 22
 		case final Double        t -> writeDouble((char)0, t);					// Ensure 28
-		case final CompactList   t -> push((byte)'[', TYPE_OBJ_ARRAY  , t.getRawData(), null, t.size());
-		case final CompactMap    t -> push((byte)'{', TYPE_COMPACT_MAP, t.getRawData(), null, t.size() * 2);
+		case final CompactList   t -> push((byte)'[', TYPE_OBJ_ARRAY  , t, null, t.size());
+		case final CompactMap    t -> push((byte)'{', TYPE_COMPACT_MAP, t, null, t.size() * 2);
 		case final Object[]      t -> push((byte)'[', TYPE_OBJ_ARRAY  , t, null, t.length);
 		// Record could have an interface for Map/Collection but direct access is faster
 		case final Record        t -> { final var parts = engine.ofComplex(t.getClass()); push((byte)'{', TYPE_RECORD, t, parts, parts.length); }

@@ -17,7 +17,6 @@ import java.util.Set;
 import java.util.function.IntFunction;
 import java.util.function.Supplier;
 
-import org.suche.json.CompactMap.PRIMITIVE;
 import org.suche.json.ConstructorGenerator.ObjectArrayFactory;
 import org.suche.json.MetaPool.ParseContext;
 
