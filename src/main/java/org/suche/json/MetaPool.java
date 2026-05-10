@@ -42,7 +42,7 @@ interface MetaPool {
 				if (newCap < minCapacity) newCap = minCapacity;
 				final var newObjs = s.takeArray(newCap);
 				System.arraycopy(objs, 0, newObjs, 0, objs.length);
-				s.returnArray(objs, objs.length);
+				s.returnArray(objs, this.cnt);
 				objs = newObjs;
 			}
 		}
