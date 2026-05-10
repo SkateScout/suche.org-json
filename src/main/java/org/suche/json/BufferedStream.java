@@ -225,6 +225,16 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		return internBytesSlow(src, start, len, isAscii, mask, idx);
 	}
 
+	// Perfekte Bit-Verteilung (Avalanche) für den 64-Bit Hash
+	static int finalizeHash(long hash64) {
+		hash64 ^= hash64 >>> 33;
+			hash64 *= 0xff51afd7ed558ccdL;
+			hash64 ^= hash64 >>> 33;
+			hash64 *= 0xc4ceb9fe1a85ec53L;
+			hash64 ^= hash64 >>> 33;
+			return (int) hash64;
+	}
+
 	private String internBytesSlow(final byte[] src, final int start, final int len, final boolean isAscii, int mask, final int idx) {
 		if (stringPoolSize >= maxCollectionSize) return newString(src, start, len, isAscii);
 		final var s = newString(src, start, len, isAscii);
@@ -240,8 +250,8 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 			for (var i = 0; i < oldK.length; i++) {
 				final var k = oldK[i];
 				if (k != null) {
-					var h = 0;
-					for (final byte b : k) h = 31 * h + b;
+					// KORREKTUR: Wir müssen exakt dieselbe Hash-Funktion wie beim Suchen verwenden!
+					final var h = computeHash(k, 0, k.length);
 					var newIdx = h & mask;
 					while (stringPoolKeys[newIdx] != null) newIdx = (newIdx + 1) & mask;
 					stringPoolKeys[newIdx] = k;
@@ -502,7 +512,7 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		}
 
 		// 64-Bit Hash auf 32-Bit Integer falten
-		return (int) (hash64 ^ (hash64 >>> 32));
+		return finalizeHash(hash64);
 	}
 
 	// SWAR Optimized
@@ -623,7 +633,7 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 				final var len = pos - start;
 				pos++;
 				// Fold the 64-bit hash state down to a 32-bit integer for the lookup tables
-				final var finalHash = (int) (hash64 ^ (hash64 >>> 32));
+				final var finalHash = finalizeHash(hash64);
 				final var idx = meta.prepareKey(finalHash, buf, start, len);
 				if (idx != -1) return idx;
 				final var key = internBytes(buf, start, len, finalHash, true);
@@ -672,7 +682,7 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 				final var len = pos - start;
 				pos++; // Das schließende '"' überspringen
 				// Falte den 64-Bit Hash elegant zu einem 32-Bit Integer (für Tabellen/Maps)
-				final var finalHash = (int) (hash64 ^ (hash64 >>> 32));
+				final var finalHash = finalizeHash(hash64);
 				final var idx = meta.prepareKey(finalHash, buf, start, len);
 				if (idx != -1) return idx;
 				final var key = internBytes(buf, start, len, finalHash, true);
@@ -685,7 +695,7 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 			pos += 8;
 		}
 		// Den errechneten 64-Bit Hash als 32-Bit Integer an den Slow-Path übergeben
-		final var passedHash = (int) (hash64 ^ (hash64 >>> 32));
+		final var passedHash = finalizeHash(hash64);
 		return parseStringKeyAsIndexSlow(context, meta, start, passedHash);
 	}
 
