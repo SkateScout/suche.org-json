@@ -35,7 +35,6 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 		this.singleType = pSingleType;
 		this.data       = pData;
 		this.prims      = pPrims;
-		for(var i=0;i < pData.length; i += 2) if(pData[i] == null) throw new IllegalArgumentException("Missing key "+i/2+" "+Arrays.toString(pData));
 	}
 
 	@Override

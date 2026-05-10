@@ -475,9 +475,9 @@ final class ObjectMeta {
 		if (index < 0) throw new IllegalStateException();
 		if (skipDefaultValues && v == 0L) return;
 		switch (metaType) {
-		case TYPE_INSTANTIATOR -> ((ParseContext) context).prims[index] = v;
-		case TYPE_MAP          -> primKeyValue(context, s, PRIMITIVE.LONG, v);
-		case TYPE_OBJ_ARRAY, TYPE_COLLECTION -> primIdxValue(context, s, PRIMITIVE.LONG, MetaPool.T_LONG, v, index);
+		case TYPE_INSTANTIATOR               -> ((ParseContext)context).prims[index] = v;
+		case TYPE_MAP                        -> ((ParseContext)context).primKeyValue(s, PRIMITIVE.LONG, v);
+		case TYPE_OBJ_ARRAY, TYPE_COLLECTION -> ((ParseContext)context).primIdxValue(s, PRIMITIVE.LONG, MetaPool.T_LONG, v, index);
 		case TYPE_SET          -> ((Collection<Object>) context).add(v);
 		default -> set(s, context, index, v);
 		}
@@ -489,9 +489,9 @@ final class ObjectMeta {
 		if (skipDefaultValues && v == 0.0) return;
 		final var bits = Double.doubleToRawLongBits(v);
 		switch (metaType) {
-		case TYPE_INSTANTIATOR -> ((ParseContext) context).prims[index] = bits;
-		case TYPE_MAP -> primKeyValue(context, s, PRIMITIVE.DOUBLE, bits);
-		case TYPE_OBJ_ARRAY, TYPE_COLLECTION -> primIdxValue(context, s, PRIMITIVE.DOUBLE, MetaPool.T_DOUBLE, bits, index);
+		case TYPE_INSTANTIATOR               -> ((ParseContext)context).prims[index] = bits;
+		case TYPE_MAP                        -> ((ParseContext)context).primKeyValue(s, PRIMITIVE.DOUBLE, bits);
+		case TYPE_OBJ_ARRAY, TYPE_COLLECTION -> ((ParseContext)context).primIdxValue(s, PRIMITIVE.DOUBLE, MetaPool.T_DOUBLE, bits, index);
 		case TYPE_SET -> ((Collection<Object>) context).add(v);
 		default -> set(s, context, index, v);
 		}
@@ -511,7 +511,7 @@ final class ObjectMeta {
 		case TYPE_INSTANTIATOR -> ((ParseContext) context).objs[index] = value;
 		case TYPE_MAP          -> {
 			final var ctx = (ParseContext) context;
-			if (ctx.objs == null || ctx.cnt + 2 > ctx.objs.length) ctx.ensureObjs(s, Math.max(ctx.cnt + 2, startSize(s.depth())));
+			if (ctx.objs == null || ctx.cnt + 2 > ctx.objs.length) ctx.ensureObjs(s, ctx.cnt + 2);
 			ctx.objs[ctx.cnt++] = ctx.currentKey;
 			ctx.objs[ctx.cnt++] = value;
 			ctx.currentKey = null;
@@ -527,30 +527,4 @@ final class ObjectMeta {
 		}
 	}
 
-	private void primKeyValue(final Object context, final MetaPool s, final PRIMITIVE type, final long value) {
-		final var ctx = (ParseContext) context;
-		final var valIdx = (ctx.cnt >> 1);
-		if (ctx.objs == null || ctx.cnt + 1 >= ctx.objs.length) ctx.ensureObjs(s, ctx.cnt + 2);
-		if (ctx.prims == null || valIdx >= ctx.prims.length) ctx.ensurePrims(s, valIdx + 1);
-		ctx.objs[ctx.cnt++] = ctx.currentKey;
-		ctx.objs[ctx.cnt++] = type;
-		ctx.prims[valIdx] = value;
-		ctx.currentKey = null;
-	}
-
-	private void primIdxValue(final Object context, final MetaPool s, final PRIMITIVE t, final byte type, final long value, final int index) {
-		final var ctx = (ParseContext) context;
-		if (ctx.singleType == MetaPool.T_EMPTY) ctx.singleType = type;
-		else if (ctx.singleType == MetaPool.T_LONG && type == MetaPool.T_DOUBLE) ctx.upgradeToDouble();
-		if (ctx.singleType == MetaPool.T_MIXED) {
-			ctx.ensureObjs(s, index + 1);
-			ctx.ensurePrims(s, index + 1);
-			ctx.objs[index] = t;
-			ctx.prims[index] = value;
-		} else {
-			ctx.ensurePrims(s, index + 1);
-			ctx.prims[index] = (ctx.singleType == MetaPool.T_DOUBLE && type == MetaPool.T_LONG) ? Double.doubleToRawLongBits(value) : value;
-		}
-		if (index >= ctx.cnt) ctx.cnt = index + 1;
-	}
 }

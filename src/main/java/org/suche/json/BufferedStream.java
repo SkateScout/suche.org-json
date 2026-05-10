@@ -32,6 +32,7 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 	byte[]                       strBuf          = new byte[1024];
 	private byte[][]             stringPoolKeys;
 	private String[]             stringPoolVals;
+	private int[]                stringPoolHashes;
 	private int                  stringPoolSize;
 	final byte[]                 buffer          = new byte[BUFFER_SIZE];
 	private boolean useFastString = true;
@@ -88,10 +89,11 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		this.depth             = -1;
 		onceInternalSize = 0;
 		if (cfg.enableDeduplication()) {
-			if (this.internPool     == null) {
-				this.internPool     = new java.util.HashMap<>();
-				this.stringPoolKeys = new byte  [STRING_POOL_SIZE][];
-				this.stringPoolVals = new String[STRING_POOL_SIZE];
+			if (this.internPool       == null) {
+				this.internPool       = new java.util.HashMap<>();
+				this.stringPoolKeys   = new byte  [STRING_POOL_SIZE][];
+				this.stringPoolVals   = new String[STRING_POOL_SIZE];
+				this.stringPoolHashes = new int   [STRING_POOL_SIZE];
 			} else {
 				this.internPool.clear();
 				java.util.Arrays.fill(this.stringPoolKeys, null);
@@ -185,7 +187,7 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 
 	@Override public void returnContext(final @NonNull ParseContext ctx) {
 		if (ctx.objs != null) {
-			returnArray(ctx.objs, ctx.cnt<<ctx.map);
+			returnArray(ctx.objs, ctx.cnt);
 			ctx.objs = null;
 		}
 		if (ctx.prims != null) {
@@ -219,43 +221,68 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		while (true) {
 			final var k = keys[idx];
 			if (k == null) break;
-			if (k.length == len && Arrays.equals(k, 0, len, src, start, start + len)) return stringPoolVals[idx];
+			// ZERO-ALLOCATION FAST-MISS: Integer-Vergleich VOR dem teuren Arrays.equals!
+			if (stringPoolHashes[idx] == hash && k.length == len && Arrays.equals(k, 0, len, src, start, start + len)) {
+				return stringPoolVals[idx];
+			}
 			idx = (idx + 1) & mask;
 		}
-		return internBytesSlow(src, start, len, isAscii, mask, idx);
+		// Hash wird direkt weitergegeben
+		return internBytesSlow(src, start, len, isAscii, mask, idx, hash);
 	}
 
 	// Perfekte Bit-Verteilung (Avalanche) für den 64-Bit Hash
 	static int finalizeHash(long hash64) {
 		hash64 ^= hash64 >>> 33;
-			hash64 *= 0xff51afd7ed558ccdL;
-			hash64 ^= hash64 >>> 33;
-			hash64 *= 0xc4ceb9fe1a85ec53L;
-			hash64 ^= hash64 >>> 33;
-			return (int) hash64;
+		hash64 *= 0xff51afd7ed558ccdL;
+		hash64 ^= hash64 >>> 33;
+		hash64 *= 0xc4ceb9fe1a85ec53L;
+		hash64 ^= hash64 >>> 33;
+		return (int) hash64;
 	}
 
-	private String internBytesSlow(final byte[] src, final int start, final int len, final boolean isAscii, int mask, final int idx) {
-		if (stringPoolSize >= maxCollectionSize) return newString(src, start, len, isAscii);
+	private String internBytesSlow(final byte[] src, final int start, final int len, final boolean isAscii, int mask, final int idx, final int hash) {
+		// --- DIE NOTBREMSE ---
+		if (stringPoolSize >= maxCollectionSize) {
+			// Der Pool ist "vergiftet" mit zu vielen einmaligen IDs.
+			// Wir flushen ihn, um Platz für wichtige, wiederkehrende Keys zu machen.
+			java.util.Arrays.fill(stringPoolKeys, null);
+			java.util.Arrays.fill(stringPoolVals, null);
+			java.util.Arrays.fill(stringPoolHashes, 0);
+			stringPoolSize = 0;
+			// Wir berechnen den Index für das GANZ leere Array neu
+			mask = stringPoolKeys.length - 1;
+		}
+
 		final var s = newString(src, start, len, isAscii);
-		stringPoolKeys[idx] = java.util.Arrays.copyOfRange(src, start, start + len);
-		stringPoolVals[idx] = s;
+
+		// Falls wir gerade geflusht haben, müssen wir den neuen Slot suchen
+		var insertIdx = idx;
+		if (stringPoolSize == 0) insertIdx = hash & mask;
+
+		stringPoolKeys[insertIdx]   = java.util.Arrays.copyOfRange(src, start, start + len);
+		stringPoolVals[insertIdx]   = s;
+		stringPoolHashes[insertIdx] = hash;
 
 		if (++stringPoolSize > stringPoolKeys.length * 0.75f) {
 			final var oldK = stringPoolKeys;
 			final var oldV = stringPoolVals;
-			stringPoolKeys = new byte[oldK.length << 1][];
-			stringPoolVals = new String[oldV.length << 1];
+			final var oldH = stringPoolHashes;
+
+			stringPoolKeys   = new byte[oldK.length << 1][];
+			stringPoolVals   = new String[oldV.length << 1];
+			stringPoolHashes = new int [oldH.length << 1];
 			mask = stringPoolKeys.length - 1;
+
 			for (var i = 0; i < oldK.length; i++) {
 				final var k = oldK[i];
 				if (k != null) {
-					// KORREKTUR: Wir müssen exakt dieselbe Hash-Funktion wie beim Suchen verwenden!
-					final var h = computeHash(k, 0, k.length);
+					final var h = oldH[i];
 					var newIdx = h & mask;
 					while (stringPoolKeys[newIdx] != null) newIdx = (newIdx + 1) & mask;
-					stringPoolKeys[newIdx] = k;
-					stringPoolVals[newIdx] = oldV[i];
+					stringPoolKeys[newIdx]   = k;
+					stringPoolVals[newIdx]   = oldV[i];
+					stringPoolHashes[newIdx] = h;
 				}
 			}
 		}
