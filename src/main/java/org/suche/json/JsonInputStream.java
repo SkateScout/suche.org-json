@@ -126,7 +126,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				}
 			}
 			case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9' -> {
-				parseNumericPrimitive(curMeta, curObj, curIdx, null);
+				parseNumericPrimitive(curMeta, curObj, curIdx, curTypeDesc);
 				curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
 				consumeCommaIfPresent();
 			}
@@ -281,10 +281,8 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		if (b == '[' && targetMeta != null && (targetMeta.cacheIndex == ObjectMeta.IDX_MAP || targetMeta.cacheIndex == ObjectMeta.IDX_GENERIC)) {
 			targetMeta = metaCache[ObjectMeta.IDX_COLLECTION];
 		}
-
 		final var isArray = (b == '[');
 		final var startTypeDesc = EngineImpl.createTypeDesc(isArray, false, targetMeta != null ? targetMeta.cacheIndex : 0);
-
 		if (this.maxRecursiveDepth <= 0) {
 			if (b == '{') pos++;
 			return (T)runStateEngine(startTypeDesc, targetMeta != null ? targetMeta.start(this) : null, targetMeta, isArray ? 0 : -1);
@@ -297,8 +295,19 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			pos++;
 			return (T)parseArrayRecursive(targetMeta != null ? targetMeta : metaCache[ObjectMeta.IDX_COLLECTION], 0);
 		}
-		return (T) parsePrimitiveInline(b, targetType);
+		return (T) parsePrimitiveInline(b, startTypeDesc);
 	}
+
+	private Object parsePrimitiveInline(final byte b, final long typeDesc) throws IOException {
+		return switch (b) {
+		case '"' -> parseStringValue();
+		case 't' -> parseTrue();
+		case 'f' -> parseFalse();
+		case 'n' -> parseNull();
+		default  -> parseNumber(typeDesc);
+		};
+	}
+
 
 	@SuppressWarnings("unchecked")
 	public <T> T[] readRecords(final Class<T> targetClass) throws IOException {
@@ -368,16 +377,6 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 	// RECURSIVE FAST-PATH ENGINE (Mit Hybrid-Fallback zur State-Machine)
 	// ========================================================================
 
-	private Object parsePrimitiveInline(final byte b, final Class<?> type) throws IOException {
-		return switch (b) {
-		case '"' -> parseStringValue();
-		case 't' -> parseTrue();
-		case 'f' -> parseFalse();
-		case 'n' -> parseNull();
-		default  -> parseNumber(type);
-		};
-	}
-
 	private Object parseRecordRecursive(final ObjectMeta meta, final int recursionDeep) throws Throwable {
 		final var context = meta.start(this);
 		final var limitDepth = this.maxDepth;
@@ -397,7 +396,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				b = buffer[pos];
 			}
 			switch (b) {
-			case '-','0','1','2','3','4','5','6','7','8','9' -> parseNumericPrimitive(meta, context, targetIdx, null);
+			case '-','0','1','2','3','4','5','6','7','8','9' -> parseNumericPrimitive(meta, context, targetIdx, meta.fieldDescriptor(targetIdx));
 			case 'n' -> fillNullValue(meta.fieldDescriptor(targetIdx), context, targetIdx, meta);
 			case 't' -> meta.set(this, context, targetIdx, parseTrue());
 			case 'f' -> meta.set(this, context, targetIdx, parseFalse());
@@ -461,7 +460,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			case '-','0','1','2','3','4','5','6','7','8','9' -> {
 				if(state==1) throwInvalid("Komma or Closeing breaket instead of NUMERIC expected");
 				state = 1;
-				parseNumericPrimitive(meta, context, idx, null);
+				parseNumericPrimitive(meta, context, idx, childDesc);
 			}
 			case ',' -> {
 				idx++;

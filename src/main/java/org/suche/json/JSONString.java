@@ -65,7 +65,7 @@ final class JSONString {
 			// Fallback to Vanilla (always works)
 			else                                selected = JSONStringVanilla.INSTANCE;
 		}
-		System.out.println("\n\n\nJSONString using "+selected.getClass().getCanonicalName()+"\n\n\n");
+		// System.out.println("\n\n\nJSONString using "+selected.getClass().getCanonicalName()+"\n\n\n");
 		PROVIDER = selected;
 	}
 

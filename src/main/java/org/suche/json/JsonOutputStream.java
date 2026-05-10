@@ -257,7 +257,7 @@ public final class JsonOutputStream implements AutoCloseable {
 						final var val = transform(array[index++]);
 						if (isSkipped(val)) continue;
 						writeMapKey(key);
-						if (!writePrimitiveInline(val)) { nextVal = val; c.idx = index; break; }
+						if (!writePrimitiveInline((char)0, val)) { nextVal = val; c.idx = index; break; }
 					}
 				}
 				case TYPE_COMPACT_MAP -> {
@@ -282,8 +282,8 @@ public final class JsonOutputStream implements AutoCloseable {
 						// Mixed Mode
 						final var val = data[(entryIdx << 1) + 1];
 						if (val == PRIMITIVE.LONG) {
-							writeMapKey(key);
-							writeNumber((char)0, prims[entryIdx]);
+							final var v = prims[entryIdx];
+							if (v != 0 || !skip0) { writeMapKey(key); writeNumber((char)0, v); }
 							continue mapLoop;
 						}
 						if (val == PRIMITIVE.DOUBLE) {
@@ -295,7 +295,7 @@ public final class JsonOutputStream implements AutoCloseable {
 						final var tVal = transform(val);
 						if (isSkipped(tVal)) continue mapLoop;
 						writeMapKey(key);
-						if (!writePrimitiveInline(tVal)) {
+						if (!writePrimitiveInline((char)0, tVal)) {
 							nextVal = tVal;
 							break mapLoop; // Bricht die while-Schleife ab, um nextVal zu verarbeiten
 						}
@@ -329,8 +329,7 @@ public final class JsonOutputStream implements AutoCloseable {
 							// Object Fallback
 							val = transform(val);
 							if (isSkipped(val)) continue listLoop;
-							writeCommaIfNeeded();
-							if (!writePrimitiveInline(val)) {
+							if (!writePrimitiveInline(commaNeeded()?',':0, val)) {
 								nextVal = val;
 								break listLoop;
 							}
@@ -340,8 +339,7 @@ public final class JsonOutputStream implements AutoCloseable {
 						while (c.idx < c.len) {
 							final var val = transform(array[c.idx++]);
 							if (isSkipped(val)) continue;
-							writeCommaIfNeeded();
-							if (!writePrimitiveInline(val)) { nextVal = val; break; }
+							if (!writePrimitiveInline(commaNeeded()?',':0, val)) { nextVal = val; break; }
 						}
 					}
 				}
@@ -351,8 +349,7 @@ public final class JsonOutputStream implements AutoCloseable {
 					while (c.idx < c.len) {
 						final var val = transform(list.get(c.idx++));
 						if (isSkipped(val)) continue;
-						writeCommaIfNeeded();
-						if (!writePrimitiveInline(val)) { nextVal = val; break; }
+						if (!writePrimitiveInline(commaNeeded()?',':0, val)) { nextVal = val; break; }
 					}
 				}
 				case TYPE_COL         -> {
@@ -360,19 +357,15 @@ public final class JsonOutputStream implements AutoCloseable {
 					while (it.hasNext()) {
 						c.idx++;
 						final Object val = it.next();
-						if (!isSkipped(val)) {
-							writeCommaIfNeeded();
-							nextVal = val;
-							break;
-						}
+						if (isSkipped(val)) continue;
+						if (!writePrimitiveInline(commaNeeded()?',':0, val)) { nextVal = val; break; }
 					}
 				}
 				case TYPE_ARRAY       -> {
 					while (c.idx < c.len) {
 						final var val = transform(Array.get(c.obj, c.idx++));
 						if (isSkipped(val)) continue;
-						writeCommaIfNeeded();
-						if (!writePrimitiveInline(val)) { nextVal = val; break; }
+						if (!writePrimitiveInline(commaNeeded()?',':0, val)) { nextVal = val; break; }
 					}
 				}
 				}
@@ -472,7 +465,12 @@ public final class JsonOutputStream implements AutoCloseable {
 			for (var i = 0; i < l; i++) write((byte) s.charAt(i));
 		}
 	}
-	void writeBoolean(final boolean b) throws IOException { write(b ? TRUE_BYTES : FALSE_BYTES); }
+
+	void writeBoolean(final boolean b) throws IOException {
+		if (pos + 5 > buffer.length) flushBuffer();
+		if(b) { System.arraycopy(TRUE_BYTES , 0, buffer, 1, 4); pos+=5; }
+		else  { System.arraycopy(FALSE_BYTES, 0, buffer, 1, 5); pos+=6; }
+	}
 
 	void writeEscapedString(final String s) throws IOException {
 		final var sLen = s.length();
@@ -711,9 +709,9 @@ public final class JsonOutputStream implements AutoCloseable {
 		return switch(v) {
 		case null                  -> skipNull;
 		case final String        t -> skipEmpty && t.isEmpty();
-		case final Integer       t -> t!=0 || !skip0;
-		case final Long          t -> t!=0 || !skip0;
-		case final Double        t -> t!=0 || !skip0;
+		case final Integer       t -> t==0 && !skip0;
+		case final Long          t -> t==0 && !skip0;
+		case final Double        t -> t==0 && !skip0;
 		case final Boolean       t -> skipFalse && !t;
 		case final CompactList   t -> skipEmpty && t.isEmpty();
 		case final CompactMap    t -> skipEmpty && t.size() == 0;
@@ -725,13 +723,18 @@ public final class JsonOutputStream implements AutoCloseable {
 		};
 	}
 
-	private boolean writePrimitiveInline(final Object val) throws IOException {
+	private boolean writePrimitiveInline(final char prefix, final Object val) throws IOException {
+		if (pos + 64 > buffer.length) flushBuffer(); // Safe even for number
+		if(prefix != 0) buffer[pos++] = (byte)prefix;
 		switch(val) {
-		case null            -> write(NULL_BYTES);
-		case final String  t -> writeEscapedString (t);
+		case null            -> { System.arraycopy(NULL_BYTES, 0, buffer, pos, 4); pos+=4; }
+		case final String  t -> { writeEscapedString(t); }
 		case final Integer t -> writeNumber       ((char)0, t);
 		case final Long    t -> writeNumber       ((char)0, t);
-		case final Boolean t -> writeBoolean      (t);
+		case final Boolean t -> {
+			if(t) { System.arraycopy(TRUE_BYTES , 0, buffer, 1, 4); pos+=5; }
+			else  { System.arraycopy(FALSE_BYTES, 0, buffer, 1, 5); pos+=6; }
+		}
 		case final Double  t -> writeDouble       ((char)0, t);
 		default              -> { return false; }
 		}

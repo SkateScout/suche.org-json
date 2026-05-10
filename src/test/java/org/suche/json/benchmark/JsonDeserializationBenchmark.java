@@ -50,7 +50,9 @@ public class JsonDeserializationBenchmark {
 	private Class<?> dest;
 	private byte[] jsonData;
 
-	@Param({"canada.json","citm_catalog.json", "twitter.json"})
+	@Param({"canada.json"
+		,"citm_catalog.json", "twitter.json"
+	})
 	public String fileName;
 
 	@Setup(Level.Trial)
@@ -83,20 +85,21 @@ public class JsonDeserializationBenchmark {
 		}
 	}
 
-	@Benchmark
+	// @Benchmark
 	@Fork(value = 1, jvmArgsAppend = {"--add-opens", "java.base/java.lang=ALL-UNNAMED"})
 	public void benchmarkMyEngine_AddOpens(final Blackhole bh, final EngineState state) throws Throwable {
 		try (var is = state.myEngine.jsonInputStream(new ByteArrayInputStream(jsonData))) {
 			bh.consume(is.readObject(dest));
 		}
 	}
-	@Benchmark
+
+	// @Benchmark
 	public void benchmarkJackson(final Blackhole bh) throws Exception {
 		final var parsedTree = jacksonMapper.readValue(jsonData, dest);
 		bh.consume(parsedTree);
 	}
 
-	@Benchmark
+	// @Benchmark
 	public void benchmarkFastjson2(final Blackhole bh) {
 		final var parsedTree = JSON.parseObject(jsonData, dest);
 		bh.consume(parsedTree);

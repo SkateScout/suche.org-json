@@ -274,180 +274,70 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		return existing != null ? existing : value;
 	}
 
-	private long    numberVal  = 0L;
-	private int     totalExp   = 0;
-	private boolean isNegative = false;
-	private boolean isFloat    = false;
-
-	private final void parseNumberCore() throws IOException {
-		var lIntDigitCount = 0;
-		var lFracDigits    = 0;
-		var lNumberVal     = 0L;
-		var lIsNegative    = false;
-		var lParsedExp     = 0;
-		var lVirtualExp    = 0;
-		var lExpNeg        = false;
-		// 1. Initial bounds check and sign
-		ensure(64);
-		final var limitSafe = limit; // Local copy for performance
-		if (pos < limitSafe && buffer[pos] == '-') {
-			lIsNegative = true;
-			pos++;
-		}
-		// Integer Part (Before the dot)
-		while (pos < limitSafe) {
-			final var d = buffer[pos] - '0';
-			// Unsigned check: catches everything outside '0'-'9' (including '.' and 'e')
-			if (d < 0 || d > 9) break;
-			if (++lIntDigitCount <= 18) {
-				lNumberVal = lNumberVal * 10L + d;
-			} else {
-				// Prevent long overflow, shift the virtual decimal point
-				lVirtualExp++;
-			}
-			pos++;
-		}
-		if (lIntDigitCount == 0) throwInvalid("Missing integer digits");
-		// Fractional Part (After the dot)
-		if (pos < limitSafe && buffer[pos] == '.') {
-			pos++; // Skip the dot
-			while (pos < limitSafe) {
-				final var d = buffer[pos] - '0';
-				if (d < 0 || d > 9) break;
-				if (lIntDigitCount + lFracDigits < 18) {
-					lFracDigits++;
-					lNumberVal = lNumberVal * 10L + d;
-				}
-				// Extra digits beyond 18 total significance are silently ignored
-				pos++;
-			}
-			if (lFracDigits == 0 && lIntDigitCount <= 18) {
-				// Edge case: "123." without trailing digits
-				throwInvalid("Missing fractional digits");
-			}
-		}
-
-		// Exponent Part ('e' or 'E')
-		if (pos < limitSafe && (buffer[pos] == 'e' || buffer[pos] == 'E')) {
-			pos++; // Skip 'e'
-			if (pos < limitSafe) {
-				final var sign = buffer[pos];
-				if (sign == '-') { lExpNeg = true; pos++; }
-				else if (sign == '+') { pos++; }
-			}
-			var expDigits = 0;
-			while (pos < limitSafe) {
-				final var d = buffer[pos] - '0';
-				if (d < 0 || d > 9) break;
-				lParsedExp = lParsedExp * 10 + d;
-				expDigits++;
-				pos++;
-			}
-			if (expDigits == 0) throwInvalid("Missing exponent digits");
-		}
-		this.totalExp = (lExpNeg ? -lParsedExp : lParsedExp) + lVirtualExp - lFracDigits;
-
-		// Normalize: Fast-path for positive exponents.
-		// If the padded number securely fits into 18 digits, apply the exponent directly.
-		final var sigDigits = lIntDigitCount + lFracDigits;
-		if (this.totalExp > 0 && sigDigits + this.totalExp <= 18) {
-			lNumberVal *= POW10_L[this.totalExp];
-			this.totalExp = 0; // Exponent is completely absorbed
-		}
-
-		this.numberVal  = lNumberVal;
-		this.isNegative = lIsNegative;
-
-		// The value is strictly a float ONLY if an unresolved exponent remains
-		this.isFloat    = (this.totalExp != 0);
-	}
-
-	// ---------------------------------------------------------
-	// Math calculation helpers to prevent double-parsing
-	// ---------------------------------------------------------
-
-	private double computeDoubleValue() {
-		double d = numberVal;
-		if (totalExp != 0) {
-			if (totalExp > 0 && totalExp < POW10.length) {
-				d *= POW10[totalExp];
-			} else if (totalExp < 0 && -totalExp < POW10.length) {
-				d /= POW10[-totalExp];
-			} else {
-				d *= Math.pow(10, totalExp);
-			}
-		}
-		return isNegative ? -d : d;
-	}
-
-	private long computeLongValue() {
-		var v = numberVal;
-		if (totalExp != 0) {
-			// Using POW10_L avoids double-to-long casting overhead
-			if (totalExp > 0 && totalExp < POW10_L.length) {
-				v *= POW10_L[totalExp];
-			} else if (totalExp < 0 && -totalExp < POW10_L.length) {
-				v /= POW10_L[-totalExp];
-			} else {
-				v = (long) (v * Math.pow(10, totalExp));
-			}
-		}
-		return isNegative ? -v : v;
-	}
+	private final NumberParser numberParser = new NumberParser();
 
 	// ---------------------------------------------------------
 	// Public parser methods
 	// ---------------------------------------------------------
 
 	final double parseDoublePrimitive() throws IOException {
-		parseNumberCore();
-		return computeDoubleValue();
+		ensure(64);
+		pos = numberParser.parseNumberCore(buffer, pos, limit);
+		return numberParser.computeDoubleValue();
 	}
 
 	final long parseLongPrimitive() throws IOException {
-		parseNumberCore();
-		return computeLongValue();
+		ensure(64);
+		pos = numberParser.parseNumberCore(buffer, pos, limit);
+		return numberParser.computeLongValue();
 	}
 
-	final Object parseNumber(final Class<?> targetType) throws IOException {
-		// Parse the digits from the buffer exactly ONCE
-		parseNumberCore();
+	final Object parseNumber(final long typeDesc) throws IOException {
+		ensure(64);
+		pos = numberParser.parseNumberCore(buffer, pos, limit);
 
-		if (targetType == boolean.class || targetType == Boolean.class) {
-			return numberVal != 0 ? Boolean.TRUE : Boolean.FALSE;
-		}
+		final var isPrimitive = (typeDesc >= 0L) && ((typeDesc & 1L) != 0L);
+		final var metaId = typeDesc >= 0L ? (int)(typeDesc >>> 1) : ObjectMeta.IDX_GENERIC;
 
-		final var isGeneric = targetType == Object.class || targetType == Number.class;
+		if (isPrimitive && metaId == ObjectMeta.PRIM_BOOLEAN) return numberParser.numberVal() != 0 ? Boolean.TRUE : Boolean.FALSE;
 
-		// Handle floating point targets and explicit JSON floats
-		if (isFloat || targetType == double.class || targetType == Double.class || targetType == float.class || targetType == Float.class) {
-			final var d = computeDoubleValue();
-			if (targetType == float.class || targetType == Float.class) return (float) d;
+		final var wantFloat = isPrimitive ? (metaId == ObjectMeta.PRIM_DOUBLE || metaId == ObjectMeta.PRIM_FLOAT) : numberParser.isFloat();
+
+		if (wantFloat || numberParser.isFloat()) {
+			final var d = numberParser.computeDoubleValue();
+			if (isPrimitive && metaId == ObjectMeta.PRIM_FLOAT) return (float) d;
 			return d;
 		}
 
-		// Handle integer targets
-		final var v = computeLongValue();
+		final var v = numberParser.computeLongValue();
+		// Auto-Downcast für Generics oder explizite INT Anforderung
+		final var wantInt = isPrimitive ? (metaId == ObjectMeta.PRIM_INT) : (v >= Integer.MIN_VALUE && v <= Integer.MAX_VALUE);
 
-		// Auto-downcast to integer if it safely fits into 32-bit limits
-		final var wantInt = targetType == int.class || targetType == Integer.class || (isGeneric && v >= Integer.MIN_VALUE && v <= Integer.MAX_VALUE);
 		if (wantInt) return (int) v;
-
 		return v;
 	}
 
-	// TODO replace targetType with descId this allow easy check for primitve via bit op
-	final void parseNumericPrimitive(final ObjectMeta meta, final Object ctx, final int targetIdx, final Class<?> targetType) throws IOException {
-		parseNumberCore();
-		if(null == targetType) { // TODO Marker that our Map Implementation can handle both primitive types
-			if(isFloat) meta.setDouble(this, ctx, targetIdx, computeDoubleValue());
-			else        meta.setLong  (this, ctx, targetIdx, computeLongValue  ());
-		} else if (targetType == double.class || targetType == float.class || (isFloat && targetType != long.class && targetType != int.class)) {
-			meta.setDouble(this, ctx, targetIdx, computeDoubleValue());
-		} else {
-			meta.setLong(this, ctx, targetIdx, computeLongValue());
-		}
+	final void parseNumericPrimitive(final ObjectMeta meta, final Object ctx, final int targetIdx, final long typeDesc) throws IOException {
+		ensure(64);
+		pos = numberParser.parseNumberCore(buffer, pos, limit);
+
+		// Fast-Path mit Bit-Operation (Prüfung auf Primitiv-Flag auf Bit 0)
+		if (typeDesc >= 0L && (typeDesc & 1L) != 0L) {
+			final var primId = (int) (typeDesc >>> 1);
+			if (primId == ObjectMeta.PRIM_DOUBLE || primId == ObjectMeta.PRIM_FLOAT ||
+					(numberParser.isFloat() && primId != ObjectMeta.PRIM_LONG && primId != ObjectMeta.PRIM_INT)) {
+				meta.setDouble(this, ctx, targetIdx, numberParser.computeDoubleValue());
+			} else {
+				meta.setLong(this, ctx, targetIdx, numberParser.computeLongValue());
+			}
+		} else // Generics, Wrapper (Long, Double), Map, Object -> Entscheidung anhand des echten JSON-Werts
+			if (numberParser.isFloat()) {
+				meta.setDouble(this, ctx, targetIdx, numberParser.computeDoubleValue());
+			} else {
+				meta.setLong(this, ctx, targetIdx, numberParser.computeLongValue());
+			}
 	}
+
 
 	final Object parseNull() throws IOException {
 		if(limit - pos < 4) ensure(4);
