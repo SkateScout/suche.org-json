@@ -297,11 +297,12 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		if (remaining > 0 && pos > 0) System.arraycopy(buffer, pos, buffer, 0, remaining);
 		pos = 0;
 		limit = remaining;
-		while (limit < n) {
-			final var count = in.read(buffer, limit, buffer.length - limit);
-			if (count == -1) break;
-			limit += count;
-		}
+		if(in != null) // Else buffered only
+			while (limit < n) {
+				final var count = in.read(buffer, limit, buffer.length - limit);
+				if (count == -1) break;
+				limit += count;
+			}
 	}
 
 	@Override
@@ -456,26 +457,24 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 	private int parseHex4() throws IOException {
 		if (limit - pos < 4) ensure(4);
 		if (limit - pos < 4) throwInvalid("Unexpected end in HEX Escape");
-		// Lade alle 4 ASCII-Hex-Zeichen in ein 32-Bit Register
 		final var word = (int) JSONStringAddOpens.INT_VIEW.get(buffer, pos);
 		pos += 4;
-		// --- 1. BRANCHLESS SWAR VALIDATION ---
-		final var word_uc = word & 0xDFDFDFDF; // Alle Buchstaben (a-f) zu Uppercase (A-F) zwingen
-		// Maske 1: Setzt das 0x80-Bit für alle Bytes, die NICHT zwischen '0' und '9' liegen
-		final var not_num   = (word_uc + 0x46464646) | (word_uc - 0x30303030);
-		// Maske 2: Setzt das 0x80-Bit für alle Bytes, die NICHT zwischen 'A' und 'F' liegen
-		final var not_alpha = (word_uc + 0x39393939) | (word_uc - 0x41414141);
-		// Wenn ein Byte WEDER Zahl NOCH Buchstabe ist, hat es in BEIDEN Masken das 0x80 Bit!
-		if ((not_num & not_alpha & 0x80808080) != 0) throwInvalid("Invalid HEX escape sequence");
-		// --- 2. SWAR DECODING ---
-		// Da word_uc jetzt garantiert sauberes Hex ist, dekodieren wir:
-		final var mask = word_uc & 0x40404040; // 0x40 für A-F, 0x00 für 0-9
-		var val = word_uc - 0x30303030;        // '0'-'9' wird zu 0-9, 'A'-'F' wird zu 17-22
-		val -= ((mask >>> 6) * 7);             // Bei 'A'-'F' ziehen wir noch 7 ab -> 10-15
-		// Little Endian Byte-Swap
-		val = Integer.reverseBytes(val);
-		// Komprimierung: Schiebt die Nibbles an die korrekten Positionen im 16-Bit Short
-		return ((val >>> 12) & 0xF000) | ((val >>> 8) & 0x0F00) | ((val >>> 4) & 0x00F0) | (val & 0x000F);
+		// Vorab-Check: Wenn irgendein Byte > 127 ist, ist es kein gültiges ASCII-Hex.
+		if ((word & 0x80808080) != 0) throwInvalid("Invalid HEX escape sequence: " + java.util.HexFormat.of().formatHex(buffer, pos - 4, pos));
+		// check '0'-'9' (0x30 bis 0x39)
+		final var is_num   = (word + 0x50505050) & ~(word + 0x46464646);
+		// check 'A'-'F' (0x41 bis 0x46)
+		final var is_upper = (word + 0x3F3F3F3F) & ~(word + 0x39393939);
+		// check 'a'-'f' (0x61 bis 0x66)
+		final var is_lower = (word + 0x1F1F1F1F) & ~(word + 0x19191919);
+		// Jedes der 4 Bytes MUSS in genau einer der drei Gruppen das 0x80-Bit gesetzt haben.
+		if (((is_num | is_upper | is_lower) & 0x80808080) != 0x80808080) throwInvalid("Invalid HEX escape sequence: " + java.util.HexFormat.of().formatHex(buffer, pos - 4, pos));
+		final var letterMask = word & 0x40404040;
+		final var add9 = (letterMask >>> 6) * 9;
+		final var val0 = (word & 0x0F0F0F0F) + add9;
+		final var val1 = Integer.reverseBytes(val0);
+		final var val2 = (val1 | (val1 >>> 4)) & 0x00FF00FF;
+		return (val2 | (val2 >>> 8)) & 0xFFFF;
 	}
 
 	void parseU(int dstLen) throws IOException {
@@ -543,119 +542,96 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 	}
 
 	// SWAR Optimized
-	private String parseStringSlow(final int start, final int lPos, boolean isAscii) throws IOException {
-		var parsedLen = lPos - start;
-		if (parsedLen > strBuf.length) expandStrBuf(parsedLen);
-		if (parsedLen > 0) System.arraycopy(buffer, start, strBuf, 0, parsedLen);
-		this.pos = lPos;
-
-		Outer: while (true) {
-			final var safeLimit = limit - 8;
-			var isEscape = false;
-			var escChar  = -1; // -1 bedeutet: Muss aus dem RAM geladen werden
-
-			// --- 1. SWAR Fast-Copy Loop ---
-			var word     = 0L;
-			var has      = 0L;
-			var hasQuote = 0L;
-
-			while (pos <= safeLimit) {
-				word = (long) JSONString.LONG_VIEW.get(buffer, pos);
-				if ((word & JSONString.NON_ASCII_PATTERN) != 0) isAscii = false;
-				final var quoteXor     = word ^ JSONString.QUOTE_PATTERN;
-				final var backslashXor = word ^ JSONString.BACKSLASH_PATTERN;
-				hasQuote               = (quoteXor     - JSONString.SWARN) & ~quoteXor;
-				final var hasBackslash = (backslashXor - JSONString.SWARN) & ~backslashXor;
-				has                    = (hasQuote | hasBackslash) & JSONString.NON_ASCII_PATTERN;
-				if (has != 0) break; // Treffer! Variablen bleiben für Auswertung erhalten
-				if (parsedLen + 8 > strBuf.length) expandStrBuf(parsedLen + 8);
-				JSONString.LONG_VIEW.set(strBuf, parsedLen, word);
-				parsedLen += 8;
-				pos       += 8;
-			}
-
+	final String parseStringValue() throws IOException {
+		pos++; // Skip the opening '"'
+		final var start     = pos;
+		final var safeLimit = limit - 8;
+		final var buf = buffer;
+		while (pos <= safeLimit) { // SWAR fast scan
+			// Load 8 bytes at once
+			final var word = (long) JSONString.LONG_VIEW.get(buf, pos);
+			if ((word & JSONString.NON_ASCII_PATTERN) != 0) break; // If byte with bit 7 set, switch to slow scanning
+			final var quoteXor     = word ^ JSONString.QUOTE_PATTERN;
+			final var backslashXor = word ^ JSONString.BACKSLASH_PATTERN;
+			final var hasQuote     = (quoteXor     - JSONString.SWARN) & ~quoteXor;
+			final var hasBackslash = (backslashXor - JSONString.SWARN) & ~backslashXor;
+			final var hasCtrl      = (word - 0x2020202020202020L) & ~word;
+			final var has = (hasQuote | hasBackslash | hasCtrl) & JSONString.NON_ASCII_PATTERN;
 			if (has != 0) {
-				final var match  = Long.lowestOneBit(has);
+				// A match exists! Find out which character came first.
+				final var match = Long.lowestOneBit(has);
+				if ((hasCtrl & match) != 0) throwInvalid("Unescaped control character in string");
+				// Determine the exact byte offset (0 to 7)
 				final var offset = (Long.numberOfTrailingZeros(match) >>> 3);
-				if (parsedLen + offset > strBuf.length) expandStrBuf(parsedLen + offset);
-				JSONString.LONG_VIEW.set(strBuf, parsedLen, word);
-				parsedLen += offset;
-				pos       += offset;
+				pos += offset;
 				if ((hasQuote & match) != 0) {
-					pos++; // Schließendes Quote überspringen
-					break Outer; // String komplett zu Ende!
+					final var len = pos - start;
+					pos++; // Skip the closing '"'
+					// Only ISO-8859-1 is used to avoid JDK UTF-8 conversion.
+					return newString(buffer, start, len, true);
 				}
-				// Es MUSS ein Backslash sein
-				pos++; // Backslash überspringen
-				isEscape = true;
-				// --- DEIN REGISTER-LOOKAHEAD ---
-				if (offset < 7) {
-					// Das Escape-Zeichen ist noch im Register!
-					// Extrahieren via Shift (0 CPU-Latenz, 0 RAM-Zugriffe)
-					escChar = (int) ((word >>> ((offset + 1) << 3)) & 0xFFL);
-					pos++; // Wir haben das Zeichen quasi "gelesen"
-				}
+				break; // A backslash was found, jump to slow path
 			}
-
-			// --- 2. SCALAR FALLBACK ---
-			if (!isEscape) {
-				while (pos < limit) {
-					final var b = buffer[pos];
-					if (b < 0) isAscii = false;
-					if (b == '"') { pos++; break Outer; }
-					if (b == '\\') { pos++; isEscape = true; break; }
-					if (parsedLen == strBuf.length) expandStrBuf(parsedLen + 1);
-					strBuf[parsedLen++] = b;
-					pos++;
-				}
-			}
-
-			// --- 3. REFILL ODER ESCAPE HANDLING ---
-			if (!isEscape) {
-				// Am Ende des Puffers, ohne Escape -> Nachladen
-				ensure(1);
-				if (pos >= limit) throwInvalid("Unexpected end of stream inside string");
-				continue Outer;
-			}
-
-			// Escape auflösen
-			var esc = escChar;
-			if (esc == -1) {
-				// Boundary-Case: Der Backslash war exakt das 8. Byte im Wort.
-				// Das nächste Zeichen muss klassisch aus dem Buffer geladen werden.
-				if (pos >= limit) { ensure(1); if (pos >= limit) throwInvalid("Unexpected end of stream after escape"); }
-				esc = buffer[pos++];
-			}
-
-			switch (esc) {
-			case '"', '\\', '/' -> { }
-			case 'b' -> esc = '\b';
-			case 'f' -> esc = '\f';
-			case 'n' -> esc = '\n';
-			case 'r' -> esc = '\r';
-			case 't' -> esc = '\t';
-			case 'u' -> {
-				parseU(parsedLen);
-				parsedLen  = escapedParsedLen;
-				isAscii   &= escapedIsAscii;
-				continue Outer; // parseU hat den Buffer selbst geschrieben
-			}
-			default -> throwInvalid("Invalid escape sequence");
-			}
-
-			if (parsedLen == strBuf.length) expandStrBuf(parsedLen + 1);
-			strBuf[parsedLen++] = (byte) esc;
-			if (esc < 0) isAscii = false;
+			pos += 8;	// No " or \ found, 8 bytes can be used
 		}
+		// --- SLOW-PATH FALLBACK ---
+		// Takes effect when we get close to the buffer end, UTF-8 appears, or escapes need to be resolved.
+		return parseStringSlow(start, pos, true);
+	}
 
-		// Konsistenter FNV-1a Hash für den Pool!
-		return internBytes(strBuf, 0, parsedLen, computeHash(strBuf, 0, parsedLen), isAscii);
+	final int parseStringKeyAsIndex(final Object context, final ObjectMeta meta) throws IOException {
+		pos++; // Skip the opening quote
+		final var start = pos;
+		final var safeLimit = limit - 8;
+		final var buf = buffer;
+		// 64-bit hash accumulator
+		var hash64 = HASH_BASIS;
+		// --- SWAR Fast-Path with 64-bit block hashing ---
+		while (pos <= safeLimit) {
+			final var word = (long) JSONString.LONG_VIEW.get(buf, pos);
+			if ((word & JSONString.NON_ASCII_PATTERN) != 0) break; // UTF-8 Slow-Path
+			final var quoteXor     = word ^ JSONString.QUOTE_PATTERN;
+			final var backslashXor = word ^ JSONString.BACKSLASH_PATTERN;
+			final var hasQuote     = (quoteXor     - 0x0101010101010101L) & ~quoteXor;
+			final var hasBackslash = (backslashXor - 0x0101010101010101L) & ~backslashXor;
+			final var hasCtrl      = (word - 0x2020202020202020L) & ~word;
+			final var has = (hasQuote | hasBackslash | hasCtrl) & JSONString.NON_ASCII_PATTERN;
+			if (has != 0) {
+				// We found a quote, escape or control character.
+				final var match  = Long.lowestOneBit(has); // x86 BLSI instruction (1 cycle)
+				if ((hasCtrl & match) != 0) throwInvalid("Unescaped control character in key");
+				final var offset = (Long.numberOfTrailingZeros(match) >>> 3);
+				final var tailMask = (match >>> 7) - 1L;
+				hash64 ^= (word & tailMask);
+				hash64 *= HASH_PRIME;
+				pos += offset;
+				// If the found bit is NOT in the quote mask, it was a backslash.
+				if ((hasQuote & match) == 0) break; // Backslash found, jump to slow path
+				final var len = pos - start;
+				pos++; // Skip the closing '"'
+				// Fold the 64-bit hash elegantly into a 32-bit integer (for tables/maps)
+				final var finalHash = finalizeHash(hash64);
+				final var idx = meta.prepareKey(finalHash, buf, start, len);
+				if (idx != -1) return idx;
+				final var key = internBytes(buf, start, len, finalHash, true);
+				return meta.prepareKey(context, key);
+			}
+			// Full 8-byte block without special characters!
+			// Hash in 2 clock cycles: XOR and Multiply. No loop!
+			hash64 ^= word;
+			hash64 *= HASH_PRIME;
+			pos += 8;
+		}
+		// Pass the calculated 64-bit hash as 32-bit integer to the slow path
+		final var passedHash = finalizeHash(hash64);
+		return parseStringKeyAsIndexSlow(context, meta, start, passedHash);
 	}
 
 	private int parseStringKeyAsIndexSlow(final Object context, final ObjectMeta meta, final int start, long hash64) throws IOException {
 		final var buf = buffer;
 		while (pos < limit) {
 			final var b = buf[pos];
+			if (b >= 0 && b < 32) throwInvalid("Unescaped control character in key");
 			if (b == '"') {
 				final var len = pos - start;
 				pos++;
@@ -674,92 +650,124 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 			pos++;
 		}
 
-		// if escapes are present or buffer needs a refill.
+		// If escapes are present or buffer needs a refill.
 		// parseStringSlow computes its own fallback hash, which is fine for this rare edge case.
 		final var key = parseStringSlow(start, pos, true);
 		return meta.prepareKey(context, key);
 	}
 
-	final int parseStringKeyAsIndex(final Object context, final ObjectMeta meta) throws IOException {
-		pos++; // Skip the opening quote
-		final var start = pos;
-		final var safeLimit = limit - 8;
-		final var buf = buffer;
-		// 64-Bit Hash-Akkumulator
-		var hash64 = HASH_BASIS;
-		// --- SWAR Fast-Path mit 64-Bit Block-Hashing ---
-		while (pos <= safeLimit) {
-			final var word = (long) JSONString.LONG_VIEW.get(buf, pos);
-			if ((word & JSONString.NON_ASCII_PATTERN) != 0) break; // UTF-8 Slow-Path
-			final var quoteXor     = word ^ JSONString.QUOTE_PATTERN;
-			final var backslashXor = word ^ JSONString.BACKSLASH_PATTERN;
-			final var hasQuote     = (quoteXor     - 0x0101010101010101L) & ~quoteXor;
-			final var hasBackslash = (backslashXor - 0x0101010101010101L) & ~backslashXor;
-			final var has = (hasQuote | hasBackslash) & JSONString.NON_ASCII_PATTERN;
-			if (has != 0) {
-				// Wir haben ein Quote oder Escape gefunden.
-				final var match  = Long.lowestOneBit(has); // x86 BLSI Instruktion (1 Zyklus)
-				final var offset = (Long.numberOfTrailingZeros(match) >>> 3);
-				final var tailMask = (match >>> 7) - 1L;
-				hash64 ^= (word & tailMask);
-				hash64 *= HASH_PRIME;
-				pos += offset;
-				// Wenn das gefundene Bit NICHT in der Quote-Maske ist, war es ein Backslash.
-				if ((hasQuote & match) == 0) break; // Backslash gefunden, ab in den Slow-Path
-				final var len = pos - start;
-				pos++; // Das schließende '"' überspringen
-				// Falte den 64-Bit Hash elegant zu einem 32-Bit Integer (für Tabellen/Maps)
-				final var finalHash = finalizeHash(hash64);
-				final var idx = meta.prepareKey(finalHash, buf, start, len);
-				if (idx != -1) return idx;
-				final var key = internBytes(buf, start, len, finalHash, true);
-				return meta.prepareKey(context, key);
-			}
-			// Voller 8-Byte Block ohne Sonderzeichen!
-			// Hash in 2 Taktzyklen: XOR und Multiply. Keine Schleife!
-			hash64 ^= word;
-			hash64 *= HASH_PRIME;
-			pos += 8;
-		}
-		// Den errechneten 64-Bit Hash als 32-Bit Integer an den Slow-Path übergeben
-		final var passedHash = finalizeHash(hash64);
-		return parseStringKeyAsIndexSlow(context, meta, start, passedHash);
-	}
-
 	// SWAR Optimized
-	final String parseStringValue() throws IOException {
-		pos++; // Überspringe das einleitende '"'
-		final var start     = pos;
-		final var safeLimit = limit - 8;
-		final var buf = buffer;
-		while (pos <= safeLimit) { // SWAR fast scan
-			// Lade 8 Bytes in einem Rutsch
-			final var word = (long) JSONString.LONG_VIEW.get(buf, pos);
-			if ((word & JSONString.NON_ASCII_PATTERN) != 0) break; // If byte witch bit 7 set, switch to slow scanning
-			final var quoteXor     = word ^ JSONString.QUOTE_PATTERN;
-			final var backslashXor = word ^ JSONString.BACKSLASH_PATTERN;
-			final var hasQuote     = (quoteXor     - JSONString.SWARN) & ~quoteXor;
-			final var hasBackslash = (backslashXor - JSONString.SWARN) & ~backslashXor;
-			final var has = (hasQuote | hasBackslash) & JSONString.NON_ASCII_PATTERN;
-			if (has != 0) {
-				// Ein Treffer liegt vor! Finde heraus, welches Zeichen zuerst kam.
-				final var match = Long.lowestOneBit(has);
-				// Ermittle den exakten Byte-Offset (0 bis 7)
-				final var offset = (Long.numberOfTrailingZeros(match) >>> 3);
-				pos += offset;
-				if ((hasQuote & match) != 0) {
-					final var len = pos - start;
-					pos++; // Das schließende '"' überspringen
-					// Only ISO-8859-1 is used avoid JDK UTF-8 conversion.
-					return newString(buffer, start, len, true);
-				}
-				break; // Ein Backslash wurde gefunden, ab in den Slow-Path
+	private String parseStringSlow(final int start, final int lPos, boolean isAscii) throws IOException {
+		var parsedLen = lPos - start;
+		if (parsedLen > strBuf.length) expandStrBuf(parsedLen);
+		if (parsedLen > 0) System.arraycopy(buffer, start, strBuf, 0, parsedLen);
+		this.pos = lPos;
+
+		Outer: while (true) {
+			final var safeLimit = limit - 8;
+			var isEscape = false;
+			var escChar  = -1; // -1 means: must be loaded from RAM
+
+			// --- 1. SWAR Fast-Copy Loop ---
+			var word     = 0L;
+			var has      = 0L;
+			var hasQuote = 0L;
+			var hasCtrl  = 0L;
+
+			while (pos <= safeLimit) {
+				word = (long) JSONString.LONG_VIEW.get(buffer, pos);
+				if ((word & JSONString.NON_ASCII_PATTERN) != 0) isAscii = false;
+				final var quoteXor     = word ^ JSONString.QUOTE_PATTERN;
+				final var backslashXor = word ^ JSONString.BACKSLASH_PATTERN;
+				hasQuote               = (quoteXor     - JSONString.SWARN) & ~quoteXor;
+				final var hasBackslash = (backslashXor - JSONString.SWARN) & ~backslashXor;
+				hasCtrl                = (word - 0x2020202020202020L) & ~word;
+				has                    = (hasQuote | hasBackslash | hasCtrl) & JSONString.NON_ASCII_PATTERN;
+				if (has != 0) break; // Match! Variables are preserved for evaluation
+				if (parsedLen + 8 > strBuf.length) expandStrBuf(parsedLen + 8);
+				JSONString.LONG_VIEW.set(strBuf, parsedLen, word);
+				parsedLen += 8;
+				pos       += 8;
 			}
-			pos += 8;	// No " or \ found, 8 bytes can be used
+
+			if (has != 0) {
+				final var match  = Long.lowestOneBit(has);
+				if ((hasCtrl & match) != 0) throwInvalid("Unescaped control character in string");
+				final var offset = (Long.numberOfTrailingZeros(match) >>> 3);
+				if (parsedLen + offset > strBuf.length) expandStrBuf(parsedLen + offset);
+				JSONString.LONG_VIEW.set(strBuf, parsedLen, word);
+				parsedLen += offset;
+				pos       += offset;
+				if ((hasQuote & match) != 0) {
+					pos++; // Skip closing quote
+					break Outer; // String completely finished!
+				}
+				// It MUST be a backslash
+				pos++; // Skip backslash
+				isEscape = true;
+				// --- REGISTER-LOOKAHEAD ---
+				if (offset < 7) {
+					// The escape character is still in the register!
+					// Extract via shift (0 CPU latency, 0 RAM access)
+					escChar = (int) ((word >>> ((offset + 1) << 3)) & 0xFFL);
+					pos++; // We practically "read" the character
+				}
+			}
+
+			// --- 2. SCALAR FALLBACK ---
+			if (!isEscape) {
+				while (pos < limit) {
+					final var b = buffer[pos];
+					if (b >= 0 && b < 32) throwInvalid("Unescaped control character in string");
+					if (b < 0) isAscii = false;
+					if (b == '"') { pos++; break Outer; }
+					if (b == '\\') { pos++; isEscape = true; break; }
+					if (parsedLen == strBuf.length) expandStrBuf(parsedLen + 1);
+					strBuf[parsedLen++] = b;
+					pos++;
+				}
+			}
+
+			// --- 3. REFILL OR ESCAPE HANDLING ---
+			if (!isEscape) {
+				// At end of buffer, no escape -> Refill
+				ensure(1);
+				if (pos >= limit) throwInvalid("Unexpected end of stream inside string");
+				continue Outer;
+			}
+
+			// Resolve escape
+			var esc = escChar;
+			if (esc == -1) {
+				// Boundary-Case: The backslash was exactly the 8th byte in the word.
+				// The next character must be loaded classically from the buffer.
+				if (pos >= limit) { ensure(1); if (pos >= limit) throwInvalid("Unexpected end of stream after escape"); }
+				esc = buffer[pos++];
+			}
+
+			switch (esc) {
+			case '"', '\\', '/' -> { }
+			case 'b' -> esc = '\b';
+			case 'f' -> esc = '\f';
+			case 'n' -> esc = '\n';
+			case 'r' -> esc = '\r';
+			case 't' -> esc = '\t';
+			case 'u' -> {
+				parseU(parsedLen);
+				parsedLen  = escapedParsedLen;
+				isAscii   &= escapedIsAscii;
+				continue Outer; // parseU has written the buffer itself
+			}
+			default -> throwInvalid("Invalid escape sequence");
+			}
+
+			if (parsedLen == strBuf.length) expandStrBuf(parsedLen + 1);
+			strBuf[parsedLen++] = (byte) esc;
+			if (esc < 0) isAscii = false;
 		}
-		// --- SLOW-PATH FALLBACK ---
-		// Greift, wenn wir nahe ans Puffer-Ende kommen, UTF-8 auftaucht oder Escapes aufgelöst werden müssen.
-		return parseStringSlow(start, pos, true);
+
+		// Consistent FNV-1a Hash for the pool!
+		return internBytes(strBuf, 0, parsedLen, computeHash(strBuf, 0, parsedLen), isAscii);
 	}
 
 	// ######################################################################################
@@ -791,7 +799,6 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 			}
 			p += 8; // Komplett übersprungen! Egal ob \n, \t oder Space gemischt waren!
 		}
-
 		// --- 2. SCALAR FALLBACK (Am Ende des Buffers) ---
 		while (p < l) {
 			final var b = buf[p];

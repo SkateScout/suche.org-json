@@ -60,7 +60,12 @@ final class EngineImpl implements InternalEngine {
 	private final ObjectMeta genericArrayMeta;
 	private final ObjectMeta genericSetMeta;
 	private int maxRecursiveDepth = 128;
+	private boolean ignoreTrailing = false;
 	final MetaConfig cfg;
+
+	@Override public void ignoreTrailing(final boolean v) { ignoreTrailing = v; }
+	@Override public boolean ignoreTrailing() { return ignoreTrailing; }
+
 
 	@Override public void maxRecursiveDepth(final int v) { this.maxRecursiveDepth = v; }
 	@Override public int maxRecursiveDepth() { return maxRecursiveDepth; }

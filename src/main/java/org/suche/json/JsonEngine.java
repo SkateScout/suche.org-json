@@ -30,6 +30,10 @@ public sealed interface JsonEngine permits InternalEngine {
 	void skipInvalid(final boolean v);
 	boolean skipInvalid();
 
+	void ignoreTrailing(final boolean v);
+	boolean ignoreTrailing();
+
+
 	void failOnUnknownProperties(final boolean v);
 	boolean failOnUnknownProperties();
 

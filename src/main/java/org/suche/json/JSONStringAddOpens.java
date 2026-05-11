@@ -175,8 +175,9 @@ final class JSONStringAddOpens implements JSONStringProvider {
 				if (badMask != 0) {
 					final var safeChars = (Long.numberOfTrailingZeros(badMask) >>> 4);
 					if(safeChars > 0) {
-						INT_VIEW.set(dst, dstOff, (int) (((word & 0x00FF00FF00FF00FFL) * MAGIC_4X16_to_4X8) >>> 48));
-						sOff   += safeChars;
+						long w = word & 0x00FF00FF00FF00FFL;
+						w = (w | (w >>> 8)) & 0x0000FFFF0000FFFFL;
+						INT_VIEW.set(dst, dstOff, (int) (w | (w >>> 16)));						sOff   += safeChars;
 						dstOff += safeChars;
 					}
 					final var c = (char) (word >>> (safeChars << 4));
@@ -221,59 +222,54 @@ final class JSONStringAddOpens implements JSONStringProvider {
 				// --- 8-Byte Overlapping Read ---
 				if (charsInWord == 0) {
 					var skip = safeLimitS - sOff;
-					if (skip > 0) skip = 0; // We have enough space, no skip needed
+					if (skip > 0) skip = 0;
 
-					// Safe 8-byte read, even at the very last character of the array!
 					wordAcc = (long) JSONString.LONG_VIEW.get(src, (sOff + skip) << 1);
 
 					if (skip < 0) {
-						// We are at the end. We read 'skip' characters too far to the left.
-						// We just shift these old characters out of the register!
-						wordAcc >>>= (-skip << 4); // -skip * 16 Bits
-					charsInWord = 4 + skip;    // 4 minus the overlapped characters remain
+						wordAcc >>>= (-skip << 4);
+					charsInWord = 4 + skip;
 					} else {
 						charsInWord = 4;
 					}
 				}
 
-				// Extract the character in 1 clock cycle directly from the register!
 				final var c = (char) wordAcc;
 				wordAcc = (wordAcc >>> 16);
 				charsInWord--;
 				// ---------------------------------------------
 
 				if (c <= 255) {
-					// 1. Flush (we must do this in any case)
-					if (accLen > 0) {
-						JSONString.LONG_VIEW.set(dst, dstOff, acc);
-						dstOff += accLen;
-						acc = 0;
-						accLen = 0;
-					}
-
-					// 2. Routing: Back to SWAR or inline tail processing?
-					if (sOff <= safeLimitS) {
-						break; // We still have space, let SWAR process the ASCII characters!
-					}
-
-					// We are in the tail! Process the Latin1 character directly here, otherwise infinite loop!
+					// 1. Direkt im Accumulator verarbeiten!
 					final var entry = JSONString.LATIN1_TABLE[c];
-					JSONString.LONG_VIEW.set(dst, dstOff, entry);
-					dstOff += (int) (entry >>> 56);
+					acc |= entry << (accLen << 3);
+					accLen += (int) (entry >>> 56);
 					sOff++;
 
+					// 2. Anti-Ping-Pong Guard:
+					// Nur zurück zum SWAR-Fast-Path springen, wenn noch ein massiver
+					// ASCII/Latin1-Block zu erwarten ist (z.B. > 8 Zeichen).
+					if (sLen - sOff > 8) {
+						if (accLen > 0) {
+							JSONString.LONG_VIEW.set(dst, dstOff, acc);
+							dstOff += accLen;
+							acc = 0;
+							accLen = 0;
+						}
+						break; // Zurück in die äußere SWAR-Schleife!
+					}
 				} else if (Character.isHighSurrogate(c) && sOff + 1 < sLen) {
-					// For surrogate pairs, we briefly fallback to the array to keep the logic simple
 					final var lowPos = (sOff + 1) << 1;
 					final var low = (char) ((src[lowPos] & 0xFF) | ((src[lowPos + 1] & 0xFF) << 8));
 
 					if (Character.isLowSurrogate(low)) {
 						final var cp = Character.toCodePoint(c, low);
-						final var b1 = (byte) (0xF0 | (cp >> 18)) & 0xFFL;
-						final var b2 = (byte) (0x80 | ((cp >> 12) & 0x3F)) & 0xFFL;
-						final var b3 = (byte) (0x80 | ((cp >> 6) & 0x3F)) & 0xFFL;
-						final var b4 = (byte) (0x80 | (cp & 0x3F)) & 0xFFL;
-						acc |= (b1 | (b2 << 8) | (b3 << 16) | (b4 << 24)) << (accLen << 3);
+						// Pure 64-Bit Mathematik ohne redundante byte-Casts
+						final var utf8 = (0xF0L | (cp >> 18)) |
+								((0x80L | ((cp >> 12) & 0x3F)) << 8) |
+								((0x80L | ((cp >> 6)  & 0x3F)) << 16) |
+								((0x80L | (cp & 0x3F)) << 24);
+						acc |= utf8 << (accLen << 3);
 						accLen += 4;
 						sOff += 2;
 						charsInWord = 0; // Force a new 8-byte load in the next iteration
@@ -284,15 +280,15 @@ final class JSONStringAddOpens implements JSONStringProvider {
 					}
 				} else {
 					if (c >= 0x800) {
-						final var b1 = (byte) (0xE0 | (c >> 12)) & 0xFFL;
-						final var b2 = (byte) (0x80 | ((c >> 6) & 0x3F)) & 0xFFL;
-						final var b3 = (byte) (0x80 | (c & 0x3F)) & 0xFFL;
-						acc |= (b1 | (b2 << 8) | (b3 << 16)) << (accLen << 3);
+						final var utf8 = (0xE0L | (c >> 12)) |
+								((0x80L | ((c >> 6) & 0x3F)) << 8) |
+								((0x80L | (c & 0x3F)) << 16);
+						acc |= utf8 << (accLen << 3);
 						accLen += 3;
 					} else {
-						final var b1 = (byte) (0xC0 | (c >> 6)) & 0xFFL;
-						final var b2 = (byte) (0x80 | (c & 0x3F)) & 0xFFL;
-						acc |= (b1 | (b2 << 8)) << (accLen << 3);
+						final var utf8 = (0xC0L | (c >> 6)) |
+								((0x80L | (c & 0x3F)) << 8);
+						acc |= utf8 << (accLen << 3);
 						accLen += 2;
 					}
 					sOff++;

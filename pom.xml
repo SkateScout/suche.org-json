@@ -43,11 +43,33 @@
 			<version>2.0.47</version>
 			<scope>test</scope>
 		</dependency>
+		<dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+            <version>5.10.2</version>
+			<scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-engine</artifactId>
+            <version>5.10.2</version>
+            <scope>test</scope>
+        </dependency>
 	</dependencies>
 	<build>
 	    <finalName>${project.artifactId}-${git.closest.tag.name}</finalName>
 		<plugins>
-			<plugin>
+		   <plugin>
+               <groupId>org.apache.maven.plugins</groupId>
+               <artifactId>maven-surefire-plugin</artifactId>
+               <version>3.2.5</version>
+                <configuration>
+	                <!-- Optional change to remove space between - -
+                    <argLine>- -add-opens java.base/java.lang=ALL-UNNAMED</argLine>
+    	            -->
+                </configuration>
+           </plugin>
+           <plugin>
                 <groupId>io.github.git-commit-id</groupId>
                 <artifactId>git-commit-id-maven-plugin</artifactId>
                 <version>9.0.1</version> <!-- Version für JDK 26 prüfen -->
@@ -68,16 +90,6 @@
                     <commitIdGenerationMode>full</commitIdGenerationMode>
                 </configuration>
             </plugin>		
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-surefire-plugin</artifactId>
-                <version>3.2.5</version>
-                <configuration>
-	                <!-- Optional change to remove space between - -
-                    <argLine>- -add-opens java.base/java.lang=ALL-UNNAMED</argLine>
-    	            -->
-                </configuration>
-            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>

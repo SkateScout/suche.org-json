@@ -189,24 +189,25 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		}
 	}
 
-	private void consumeCommaIfPresent() throws IOException {
-		if (pos < limit && buffer[pos] == ',') { pos++; return; }
-		consumeCommaSlow();
+	private boolean consumeCommaIfPresent() throws IOException {
+		if (pos < limit && buffer[pos] == ',') { pos++; return true; }
+		return consumeCommaSlow();
 	}
 
-	private void consumeCommaSlow() throws IOException {
+	private boolean consumeCommaSlow() throws IOException {
 		var p = pos;
 		final var l = limit;
 		final var buf = buffer;
 		while (p < l) {
 			final var c = buf[p];
-			if (c == ',') { pos = p + 1; return; }
-			if ((c & 0xC0) != 0 || ((1L << c) & WHITESPACE_MASK) == 0) { pos = p; return; }
+			if (c == ',') { pos = p + 1; return true; }
+			if ((c & 0xC0) != 0 || ((1L << c) & WHITESPACE_MASK) == 0) { pos = p; return false; }
 			p++;
 		}
 		pos = p;
 		skipWhitespace();
-		if (pos < limit && buffer[pos] == ',') pos++;
+		if (pos < limit && buffer[pos] == ',') { pos++; return true; }
+		return false;
 	}
 
 	private Object parsePrimitiveArray(final long typeDesc) throws IOException {
@@ -272,30 +273,39 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 	@SuppressWarnings("unchecked")
 	public <T> T readObject(final Class<T> targetType) throws Throwable {
 		skipWhitespace();
-		if (pos >= limit) return null;
+		if (pos >= limit) throwInvalid("Empty JSON document"); // Siehe Punkt 2!
+
 		final var b = buffer[pos];
 		var targetMeta = engine.metaOf(targetType);
 
-		// If targetType is Object.class, metaOf() returns IDX_MAP.
-		// But if we are reading an array, we MUST switch to IDX_COLLECTION!
 		if (b == '[' && targetMeta != null && (targetMeta.cacheIndex == ObjectMeta.IDX_MAP || targetMeta.cacheIndex == ObjectMeta.IDX_GENERIC)) {
 			targetMeta = metaCache[ObjectMeta.IDX_COLLECTION];
 		}
 		final var isArray = (b == '[');
 		final var startTypeDesc = EngineImpl.createTypeDesc(isArray, false, targetMeta != null ? targetMeta.cacheIndex : 0);
+
+		final T result; // Ergebnis zwischenspeichern!
+
 		if (this.maxRecursiveDepth <= 0) {
 			if (b == '{') pos++;
-			return (T)runStateEngine(startTypeDesc, targetMeta != null ? targetMeta.start(this) : null, targetMeta, isArray ? 0 : -1);
-		}
-		if (b == '{') {
+			result = (T)runStateEngine(startTypeDesc, targetMeta != null ? targetMeta.start(this) : null, targetMeta, isArray ? 0 : -1);
+		} else if (b == '{') {
 			pos++;
-			return (T)parseRecordRecursive(targetMeta != null ? targetMeta : metaCache[ObjectMeta.IDX_MAP], 0);
-		}
-		if (b == '[') {
+			result = (T)parseRecordRecursive(targetMeta != null ? targetMeta : metaCache[ObjectMeta.IDX_MAP], 0);
+		} else if (b == '[') {
 			pos++;
-			return (T)parseArrayRecursive(targetMeta != null ? targetMeta : metaCache[ObjectMeta.IDX_COLLECTION], 0);
+			result = (T)parseArrayRecursive(targetMeta != null ? targetMeta : metaCache[ObjectMeta.IDX_COLLECTION], 0);
+		} else {
+			result = (T) parsePrimitiveInline(b, startTypeDesc);
 		}
-		return (T) parsePrimitiveInline(b, startTypeDesc);
+
+		if (!engine.ignoreTrailing()) checkTrailing(); // Wird jetzt IMMER ausgeführt!
+		return result;
+	}
+
+	private  void checkTrailing() throws IOException {
+		skipWhitespace();
+		if (pos < limit) throwInvalid("Trailing garbage after JSON document");
 	}
 
 	private Object parsePrimitiveInline(final byte b, final long typeDesc) throws IOException {
@@ -308,7 +318,6 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		};
 	}
 
-
 	@SuppressWarnings("unchecked")
 	public <T> T[] readRecords(final Class<T> targetClass) throws IOException {
 		skipWhitespace();
@@ -316,11 +325,12 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		final var metaIdx = ((EngineImpl) engine).getDynamicMetaId(targetClass, ObjectMeta.TYPE_OBJ_ARRAY);
 		final var meta = metaCache[metaIdx];
 		final var typeDesc = EngineImpl.createTypeDesc(true, false, metaIdx);
-
 		try {
-			return (T[]) (this.maxRecursiveDepth <= 0 ?
+			final var ret = (T[]) (this.maxRecursiveDepth <= 0 ?
 					runStateEngine(typeDesc, meta.start(this), meta, 0)
 					: parseArrayRecursive(meta, 0));
+			if(!engine.ignoreTrailing()) checkTrailing();
+			return ret;
 		} catch(final IOException | RuntimeException e) { throw e;
 		} catch(final Throwable e) { throw new RuntimeException(e); }
 	}
@@ -332,11 +342,12 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		final var metaIdx = ((EngineImpl) engine).getDynamicMetaId(valueClass, ObjectMeta.TYPE_MAP);
 		final var meta = metaCache[metaIdx];
 		final var typeDesc = EngineImpl.createTypeDesc(false, false, metaIdx);
-
 		try {
-			return (Map<String, V>) (this.maxRecursiveDepth <= 0 ?
+			final var ret = (Map<String, V>) (this.maxRecursiveDepth <= 0 ?
 					runStateEngine(typeDesc, meta.start(this), meta, -1)
 					: parseRecordRecursive(meta, 0));
+			if(!engine.ignoreTrailing()) checkTrailing();
+			return ret;
 		} catch(final IOException | RuntimeException e) { throw e;
 		} catch(final Throwable e) { throw new RuntimeException(e); }
 	}
@@ -348,11 +359,12 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		final var metaIdx = ((EngineImpl) engine).getDynamicMetaId(elementClass, ObjectMeta.TYPE_COLLECTION);
 		final var meta = metaCache[metaIdx];
 		final var typeDesc = EngineImpl.createTypeDesc(true, false, metaIdx);
-
 		try {
-			return (List<T>) (this.maxRecursiveDepth <= 0 ?
+			final var ret = (List<T>) (this.maxRecursiveDepth <= 0 ?
 					runStateEngine(typeDesc, meta.start(this), meta, 0)
 					: parseArrayRecursive(meta, 0));
+			if(!engine.ignoreTrailing()) checkTrailing();
+			return ret;
 		} catch(final IOException | RuntimeException e) { throw e;
 		} catch(final Throwable e) { throw new RuntimeException(e); }
 	}
@@ -364,11 +376,12 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		final var metaIdx = ((EngineImpl) engine).getDynamicMetaId(elementClass, ObjectMeta.TYPE_SET);
 		final var meta = metaCache[metaIdx];
 		final var typeDesc = EngineImpl.createTypeDesc(true, false, metaIdx);
-
 		try {
-			return (Set<T>)  (this.maxRecursiveDepth <= 0 ?
+			final var ret =  (Set<T>)  (this.maxRecursiveDepth <= 0 ?
 					runStateEngine(typeDesc, meta.start(this), meta, 0)
 					: parseArrayRecursive(meta, 0));
+			if(!engine.ignoreTrailing()) checkTrailing();
+			return ret;
 		} catch(final IOException | RuntimeException e) { throw e;
 		} catch(final Throwable e) { throw new RuntimeException(e); }
 	}
@@ -380,12 +393,20 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 	private Object parseRecordRecursive(final ObjectMeta meta, final int recursionDeep) throws Throwable {
 		final var context = meta.start(this);
 		final var limitDepth = this.maxDepth;
+		var expectKey = false;
 		while (true) {
 			if (pos >= limit) { ensure(1); if (pos >= limit) throwInvalid("Unexpedted END.2"); }
 			int targetIdx;
 			var b = buffer[pos];
 			if ((b & 0xC0) == 0 && ((1L << b) & WHITESPACE_MASK) != 0) skipWhitespace();
-			if (pos < limit && buffer[pos] == (byte) '}') { pos++; return meta.end(this, context); }
+
+
+			if (pos < limit && buffer[pos] == (byte) '}') {
+				if (expectKey) throwInvalid("Trailing comma in object");
+				pos++;
+				return meta.end(this, context);
+			}
+
 			targetIdx = parseStringKeyAsIndex(context, meta);
 			expect((byte) ':');
 			if (targetIdx < 0) { skipWhitespace(); skipValue(); consumeCommaIfPresent(); continue; }
@@ -436,7 +457,12 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			}
 			default -> throwInvalid("Unexpected CHAR");
 			}
-			if (pos < limit && buffer[pos] == ',') pos++;  else consumeCommaSlow();
+			if (pos < limit && buffer[pos] == ',') {
+				pos++;
+				expectKey = true;
+			} else {
+				expectKey = consumeCommaSlow();
+			}
 		}
 	}
 
@@ -456,7 +482,10 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			if (pos >= limit) { ensure(1); if (pos >= limit) throwInvalid("Unexpected end"); }
 			switch (buffer[pos]) {
 			case '\t','\n','\r',' ' -> { pos++; }							// SKIP   Whitespace
-			case ']' -> { pos++; return meta.end(this, context); }	// ALWAYS Possible
+			case ']' -> {
+				if (state == 0 && idx > 0) throwInvalid("Trailing comma in array");
+				pos++; return meta.end(this, context);
+			}	// ALWAYS Possible
 			case '-','0','1','2','3','4','5','6','7','8','9' -> {
 				if(state==1) throwInvalid("Komma or Closeing breaket instead of NUMERIC expected");
 				state = 1;
