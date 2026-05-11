@@ -46,6 +46,8 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 
 	private JsonInputStream() {}
 
+	@Override public int depth() { return engineStack.depth; }
+
 	static JsonInputStream of(final InputStream in, final InternalEngine engine) {
 		final var s = STREAM_POOL.acquire();
 		s.init(in, engine);
@@ -96,96 +98,6 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			}
 		} else {
 			meta.set(this, obj, targetIdx, null);
-		}
-	}
-
-	private Object runStateEngine(final long startTypeDesc, final Object startObj, final Object startMeta, final int startIdx) throws Throwable {
-		final var stackLimit = engine.config().maxDepth();
-		var curTypeDesc = startTypeDesc;
-		var curObj = startObj;
-		var curMeta = (ObjectMeta) startMeta;
-		var curIdx = startIdx;
-		engineStack.clear();
-		while (true) {
-			if (pos >= limit) { ensure(1); if (pos >= limit) throwInvalid("Unexpected end.5"); }
-			final var b = buffer[pos];
-			switch (b) {
-			case '\t', '\n', '\r', ' ' -> {
-				pos++;
-				skipWhitespace();
-				//for(pos++; pos < limit; pos++) if (((b = buffer[pos]) & 0xC0) != 0 || ((1L << b) & WHITESPACE_MASK) == 0) break;
-			}
-			case '"' -> {
-				if (curTypeDesc >= 0L && curIdx < 0) {
-					curIdx = parseStringKeyAsIndex(curObj, curMeta);
-					expect((byte) ':');
-				} else {
-					curMeta.set(this, curObj, curIdx, parseStringValue());
-					curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
-					consumeCommaIfPresent();
-				}
-			}
-			case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9' -> {
-				parseNumericPrimitive(curMeta, curObj, curIdx, curTypeDesc);
-				curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
-				consumeCommaIfPresent();
-			}
-			case 'n' -> {
-				fillNullValue(curTypeDesc, curObj, curIdx, curMeta);
-				curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
-				consumeCommaIfPresent();
-			}
-			case 't', 'f' -> { // Combined to reduce method sice
-				curMeta.set(this, curObj, curIdx, parseTrueOrFalse(b == 't'));
-				curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
-				consumeCommaIfPresent();
-			}
-			case '{' -> {
-				engineStack.push(curTypeDesc, curObj, curMeta, curIdx, stackLimit);	// No issue if later an exception came
-				if (curTypeDesc >= 0L && curIdx < 0) throwInvalid("Expected key");
-				curTypeDesc = curMeta.fieldDescriptor(curIdx);
-				pos++;
-				if (curTypeDesc < 0L || (curTypeDesc & 1L) != 0L) throwInvalid("Expected got unexpected '{'");
-				curMeta = metaCache[(int) (curTypeDesc >> 1)];
-				curObj = curMeta.start(this);
-				curIdx = -1;
-			}
-			case '}', ']' -> {
-				pos++;
-				// IMPORTANT: Must be evaluated BEFORE parent overwrites curMeta/curObj
-				final var finishedObj = curMeta.end(this, curObj);
-				if (engineStack.depth < 0) return finishedObj;
-				final var parent = engineStack.stack[engineStack.depth--];
-				curTypeDesc = parent.typeDesc;
-				curObj      = parent.obj;
-				curMeta     = (ObjectMeta) parent.meta;
-				curIdx      = parent.targetIdx;
-				curMeta.set(this, curObj, curIdx, finishedObj);
-				curIdx      = curTypeDesc < 0L ? curIdx + 1 : -1;
-				consumeCommaIfPresent();
-			}
-			case '[' -> {
-				if (curTypeDesc >= 0L && curIdx < 0) throwInvalid("Expected key");
-				pos++;
-				var childDesc = curMeta.fieldDescriptor(curIdx);
-				if (childDesc >= 0L) {
-					if (((int) (childDesc >> 1))!= ObjectMeta.IDX_MAP) throwInvalid("Expected object, got '['");
-					childDesc = ObjectMeta.DESC_COLLECTION;
-				}
-				if ((childDesc & 1L) != 0L) {
-					curMeta.set(this, curObj, curIdx, parsePrimitiveArray(childDesc));
-					curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
-					consumeCommaIfPresent();
-				} else {
-					engineStack.push(curTypeDesc, curObj, curMeta, curIdx, stackLimit);
-					curTypeDesc = childDesc;
-					curMeta = metaCache[(int) (curTypeDesc >> 1)];
-					curObj = curMeta.start(this);
-					curIdx = 0;
-				}
-			}
-			default -> throwInvalid("Unexpedted CHAR.1");
-			}
 		}
 	}
 
@@ -266,14 +178,140 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		}
 	}
 
-	@Override public int depth() { return engineStack.depth; }
+	// ############################### Non Recursive state engine ##############################
+
+	private Object runStateEngine(final long startTypeDesc, final Object startObj, final Object startMeta, final int startIdx) throws Throwable {
+		final var stackLimit = engine.config().maxDepth();
+		var curTypeDesc = startTypeDesc;
+		var curObj = startObj;
+		var curMeta = (ObjectMeta) startMeta;
+		var curIdx = startIdx;
+		engineStack.clear();
+		var needsComma = false;
+		var trailingComma = false;
+
+		while (true) {
+			if (pos >= limit) { ensure(1); if (pos >= limit) throwInvalid("Unexpected end.5"); }
+			final var b = buffer[pos];
+			switch (b) {
+			case '\t', '\n', '\r', ' ' -> {
+				pos++;
+				skipWhitespace();
+			}
+			case '"' -> {
+				if (needsComma) throwInvalid("Expected comma");
+				if (curTypeDesc >= 0L && curIdx < 0) {
+					curIdx = parseStringKeyAsIndex(curObj, curMeta);
+					expect((byte) ':');
+					// We successfully parsed the key and colon, next up is the value.
+					needsComma = false;
+					trailingComma = false;
+				} else {
+					curMeta.set(this, curObj, curIdx, parseStringValue());
+					curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
+					final var hasComma = consumeCommaIfPresent();
+					needsComma = !hasComma;
+					trailingComma = hasComma;
+				}
+			}
+			case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9' -> {
+				if (needsComma) throwInvalid("Expected comma");
+				if (curTypeDesc >= 0L && curIdx < 0) throwInvalid("Expected key");
+				parseNumericPrimitive(curMeta, curObj, curIdx, curTypeDesc);
+				curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
+				final var hasComma = consumeCommaIfPresent();
+				needsComma = !hasComma;
+				trailingComma = hasComma;
+			}
+			case 'n' -> {
+				if (needsComma) throwInvalid("Expected comma");
+				if (curTypeDesc >= 0L && curIdx < 0) throwInvalid("Expected key");
+				fillNullValue(curTypeDesc, curObj, curIdx, curMeta);
+				curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
+				final var hasComma = consumeCommaIfPresent();
+				needsComma = !hasComma;
+				trailingComma = hasComma;
+			}
+			case 't', 'f' -> {
+				if (needsComma) throwInvalid("Expected comma");
+				if (curTypeDesc >= 0L && curIdx < 0) throwInvalid("Expected key");
+				curMeta.set(this, curObj, curIdx, parseTrueOrFalse(b == 't'));
+				curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
+				final var hasComma = consumeCommaIfPresent();
+				needsComma = !hasComma;
+				trailingComma = hasComma;
+			}
+			case '{' -> {
+				if (needsComma) throwInvalid("Expected comma");
+				if (curTypeDesc >= 0L && curIdx < 0) throwInvalid("Expected key");
+				engineStack.push(curTypeDesc, curObj, curMeta, curIdx, stackLimit);
+				curTypeDesc = curMeta.fieldDescriptor(curIdx);
+				pos++;
+				if (curTypeDesc < 0L || (curTypeDesc & 1L) != 0L) throwInvalid("Expected got unexpected '{'");
+				curMeta = metaCache[(int) (curTypeDesc >> 1)];
+				curObj = curMeta.start(this);
+				curIdx = -1;
+				needsComma = false;
+				trailingComma = false;
+			}
+			case '}', ']' -> {
+				if (trailingComma) throwInvalid("Trailing comma");
+				if (b == '}') {
+					if (curTypeDesc    <  0L) throwInvalid("Expected ']', got '}'");
+					if (curIdx         >= 0 ) throwInvalid("Expected value, got '}'");
+				} else if (curTypeDesc >= 0L) throwInvalid("Expected '}', got ']'");
+
+				pos++;
+				final var finishedObj = curMeta.end(this, curObj);
+				if (engineStack.depth < 0) return finishedObj;
+				final var parent = engineStack.stack[engineStack.depth--];
+				curTypeDesc = parent.typeDesc;
+				curObj      = parent.obj;
+				curMeta     = (ObjectMeta) parent.meta;
+				curIdx      = parent.targetIdx;
+				curMeta.set(this, curObj, curIdx, finishedObj);
+				curIdx      = curTypeDesc < 0L ? curIdx + 1 : -1;
+				// Act as if we just finished parsing a value in the parent context
+				final var hasComma = consumeCommaIfPresent();
+				needsComma = !hasComma;
+				trailingComma = hasComma;
+			}
+			case '[' -> {
+				if (needsComma) throwInvalid("Expected comma");
+				if (curTypeDesc >= 0L && curIdx < 0) throwInvalid("Expected key");
+				pos++;
+				var childDesc = curMeta.fieldDescriptor(curIdx);
+				if (childDesc >= 0L) {
+					if (((int) (childDesc >> 1))!= ObjectMeta.IDX_MAP) throwInvalid("Expected object, got '['");
+					childDesc = ObjectMeta.DESC_COLLECTION;
+				}
+				if ((childDesc & 1L) != 0L) {
+					curMeta.set(this, curObj, curIdx, parsePrimitiveArray(childDesc));
+					curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
+					final var hasComma = consumeCommaIfPresent();
+					needsComma = !hasComma;
+					trailingComma = hasComma;
+				} else {
+					engineStack.push(curTypeDesc, curObj, curMeta, curIdx, stackLimit);
+					curTypeDesc   = childDesc;
+					curMeta       = metaCache[(int) (curTypeDesc >> 1)];
+					curObj        = curMeta.start(this);
+					curIdx        = 0;
+					needsComma    = false;
+					trailingComma = false;
+				}
+			}
+			default -> throwInvalid("Unexpected CHAR.1");
+			}
+		}
+	}
 
 	// ############################### Public Part #############################################
 
 	@SuppressWarnings("unchecked")
 	public <T> T readObject(final Class<T> targetType) throws Throwable {
 		skipWhitespace();
-		if (pos >= limit) throwInvalid("Empty JSON document"); // Siehe Punkt 2!
+		if (pos >= limit) throwInvalid("Empty JSON document");
 
 		final var b = buffer[pos];
 		var targetMeta = engine.metaOf(targetType);
@@ -284,22 +322,22 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		final var isArray = (b == '[');
 		final var startTypeDesc = EngineImpl.createTypeDesc(isArray, false, targetMeta != null ? targetMeta.cacheIndex : 0);
 
-		final T result; // Ergebnis zwischenspeichern!
+		final T result;
 
-		if (this.maxRecursiveDepth <= 0) {
-			if (b == '{') pos++;
-			result = (T)runStateEngine(startTypeDesc, targetMeta != null ? targetMeta.start(this) : null, targetMeta, isArray ? 0 : -1);
+		// By-pass the state engine entirely for root-level primitive values
+		if (b != '{' && b != '[') result = (T) parsePrimitiveInline(b, startTypeDesc);
+		else if (this.maxRecursiveDepth <= 0) {
+			pos++;
+			result = (T) runStateEngine(startTypeDesc, targetMeta != null ? targetMeta.start(this) : null, targetMeta, isArray ? 0 : -1);
 		} else if (b == '{') {
 			pos++;
-			result = (T)parseRecordRecursive(targetMeta != null ? targetMeta : metaCache[ObjectMeta.IDX_MAP], 0);
-		} else if (b == '[') {
+			result = (T) parseRecordRecursive(targetMeta != null ? targetMeta : metaCache[ObjectMeta.IDX_MAP], 0);
+		} else { // b == '['
 			pos++;
-			result = (T)parseArrayRecursive(targetMeta != null ? targetMeta : metaCache[ObjectMeta.IDX_COLLECTION], 0);
-		} else {
-			result = (T) parsePrimitiveInline(b, startTypeDesc);
+			result = (T) parseArrayRecursive(targetMeta != null ? targetMeta : metaCache[ObjectMeta.IDX_COLLECTION], 0);
 		}
 
-		if (!engine.ignoreTrailing()) checkTrailing(); // Wird jetzt IMMER ausgeführt!
+		if (!engine.ignoreTrailing()) checkTrailing();
 		return result;
 	}
 
