@@ -27,8 +27,9 @@ class JsonDateTime {
 	}
 
 	static void writeTimestamp(final JsonOutputStream s, final Temporal t, final TimeFormat tf) throws IOException {
+
 		if (tf == TimeFormat.TXT) { s.writeTimestampasText(t); return; }
-		if (t == null) { s.write(JsonOutputStream.NULL_BYTES); return; }
+		if (t == null) { s.writeNull(); return; }
 		long sec;
 		int  nano;
 		switch (t) {

@@ -21,25 +21,33 @@ import java.util.function.BiConsumer;
 import java.util.function.Supplier;
 
 public final class JsonOutputStream implements AutoCloseable {
-	private static final byte[] DIGITS = new byte[200];
+	private static final Supplier<Object> ERROR = () -> { throw new IllegalStateException("Cyclic reference"); };
+	private static final java.lang.invoke.VarHandle SHORT_VIEW = JSONStringAddOpens.SHORT_VIEW;
+	private static final java.lang.invoke.VarHandle INT_VIEW = JSONStringAddOpens.INT_VIEW;
+	private static final short[] DIGITS_S = new short[100];
 	static {
-		var c0 = (byte)'0';
-		var c1 = (byte)'0';
-		for(var i=0; i<100; i++) {
-			DIGITS[i*2]   = c0;
-			DIGITS[i*2+1] = c1;
-			c0++;
-			if(c0>'9') { c0 = '0'; c1++; }
+		for (var i = 0; i < 100; i++) {
+			final var tens = (i / 10) + '0';
+			final var ones = (i % 10) + '0';
+			// Little Endian Speicher-Layout:
+			// Der erste Charakter (tens) liegt auf der niedrigeren Speicheradresse (Bits 0-7)
+			// Der zweite Charakter (ones) liegt auf der höheren Adresse (Bits 8-15)
+			DIGITS_S[i] = (short) ((ones << 8) | tens);
 		}
 	}
-
 	private static final int    BUFFER_SIZE = 128 * 1024;
 	private static final ObjectPool<JsonOutputStream> STREAM_POOL = new ObjectPool<>(64, JsonOutputStream::new);
-	static         final byte[] NULL_BYTES  = {'n','u','l','l'};
-	private static final byte[] TRUE_BYTES  = {'t','r','u','e'};
-	private static final byte[] FALSE_BYTES = {'f','a','l','s','e'};
+
+	private static final int TRUE_MAGIC  = 0x65757274; // 'e'|'u'|'r'|'t'
+	private static final int FALSE_MAGIC = 0x736C6166; // 's'|'l'|'a'|'f'
+	private static final int NULL_MAGIC  = 0x6C6C756E; // 'l'|'l'|'u'|'n'
+
 	private static final byte[] MIN_LONG    = "-9223372036854775808".getBytes();
-	private static final long[] POW10_L     = { 1L, 10L, 100L, 1000L, 10000L, 100000L, 1000000L, 10000000L, 100000000L };
+	private static final long[] POW10_L = {
+			1L, 10L, 100L, 1000L, 10000L, 100000L, 1000000L, 10000000L, 100000000L,
+			1000000000L, 10000000000L, 100000000000L, 1000000000000L, 10000000000000L,
+			100000000000000L, 1000000000000000L, 10000000000000000L, 100000000000000000L, 1000000000000000000L
+	};
 	private static final Object EXHAUSTED   = new Object();
 	private static final byte   TYPE_COL           = 2;
 	private static final byte   TYPE_RECORD        = 3;
@@ -114,7 +122,6 @@ public final class JsonOutputStream implements AutoCloseable {
 	private TimeFormat   timeFormat;
 	private boolean skipNull, skipFalse, skipEmpty, skip0;
 	private int          fractionalLimit;
-	private static final Supplier<Object> ERROR = () -> { throw new IllegalStateException("Cyclic reference"); };
 	Supplier<Object> cycleMarker = ERROR;
 	Object queuedComplex;
 
@@ -466,10 +473,20 @@ public final class JsonOutputStream implements AutoCloseable {
 		}
 	}
 
+	void safeBoolean(final boolean b) throws IOException {
+		if (b) {
+			INT_VIEW.set(buffer, pos, TRUE_MAGIC);
+			pos += 4;
+		} else {
+			INT_VIEW.set(buffer, pos, FALSE_MAGIC);
+			buffer[pos + 4] = 'e';
+			pos += 5;
+		}
+	}
+
 	void writeBoolean(final boolean b) throws IOException {
 		if (pos + 5 > buffer.length) flushBuffer();
-		if(b) { System.arraycopy(TRUE_BYTES , 0, buffer, 1, 4); pos+=5; }
-		else  { System.arraycopy(FALSE_BYTES, 0, buffer, 1, 5); pos+=6; }
+		safeBoolean(b);
 	}
 
 	void writeEscapedString(final String s) throws IOException {
@@ -531,53 +548,49 @@ public final class JsonOutputStream implements AutoCloseable {
 	private static int getDigits(final int v) {
 		// 1. Bit-Länge ermitteln (Hardware LZCNT - 1 Taktzyklus)
 		final var bitLength = 32 - Integer.numberOfLeadingZeros(v);
-
 		// 2. Annäherung der Basis-10 Länge berechnen.
 		// Multiplikation mit log10(2) angenähert durch (x * 1233) >>> 12
 		// Das ergibt fast immer die exakte Anzahl der Ziffern, ist aber extrem schnell.
-		var guess = (bitLength * 1233) >>> 12;
-
+		final var guess = (bitLength * 1233) >>> 12;
 		// 3. Korrektur-Check (Ein einziges, extrem vorhersehbares IF)
 		// Da guess entweder exakt stimmt oder genau 1 zu niedrig ist,
 		// prüfen wir das gegen unsere POW10 Tabelle.
-		if (v >= POW10[guess])  guess++;
-		return guess;
+		return (v >= POW10[guess] ? guess+1 : guess);
+	}
+
+	private static int getDigits(final long v) {
+		final var bitLength = 64 - Long.numberOfLeadingZeros(v);
+		final var guess = (bitLength * 1233) >>> 12;
+		//´Long.numberOfLeadingZeros((Long.MAX_VALUE)=1 -> bitLength=63 -> guess=18
+		return (v >= POW10_L[guess] ? guess+1 : guess);
 	}
 
 	private static final byte[] MIN_INT = "-2147483648".getBytes();
 
 	void writeNumber(final char prefix, int val) throws IOException {
 		if (pos + 14 > buffer.length) flushBuffer();
-		if(0 != prefix) buffer[pos++] = (byte)prefix;
-		if (val == 0) {
-			buffer[pos++] = '0';
-			return;
-		}
+		if (prefix != 0) buffer[pos++] = (byte) prefix;
+		if (val == 0) { buffer[pos++] = '0'; return; }
 		if (val == Integer.MIN_VALUE) {
-			final var len = MIN_INT.length;
-			System.arraycopy(MIN_INT, 0, buffer, pos, len);
-			pos += len;
-			return;
+			System.arraycopy(MIN_INT, 0, buffer, pos, MIN_INT.length);
+			pos += MIN_INT.length; return;
 		}
 		if (val < 0) { buffer[pos++] = (byte) '-'; val = -val; }
-		final var start = pos + 9;
-		var i = start;
-		while (val >= 100) {
-			final var q = val % 100;
-			val /= 100;
-			buffer[--i] = DIGITS[q * 2 + 1];
-			buffer[--i] = DIGITS[q * 2];
-		}
-		if (val < 10)  buffer[--i] = (byte) ('0' + val);
-		else {
-			buffer[--i] = DIGITS[val * 2 + 1];
-			buffer[--i] = DIGITS[val * 2];
-		}
-		final var len = start - i;
-		System.arraycopy(buffer, i, buffer, pos, len);
-		pos += len;
-	}
 
+		final var len = getDigits(val);
+		var i = pos + len;
+		pos = i;
+
+		while (val >= 100) {
+			final var q = val / 100;
+			final var r = val - (q * 100);
+			val = q;
+			SHORT_VIEW.set(buffer, i-=2, DIGITS_S[r]);
+		}
+
+		if (val < 10) buffer[--i] = (byte) ('0' + val);
+		else SHORT_VIEW.set(buffer, i -= 2, DIGITS_S[val]);
+	}
 	void writeNumber(final char prefix, long val) throws IOException {
 		if (val >= Integer.MIN_VALUE && val <= Integer.MAX_VALUE) { writeNumber(prefix, (int) val); return; }
 		if (pos + 22 > buffer.length) flushBuffer();
@@ -590,32 +603,25 @@ public final class JsonOutputStream implements AutoCloseable {
 			return;
 		}
 		if (val < 0) { buffer[pos++] = (byte) '-'; val = -val; }
-		final var start = pos + 19;
-		var i = start;
+		final var len = getDigits(val);
+		var i = pos + len;
+		pos = i;
+
 		while (val >= 100) {
-			final var q = (int) (val % 100);
-			val /= 100;
-			buffer[--i] = DIGITS[q * 2 + 1];
-			buffer[--i] = DIGITS[q * 2];
+			final var q = val / 100;
+			final var r = (int)(val - (q * 100)); // 3. Modulo durch Subtraktion ersetzen (schneller!)
+			val = q;
+			SHORT_VIEW.set(buffer, i-=2, DIGITS_S[r]);
 		}
-		if (val < 10)  buffer[--i] = (byte) ('0' + val);
-		else {
-			final var q = (int) val;
-			buffer[--i] = DIGITS[q * 2 + 1];
-			buffer[--i] = DIGITS[q * 2];
-		}
-		final var len = start - i;
-		System.arraycopy(buffer, i, buffer, pos, len);
-		pos += len;
+		if (val < 10) buffer[--i] = (byte) ('0' + val);
+		else SHORT_VIEW.set(buffer, i -= 2, DIGITS_S[(int)val]);
 	}
 
 	private void writeDouble(final char prefix, double d) throws IOException {
 		if (pos + 28 > buffer.length) flushBuffer();
 		if(0 != prefix) buffer[pos++] = (byte)prefix;
 		if (Double.isNaN(d) || Double.isInfinite(d)) {
-			final var len = NULL_BYTES.length;
-			System.arraycopy(NULL_BYTES, 0, buffer, pos, len);
-			pos += len;
+			safeNull();
 			return;
 		}
 		final var l = (long) d;
@@ -649,9 +655,7 @@ public final class JsonOutputStream implements AutoCloseable {
 	void writeTimestampasText(final Temporal t) throws IOException {
 		mayFlush(26);	// "2000-01-01T00:00:00.001Z"
 		if (t == null) {
-			final var len = NULL_BYTES.length;
-			System.arraycopy(NULL_BYTES, 0, buffer, pos, len);
-			pos += len;
+			safeNull();
 			return;
 		}
 		final var inst = switch (t) {
@@ -667,14 +671,11 @@ public final class JsonOutputStream implements AutoCloseable {
 		final var year = utc.getYear();
 		final var century = year / 100;
 		final var decade  = year % 100;
-		buffer[pos++] = DIGITS[century * 2];
-		buffer[pos++] = DIGITS[century * 2 + 1];
-		buffer[pos++] = DIGITS[decade * 2];
-		buffer[pos++] = DIGITS[decade * 2 + 1];
+
+		SHORT_VIEW.set(buffer, pos, DIGITS_S[century]); pos+=2;
+		SHORT_VIEW.set(buffer, pos, DIGITS_S[decade ]); pos+=2;
 		buffer[pos++] = ((byte)'-');
-		final var q = utc.getMonthValue();
-		buffer[pos++] = DIGITS[q * 2];
-		buffer[pos++] = DIGITS[q * 2 + 1];
+		SHORT_VIEW.set(buffer, pos, DIGITS_S[utc.getMonthValue()]); pos+=2;
 		buffer[pos++] = ((byte)'-');
 		write2(utc.getDayOfMonth());
 		buffer[pos++] = ((byte)'T');
@@ -692,13 +693,11 @@ public final class JsonOutputStream implements AutoCloseable {
 	private void write3(final int val) {
 		buffer[pos++] = (byte)('0' + (val / 100));
 		final var q = val % 100;
-		buffer[pos++] = DIGITS[q * 2];
-		buffer[pos++] = DIGITS[q * 2 + 1];
+		SHORT_VIEW.set(buffer, pos, DIGITS_S[q]); pos+=2;
 	}
 
 	private void write2(final int q) {
-		buffer[pos++] = DIGITS[q * 2];
-		buffer[pos++] = DIGITS[q * 2 + 1];
+		SHORT_VIEW.set(buffer,pos, DIGITS_S[q]); pos+=2;
 	}
 
 	boolean commaNeeded() { return(pos == 0 || (buffer[pos - 1] != '[' && buffer[pos - 1] != '{')); }
@@ -709,9 +708,9 @@ public final class JsonOutputStream implements AutoCloseable {
 		return switch(v) {
 		case null                  -> skipNull;
 		case final String        t -> skipEmpty && t.isEmpty();
-		case final Integer       t -> t==0 && !skip0;
-		case final Long          t -> t==0 && !skip0;
-		case final Double        t -> t==0 && !skip0;
+		case final Integer       t -> t==0 && skip0;
+		case final Long          t -> t==0 && skip0;
+		case final Double        t -> t==0 && skip0;
 		case final Boolean       t -> skipFalse && !t;
 		case final CompactList   t -> skipEmpty && t.isEmpty();
 		case final CompactMap    t -> skipEmpty && t.size() == 0;
@@ -727,14 +726,11 @@ public final class JsonOutputStream implements AutoCloseable {
 		if (pos + 64 > buffer.length) flushBuffer(); // Safe even for number
 		if(prefix != 0) buffer[pos++] = (byte)prefix;
 		switch(val) {
-		case null            -> { System.arraycopy(NULL_BYTES, 0, buffer, pos, 4); pos+=4; }
+		case null            -> safeNull();
 		case final String  t -> { writeEscapedString(t); }
 		case final Integer t -> writeNumber       ((char)0, t);
 		case final Long    t -> writeNumber       ((char)0, t);
-		case final Boolean t -> {
-			if(t) { System.arraycopy(TRUE_BYTES , 0, buffer, 1, 4); pos+=5; }
-			else  { System.arraycopy(FALSE_BYTES, 0, buffer, 1, 5); pos+=6; }
-		}
+		case final Boolean t -> safeBoolean(t);
 		case final Double  t -> writeDouble       ((char)0, t);
 		default              -> { return false; }
 		}
@@ -758,8 +754,13 @@ public final class JsonOutputStream implements AutoCloseable {
 	}
 
 	private void safeNull() {
-		System.arraycopy(NULL_BYTES, 0, buffer, pos, 4);
+		INT_VIEW.set(buffer, pos, NULL_MAGIC);
 		pos += 4;
+	}
+
+	void writeNull() throws IOException {
+		if (pos + 4 > buffer.length) flushBuffer();
+		safeNull();
 	}
 
 	private boolean handleCycle(final Object obj) throws IOException {
@@ -792,7 +793,7 @@ public final class JsonOutputStream implements AutoCloseable {
 		case final Collection<?> t -> push((byte)'[', TYPE_COL   , t, t.iterator(),  t.size());
 		case final Map<?,?>      t -> handleMap(t);
 		case final Integer       t -> writeNumber((char)0, t);					// Ensure 14
-		case final Boolean       t -> write(t ? TRUE_BYTES : FALSE_BYTES);
+		case final Boolean       t -> safeBoolean(t);
 		case final Short         t -> writeNumber((char)0, t.longValue());		// Ensure 22
 		case final Float         t -> writeDouble((char)0, t.doubleValue());	// Ensure 28
 		case final BigInteger    t -> writeBaseAscii(t.toString());
@@ -805,14 +806,17 @@ public final class JsonOutputStream implements AutoCloseable {
 		case final int    []     t -> { if(t.length>0) { writeNumber('[', t[0]); for(var i=1; i<t.length; i++) { writeNumber(',',t[i]); } write((byte)']'); } else safeEmptyArray(); }
 		case final short  []     t -> { if(t.length>0) { writeNumber('[', t[0]); for(var i=1; i<t.length; i++) { writeNumber(',',t[i]); } write((byte)']'); } else safeEmptyArray(); }
 		case final float  []     t -> { if(t.length>0) { writeDouble('[', t[0]); for(var i=1; i<t.length; i++) { writeDouble(',',t[i]); } write((byte)']'); } else safeEmptyArray(); }
-		case final boolean[]     t -> { write((byte)'['); if(t.length>0) { write(t[0] ? TRUE_BYTES : FALSE_BYTES); for(var i=1; i<t.length; i++) { write((byte)','); write(t[i] ? TRUE_BYTES : FALSE_BYTES); } } write((byte)']'); }
+		case final boolean[]     t -> { write((byte)'['); if(t.length>0) { safeBoolean(t[0]); for(var i=1; i<t.length; i++) { write((byte)','); writeBoolean(t[i]); } } write((byte)']'); }
 		default                    -> { if(val.getClass().isArray()) { push((byte)'[', TYPE_ARRAY, val, null, Array.getLength(val)); return true; } return false; }
 		}
 		return true;
 	}
 
 	private void handleValue(final Object val) throws IOException {
-		if(null == val) { write(NULL_BYTES); return; }
+		if(null == val) {
+			if (pos + 4 > buffer.length) flushBuffer();
+			return;
+		}
 		if(handleSimple(val)) return;
 		final var h = (engine.ofComplex(val.getClass()) instanceof final KeyValueObject[] kv ? kv : DEFAULTOBJ);
 		if (h instanceof final KeyValueObject[] parts) push((byte)'{', TYPE_RECORD, val, parts, parts.length);
