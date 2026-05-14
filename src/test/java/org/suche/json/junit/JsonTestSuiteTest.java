@@ -19,7 +19,6 @@ public class JsonTestSuiteTest {
 	public void testNstJsonTestSuite() throws Exception {
 		// 1. ZIP-Datei im Temp-Verzeichnis zwischenspeichern (Cache)
 		final var zipPath = Paths.get(System.getProperty("java.io.tmpdir"), "JSONTestSuite-master.zip");
-
 		if (!Files.exists(zipPath)) {
 			System.out.println("Lade NST JSONTestSuite herunter (einmalig)...");
 			// Nutzt java.net.URI, da der URL-Konstruktor in neueren JDKs deprecated ist
@@ -32,19 +31,13 @@ public class JsonTestSuiteTest {
 		int passedY = 0, passedN = 0, passedI = 0;
 		var failed = 0;
 		final var myEngine = JsonEngine.of(MetaConfig.DEFAULT);
-
-
+		myEngine.maxRecursiveDepth(0);
 		// 2. Direktes Streamen aus dem ZIP (Zero-Disk-Extraction)
 		try (var zis = new ZipInputStream(Files.newInputStream(zipPath))) {
-			ZipEntry entry;
-			while ((entry = zis.getNextEntry()) != null) {
+			while (zis.getNextEntry() instanceof final ZipEntry entry) {
 				if (entry.isDirectory()) continue;
-
 				final var name = entry.getName();
-				if (!name.contains("/test_parsing/") || !name.endsWith(".json")) {
-					continue; // Wir wollen nur die Parsing-Tests
-				}
-
+				if (!name.contains("/test_parsing/") || !name.endsWith(".json")) continue;
 				final var fileName = Paths.get(name).getFileName().toString();
 				final var content  = zis.readAllBytes();
 				try {
@@ -84,10 +77,5 @@ public class JsonTestSuiteTest {
 		System.out.println("=========================================");
 
 		assertEquals(0, failed, failed + " Tests sind fehlgeschlagen! Siehe Konsolenausgabe für Details.");
-	}
-
-	private void parseWithMyEngine(final byte[] jsonContent) throws Exception {
-		// Implementiere hier den Brückenschlag zu deiner Engine.
-		// WICHTIG: Die Methode muss eine Exception werfen, wenn das JSON ungültig ist!
 	}
 }

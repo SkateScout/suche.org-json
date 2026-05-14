@@ -285,10 +285,12 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 	private static final int EXPAND_STEP = 8;
 
 	private void upgradeToMixed() {
+		final var l = data.length - 1;
+		final var d = data;
 		switch (singleType) {
 		case MetaPool.T_MIXED  -> { return; }
-		case MetaPool.T_LONG   -> { for (var i = 0; i < data.length; i += 2) if (data[i] != null) data[i + 1] = PRIMITIVE.LONG;   }
-		case MetaPool.T_DOUBLE -> { for (var i = 0; i < data.length; i += 2) if (data[i] != null) data[i + 1] = PRIMITIVE.DOUBLE; }
+		case MetaPool.T_LONG   -> { for (var i = 0; i < l; i += 2) if (d[i] != null) d[i + 1] = PRIMITIVE.LONG;   }
+		case MetaPool.T_DOUBLE -> { for (var i = 0; i < l; i += 2) if (d[i] != null) d[i + 1] = PRIMITIVE.DOUBLE; }
 		default                -> { break; }
 		}
 		singleType = MetaPool.T_MIXED;

@@ -371,7 +371,11 @@ final class ObjectMeta {
 	}
 
 	int prepareKey(final Object context, final String key) {
-		if (metaType == TYPE_MAP) { ((ParseContext) context).currentKey = key; return 0; }
+		if (metaType == TYPE_MAP) {
+			if(null == context) throw JsonEngine.illegalStateException("Context must not be null");
+			((ParseContext) context).currentKey = key;
+			return 0;
+		}
 		final var b = key.getBytes(StandardCharsets.UTF_8);
 		final var idx = keys.get(BufferedStream.computeHash(b, 0, b.length), b, 0, b.length);
 		if (idx == -1 && failOnUnknown) throw new IllegalArgumentException("Unknown property " + key + " in class " + className);

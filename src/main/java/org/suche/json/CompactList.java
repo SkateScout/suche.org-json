@@ -4,20 +4,28 @@ import java.util.AbstractList;
 import java.util.RandomAccess;
 
 public final class CompactList extends AbstractList<Object> implements ContextBacked,RandomAccess, JSONArray {
+	private static final long[] NO_PRIMS = { };
 	private final Object[] data;
 	private final long  [] prims;
 	private final byte     singleType;
 	private       int      removed = 0;
+
+
+	CompactList(final byte pSingleType, final Object[] pData, final long[] pPrims) {
+		this.singleType = pSingleType;
+		this.data       = pData;
+		this.prims      = pPrims == null ? NO_PRIMS : pPrims;
+	}
 
 	@Override public void put(final int index, final int val) {
 		if (index < 0) throw JsonEngine.illegalStateException("Index can not be negative");
 		if(index == size() && removed > 0) removed--;
 		if (index >= size()) throw JsonEngine.illegalStateException("Index: " + index + ", Size: " + size());
 		switch (singleType) {
-		case MetaPool.T_EMPTY  ->   JsonEngine.illegalStateException("Cannot modify empty list");
-		case MetaPool.T_LONG   ->   prims[index] = val;
-		case MetaPool.T_DOUBLE -> { prims[index] = Double.doubleToRawLongBits(val); }
-		default -> { data[index] = val; if(prims!=null) prims[index] = val; }
+		case MetaPool.T_EMPTY  -> JsonEngine.illegalStateException("Cannot modify empty list");
+		case MetaPool.T_LONG   -> prims[index] = val;
+		case MetaPool.T_DOUBLE -> prims[index] = Double.doubleToRawLongBits(val);
+		default -> { data[index] = val; if(prims!=NO_PRIMS) prims[index] = val; }
 		}
 	}
 
@@ -39,8 +47,8 @@ public final class CompactList extends AbstractList<Object> implements ContextBa
 		}
 		default -> {
 			switch(element) {
-			case final Long   l -> { data[index] = l; if(prims!=null) prims[index] = l; }
-			case final Double d -> { data[index] = d; if(prims!=null) prims[index] = Double.doubleToRawLongBits(d); }
+			case final Long   l -> { data[index] = l; if(prims!=NO_PRIMS) prims[index] = l; }
+			case final Double d -> { data[index] = d; if(prims!=NO_PRIMS) prims[index] = Double.doubleToRawLongBits(d); }
 			case null,default   -> data[index] = element;
 			}
 		}
@@ -50,8 +58,8 @@ public final class CompactList extends AbstractList<Object> implements ContextBa
 
 	@Override public void removeByIndex(final int index) {
 		removed++;
-		if(data  != null) System.arraycopy(data , index+1, data , index,data .length-index-removed);
-		if(prims != null) System.arraycopy(prims, index+1, prims, index,prims.length-index-removed);
+		if(data  != null    ) System.arraycopy(data , index+1, data , index,data .length-index-removed);
+		if(prims != NO_PRIMS) System.arraycopy(prims, index+1, prims, index,prims.length-index-removed);
 	}
 
 	@Override public boolean  isEmpty   () {
@@ -106,8 +114,8 @@ public final class CompactList extends AbstractList<Object> implements ContextBa
 			if(index>=prims.length) yield fallback;
 			final var val = data[index];
 			if(val == null) yield fallback;
-			if (val == PRIMITIVE.LONG)   yield Long  .toString(                        prims[index] );
-			if (val == PRIMITIVE.DOUBLE) yield Double.toString(Double.longBitsToDouble(prims[index]));
+			if(val == PRIMITIVE.LONG)   yield Long  .toString(                        prims[index] );
+			if(val == PRIMITIVE.DOUBLE) yield Double.toString(Double.longBitsToDouble(prims[index]));
 			yield data[index].toString();
 		}
 		};
@@ -133,10 +141,4 @@ public final class CompactList extends AbstractList<Object> implements ContextBa
 
 	// Retrieves the string representation of the value at the given index
 	@Override public String getString(final int index) { return optString(index, null); }
-
-	CompactList(final byte pSingleType, final Object[] pData, final long[] pPrims) {
-		this.singleType = pSingleType;
-		this.data       = pData;
-		this.prims      = pPrims;
-	}
 }
