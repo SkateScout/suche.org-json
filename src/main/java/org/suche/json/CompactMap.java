@@ -145,8 +145,7 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 
 	@Override public Object get(final Object key) {
 		final var idx = idx((String)key);
-		if(idx < 0) return null;
-		return (idx >= 0 ? resolve(idx) : null);
+		return (idx < 0 ? null : resolve(idx));
 	}
 
 	@Override public Object opt(final String key) {
