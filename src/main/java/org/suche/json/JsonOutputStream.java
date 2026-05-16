@@ -280,14 +280,14 @@ public final class JsonOutputStream implements AutoCloseable {
 					final var sType = cMap.singleType();
 					mapLoop: while (c.idx < c.len) {
 						final var entryIdx = c.idx++;
-						final var key = data[entryIdx << 1];
+						final var key      = data[entryIdx << 1];
 						if (key == null) continue mapLoop;
-						if (sType == MetaPool.T_LONG) {
+						if (sType == PRIMITIVE.T_LONG) {
 							final var v = prims[entryIdx];
 							if (v != 0 || !skip0) { writeMapKey(key); writeNumber((char)0, v); }
 							continue mapLoop;
 						}
-						if (sType == MetaPool.T_DOUBLE) {
+						if (sType == PRIMITIVE.T_DOUBLE) {
 							writeMapKey(key);
 							writeDouble((char)0, Double.longBitsToDouble(prims[entryIdx]));
 							continue mapLoop;
@@ -319,11 +319,11 @@ public final class JsonOutputStream implements AutoCloseable {
 						final var sType = cList.singleType();
 						listLoop: while (c.idx < c.len) {
 							final var i = c.idx++;
-							if (sType == MetaPool.T_LONG) {
+							if (sType == PRIMITIVE.T_LONG) {
 								writeNumber(commaNeeded ? ',' : 0, prims[i]);
 								continue listLoop;
 							}
-							if (sType == MetaPool.T_DOUBLE) {
+							if (sType == PRIMITIVE.T_DOUBLE) {
 								writeDouble(commaNeeded ? ',' : 0, Double.longBitsToDouble(prims[i]));
 								continue listLoop;
 							}
@@ -782,7 +782,7 @@ public final class JsonOutputStream implements AutoCloseable {
 		case final Long          t -> writeNumber((char)0, t);
 		case final Double        t -> writeDouble((char)0, t);
 		case final CompactList   t -> push((byte)'[', TYPE_OBJ_ARRAY  , t, null, t.size());
-		case final CompactMap    t -> push((byte)'{', TYPE_COMPACT_MAP, t, null, t.size() * 2);
+		case final CompactMap    t -> push((byte)'{', TYPE_COMPACT_MAP, t, null, t.size());
 		case final String[]      t -> { if(t.length>0) { write((byte)'['); writeEscapedString(t[0]); for(var i=1; i<t.length; i++) { write((byte)','); writeEscapedString(t[i]); } } closeArray(); }
 		case final Object[]      t -> push((byte)'[', TYPE_OBJ_ARRAY  , t, null, t.length);
 		case final Record        t -> { final var parts = engine.ofComplex(t.getClass()); push((byte)'{', TYPE_RECORD, t, parts, parts.length); }

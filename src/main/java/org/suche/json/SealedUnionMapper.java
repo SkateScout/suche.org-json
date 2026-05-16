@@ -248,9 +248,9 @@ final class SealedUnionMapper {
 						final var currentIdx = c.idx++;
 
 						// LAZY PRIMITIVE RESOLUTION (LIST)
-						if (c.singleType == MetaPool.T_LONG) {
+						if (c.singleType == PRIMITIVE.T_LONG) {
 							val = c.prims[currentIdx];
-						} else if (c.singleType == MetaPool.T_DOUBLE) {
+						} else if (c.singleType == PRIMITIVE.T_DOUBLE) {
 							val = Double.longBitsToDouble(c.prims[currentIdx]);
 						} else if (val == PRIMITIVE.LONG) val = c.prims[currentIdx];
 						else if (val == PRIMITIVE.DOUBLE) val = Double.longBitsToDouble(c.prims[currentIdx]);
@@ -290,9 +290,9 @@ final class SealedUnionMapper {
 						var val = c.raw[c.idx + 1];
 						// LAZY PRIMITIVE RESOLUTION (MAP)
 						final var logicalIdx = c.idx >> 1; // Sicherer Bit-Shift für Value-Index
-					if (c.singleType == MetaPool.T_LONG) {
+					if (c.singleType == PRIMITIVE.T_LONG) {
 						val = c.prims[logicalIdx];
-					} else if (c.singleType == MetaPool.T_DOUBLE) {
+					} else if (c.singleType == PRIMITIVE.T_DOUBLE) {
 						val = Double.longBitsToDouble(c.prims[logicalIdx]);
 					} else if (val == PRIMITIVE.LONG) val = c.prims[logicalIdx];
 					else if (val == PRIMITIVE.DOUBLE) val = Double.longBitsToDouble(c.prims[logicalIdx]);

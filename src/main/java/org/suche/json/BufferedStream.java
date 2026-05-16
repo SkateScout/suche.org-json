@@ -10,12 +10,6 @@ import org.suche.annotation.NonNull;
 
 sealed abstract class BufferedStream  implements MetaPool permits JsonInputStream {
 	private static final int        BUFFER_SIZE = 128*1024;
-	private static final double[]   POW10 = { 1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18 };
-	private static final long[]     POW10_L = {
-			1L, 10L, 100L, 1000L, 10000L, 100000L, 1000000L, 10000000L, 100000000L,
-			1000000000L, 10000000000L, 100000000000L, 1000000000000L, 10000000000000L,
-			100000000000000L, 1000000000000000L, 10000000000000000L, 100000000000000000L, 1000000000000000000L
-	};
 	private static final int        POOL_SIZE = 128;
 	private static final int        STRING_POOL_SIZE = 4096;
 	// Little-Endian 32-Bit Konstanten für "true", "fals" und "null"
@@ -177,7 +171,7 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 			ctx = new ParseContext();
 		}
 		ctx.cnt        = 0;
-		ctx.singleType = MetaPool.T_EMPTY;
+		ctx.singleType = PRIMITIVE.T_EMPTY;
 		ctx.currentKey = null;
 		ctx.objs       = null;
 		ctx.prims      = null;

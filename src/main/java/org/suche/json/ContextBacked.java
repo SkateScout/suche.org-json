@@ -11,8 +11,8 @@ sealed interface ContextBacked permits CompactList, CompactMap, JSONArray {
 		final var singleType = singleType();
 		if(idx < 0 || idx >= size()) JsonEngine.illegalStateException("Index "+idx+" not in [0..."+(prims.length-1)+"]");
 		return switch(singleType) {
-		case MetaPool.T_LONG   -> prims[idx];
-		case MetaPool.T_DOUBLE -> (long)Double.longBitsToDouble(prims[idx]);
+		case PRIMITIVE.T_LONG   -> prims[idx];
+		case PRIMITIVE.T_DOUBLE -> (long)Double.longBitsToDouble(prims[idx]);
 		default -> {
 			final var data = rawValueAt(idx);
 			if(data == PRIMITIVE.LONG  ) yield prims[idx];
@@ -28,8 +28,8 @@ sealed interface ContextBacked permits CompactList, CompactMap, JSONArray {
 		final var singleType = singleType();
 		if(idx < 0 || idx >= size()) return fallback;
 		return switch(singleType) {
-		case MetaPool.T_LONG   -> prims[idx];
-		case MetaPool.T_DOUBLE -> Double.longBitsToDouble(prims[idx]);
+		case PRIMITIVE.T_LONG   -> prims[idx];
+		case PRIMITIVE.T_DOUBLE -> Double.longBitsToDouble(prims[idx]);
 		default -> {
 			final var data = rawValueAt(idx);
 			if(data == PRIMITIVE.LONG  ) yield prims[idx];
@@ -46,8 +46,8 @@ sealed interface ContextBacked permits CompactList, CompactMap, JSONArray {
 		if(idx >= size()) throw new IndexOutOfBoundsException();
 		final var singleType = singleType();
 		return switch(singleType) {
-		case MetaPool.T_LONG   -> prims[idx];
-		case MetaPool.T_DOUBLE -> (long)Double.longBitsToDouble(prims[idx]);
+		case PRIMITIVE.T_LONG   -> prims[idx];
+		case PRIMITIVE.T_DOUBLE -> (long)Double.longBitsToDouble(prims[idx]);
 		default -> {
 			final var data = rawValueAt(idx);
 			if(data == PRIMITIVE.LONG  ) yield prims[idx];
@@ -66,8 +66,8 @@ sealed interface ContextBacked permits CompactList, CompactMap, JSONArray {
 		final var prims      = prims     ();
 		final var singleType = singleType();
 		return switch(singleType) {
-		case MetaPool.T_LONG   -> (double)prims[idx];
-		case MetaPool.T_DOUBLE -> Double.longBitsToDouble(prims[idx]);
+		case PRIMITIVE.T_LONG   -> (double)prims[idx];
+		case PRIMITIVE.T_DOUBLE -> Double.longBitsToDouble(prims[idx]);
 		default -> {
 			final var data = rawValueAt(idx);
 			if(data == PRIMITIVE.LONG  ) yield (double)prims[idx];

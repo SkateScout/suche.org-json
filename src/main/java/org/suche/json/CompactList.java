@@ -22,9 +22,9 @@ public final class CompactList extends AbstractList<Object> implements ContextBa
 		if(index == size() && removed > 0) removed--;
 		if (index >= size()) throw JsonEngine.illegalStateException("Index: " + index + ", Size: " + size());
 		switch (singleType) {
-		case MetaPool.T_EMPTY  -> JsonEngine.illegalStateException("Cannot modify empty list");
-		case MetaPool.T_LONG   -> prims[index] = val;
-		case MetaPool.T_DOUBLE -> prims[index] = Double.doubleToRawLongBits(val);
+		case PRIMITIVE.T_EMPTY  -> JsonEngine.illegalStateException("Cannot modify empty list");
+		case PRIMITIVE.T_LONG   -> prims[index] = val;
+		case PRIMITIVE.T_DOUBLE -> prims[index] = Double.doubleToRawLongBits(val);
 		default -> { data[index] = val; if(prims!=NO_PRIMS) prims[index] = val; }
 		}
 	}
@@ -35,13 +35,13 @@ public final class CompactList extends AbstractList<Object> implements ContextBa
 		if (index >= size()) JsonEngine.illegalStateException("Index: " + index + ", Size: " + size());
 		final var oldValue = resolve(index);
 		switch (singleType) {
-		case MetaPool.T_EMPTY  -> JsonEngine.illegalStateException("Cannot modify empty list");
-		case MetaPool.T_LONG   -> {
+		case PRIMITIVE.T_EMPTY  -> JsonEngine.illegalStateException("Cannot modify empty list");
+		case PRIMITIVE.T_LONG   -> {
 			if (!(element instanceof final Number n)) throw JsonEngine.illegalStateException("Strict T_LONG list requires a Number");
 			if(n.longValue() != n.doubleValue()) throw JsonEngine.illegalStateException("Strict T_LONG fast frac check");
 			prims[index] = n.longValue();
 		}
-		case MetaPool.T_DOUBLE -> {
+		case PRIMITIVE.T_DOUBLE -> {
 			if (!(element instanceof final Number n)) throw JsonEngine.illegalStateException("Strict T_DOUBLE list requires a Number");
 			prims[index] = Double.doubleToRawLongBits(n.doubleValue());
 		}
@@ -60,22 +60,23 @@ public final class CompactList extends AbstractList<Object> implements ContextBa
 		removed++;
 		if(data  != null    ) System.arraycopy(data , index+1, data , index,data .length-index-removed);
 		if(prims != NO_PRIMS) System.arraycopy(prims, index+1, prims, index,prims.length-index-removed);
+		if (data != null) data[data.length - removed] = null;
 	}
 
 	@Override public boolean  isEmpty   () {
 		return switch(singleType) {
-		case MetaPool.T_EMPTY  -> true;
-		case MetaPool.T_LONG   -> prims.length-removed==0;
-		case MetaPool.T_DOUBLE -> prims.length-removed==0;
+		case PRIMITIVE.T_EMPTY  -> true;
+		case PRIMITIVE.T_LONG   -> prims.length-removed==0;
+		case PRIMITIVE.T_DOUBLE -> prims.length-removed==0;
 		default                -> data .length-removed==0;
 		};
 	}
 
 	@Override public int      size      () {
 		return switch(singleType) {
-		case MetaPool.T_EMPTY  -> 0;
-		case MetaPool.T_LONG   -> prims.length - removed;
-		case MetaPool.T_DOUBLE -> prims.length - removed;
+		case PRIMITIVE.T_EMPTY  -> 0;
+		case PRIMITIVE.T_LONG   -> prims.length - removed;
+		case PRIMITIVE.T_DOUBLE -> prims.length - removed;
 		default                -> data .length - removed;
 		};
 	}
@@ -91,9 +92,9 @@ public final class CompactList extends AbstractList<Object> implements ContextBa
 
 	private Object resolve (final int valIndex) {
 		return switch(singleType) {
-		case MetaPool.T_EMPTY  -> JsonEngine.illegalStateException("empty");
-		case MetaPool.T_LONG   -> Long  .valueOf(                        prims[valIndex] );
-		case MetaPool.T_DOUBLE -> Double.valueOf(Double.longBitsToDouble(prims[valIndex]));
+		case PRIMITIVE.T_EMPTY  -> JsonEngine.illegalStateException("empty");
+		case PRIMITIVE.T_LONG   -> Long  .valueOf(                        prims[valIndex] );
+		case PRIMITIVE.T_DOUBLE -> Double.valueOf(Double.longBitsToDouble(prims[valIndex]));
 		default                -> {
 			final var val = data[valIndex];
 			if (val == PRIMITIVE.LONG)   yield Long  .valueOf(                        prims[valIndex] );
@@ -107,9 +108,9 @@ public final class CompactList extends AbstractList<Object> implements ContextBa
 	@Override public String optString(final int index, final String fallback) {
 		if(index < 0) return fallback;
 		return switch(singleType) {
-		case MetaPool.T_EMPTY  -> fallback;
-		case MetaPool.T_LONG   -> index>=prims.length?fallback:Long  .toString(                        prims[index] );
-		case MetaPool.T_DOUBLE -> index>=prims.length?fallback:Double.toString(Double.longBitsToDouble(prims[index]));
+		case PRIMITIVE.T_EMPTY  -> fallback;
+		case PRIMITIVE.T_LONG   -> index>=prims.length?fallback:Long  .toString(                        prims[index] );
+		case PRIMITIVE.T_DOUBLE -> index>=prims.length?fallback:Double.toString(Double.longBitsToDouble(prims[index]));
 		default                -> {
 			if(index>=prims.length) yield fallback;
 			final var val = data[index];

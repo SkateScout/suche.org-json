@@ -7,7 +7,7 @@ import java.util.Set;
 /**
  * A lightweight interface representing a JSON object, optimized for read-heavy operations.
  */
-public sealed interface JSONObject permits CompactMap {
+public sealed interface JSONObject extends Map<String,Object> permits CompactMap {
 
 	/** Checks if the key exists within the JSON object. */
 	boolean has(String key);
@@ -82,7 +82,9 @@ public sealed interface JSONObject permits CompactMap {
 	default Number  optNumber (final String key) { return optNumber (key, null); }
 
 	//
+	@Override
 	Set<String> keySet();
+	@Override
 	Object      put(String key, Object        val);
 	JSONObject  put(String key, String        val);
 	JSONObject	put(String key, long          val);
@@ -99,11 +101,15 @@ public sealed interface JSONObject permits CompactMap {
 	JSONObject	put(String key, Map<?,?>      val);
 	JSONObject	put(String key, Map<?,?>[]    val);
 
+	@Override
 	void clear();
-	Map<String, Object> internalMap();
 	Object              remove(String key);
+	@Override
 	boolean             isEmpty();
 	int                 length();
+
+	default Map<String, Object> internalMap()  { return this; }
+	default Map<String, Object> toMap() { return this; }
 
 	default String toString(final int i) {
 		if(i<0) JsonEngine.illegalStateException("Must positive");

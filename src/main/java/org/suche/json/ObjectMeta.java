@@ -93,13 +93,6 @@ final class ObjectMeta {
 
 	ObjectMeta childMeta(final int index) { return childMetas[index]; }
 
-	private int startSize(final int depth) {
-		final var size = depth < 64 && depth >= 0 ? lastSeenSizeByDepth[depth] : 16;
-		if (size < 1) return 2;
-		if (size > 512) return 512;
-		return size;
-	}
-
 	private void lastSize(final int depth, final int size) { if (depth >= 0 && depth < 64) lastSeenSizeByDepth[depth] = size; }
 
 	record ComponentMeta(String name, Class<?> type, Class<?> valueType) {
@@ -408,7 +401,7 @@ final class ObjectMeta {
 		}
 		lastSize(s.depth(), cnt);
 		if(ctx.prims != null && ctx.prims.length == cnt) {
-			if(ctx.singleType == MetaPool.T_LONG || ctx.singleType == MetaPool.T_DOUBLE) {
+			if(ctx.singleType == PRIMITIVE.T_LONG || ctx.singleType == PRIMITIVE.T_DOUBLE) {
 				final var ret = new CompactList(ctx.singleType, null, ctx.prims);
 				ctx.prims = new long[cnt];
 				s.returnContext(ctx);
@@ -422,7 +415,7 @@ final class ObjectMeta {
 				return ret;
 			}
 		}
-		if(ctx.singleType == MetaPool.T_LONG || ctx.singleType == MetaPool.T_DOUBLE) {
+		if(ctx.singleType == PRIMITIVE.T_LONG || ctx.singleType == PRIMITIVE.T_DOUBLE) {
 			final var ret =  new CompactList(ctx.singleType, null, Arrays.copyOf(ctx.prims, ctx.cnt));
 			s.returnContext(ctx);
 			return ret;
@@ -461,8 +454,8 @@ final class ObjectMeta {
 			if (ctx.objs != null) System.arraycopy(ctx.objs, 0, result, 0, ctx.cnt);
 			else if (ctx.prims != null) {
 				// Primitive Werte in Ziel-Array boxen (z.B. für Double[] vs double[])
-				if (ctx.singleType == MetaPool.T_DOUBLE) for (var i = 0; i < ctx.cnt; i++) Array.set(result, i, Double.longBitsToDouble(ctx.prims[i]));
-				else if (ctx.singleType == MetaPool.T_LONG) for (var i = 0; i < ctx.cnt; i++) Array.set(result, i, ctx.prims[i]);
+				if (ctx.singleType == PRIMITIVE.T_DOUBLE) for (var i = 0; i < ctx.cnt; i++) Array.set(result, i, Double.longBitsToDouble(ctx.prims[i]));
+				else if (ctx.singleType == PRIMITIVE.T_LONG) for (var i = 0; i < ctx.cnt; i++) Array.set(result, i, ctx.prims[i]);
 			}
 			s.returnContext(ctx);
 			yield result;
@@ -481,8 +474,8 @@ final class ObjectMeta {
 		switch (metaType) {
 		case TYPE_INSTANTIATOR               -> ((ParseContext)context).prims[index] = v;
 		case TYPE_MAP                        -> ((ParseContext)context).primKeyValue(s, PRIMITIVE.LONG, v);
-		case TYPE_OBJ_ARRAY, TYPE_COLLECTION -> ((ParseContext)context).primIdxValue(s, PRIMITIVE.LONG, MetaPool.T_LONG, v, index);
-		case TYPE_SET          -> ((Collection<Object>) context).add(v);
+		case TYPE_OBJ_ARRAY, TYPE_COLLECTION -> ((ParseContext)context).primIdxValue(s, PRIMITIVE.LONG, v, index);
+		case TYPE_SET                        -> ((Collection<Object>) context).add(v);
 		default -> set(s, context, index, v);
 		}
 	}
@@ -495,7 +488,7 @@ final class ObjectMeta {
 		switch (metaType) {
 		case TYPE_INSTANTIATOR               -> ((ParseContext)context).prims[index] = bits;
 		case TYPE_MAP                        -> ((ParseContext)context).primKeyValue(s, PRIMITIVE.DOUBLE, bits);
-		case TYPE_OBJ_ARRAY, TYPE_COLLECTION -> ((ParseContext)context).primIdxValue(s, PRIMITIVE.DOUBLE, MetaPool.T_DOUBLE, bits, index);
+		case TYPE_OBJ_ARRAY, TYPE_COLLECTION -> ((ParseContext)context).primIdxValue(s, PRIMITIVE.DOUBLE, bits, index);
 		case TYPE_SET -> ((Collection<Object>) context).add(v);
 		default -> set(s, context, index, v);
 		}
@@ -515,7 +508,7 @@ final class ObjectMeta {
 		case TYPE_INSTANTIATOR -> ((ParseContext) context).objs[index] = value;
 		case TYPE_MAP          -> {
 			final var ctx = (ParseContext) context;
-			if (ctx.objs == null || ctx.cnt + 2 > ctx.objs.length) ctx.ensureObjs(s, ctx.cnt + 2);
+			ctx.upgradeToMixed(s, ctx.cnt + 2);
 			ctx.objs[ctx.cnt++] = ctx.currentKey;
 			ctx.objs[ctx.cnt++] = value;
 			ctx.currentKey = null;

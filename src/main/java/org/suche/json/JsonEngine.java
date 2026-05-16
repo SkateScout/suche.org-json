@@ -76,6 +76,13 @@ public sealed interface JsonEngine permits InternalEngine {
 	static JSONObject ofJSONObject    (final String json) { return of(json.getBytes(), JSONObject.class); }
 	static JSONObject ofJSONObject    (final byte[] json) { return of(json           , JSONObject.class); }
 
+	static void main(final String[] argc) {
+		final var o = ofJSONObject(Path.of("/FOE-Proxy/keys.json"));
+		System.out.println("O: "+o);
+		System.out.println("de11: "+o.get("de11"));
+	}
+
+
 	static JSONArray  pathToJSONArray (final Path   json) { return of(json           , JSONArray.class); }
 	static JSONArray  textToJSONArray (final String json) { return of(json.getBytes(), JSONArray.class); }
 	static JSONArray  byteToJSONArray (final byte[] json) { return of(json           , JSONArray.class); }
@@ -95,5 +102,5 @@ public sealed interface JsonEngine permits InternalEngine {
 		return new String(b,0,b.length);
 	}
 
-	static JSONObject newJSONObject() { return new CompactMap(MetaPool.T_EMPTY, null, null); }
+	static JSONObject newJSONObject() { return new CompactMap(PRIMITIVE.T_EMPTY, null, null); }
 }
