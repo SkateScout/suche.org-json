@@ -10,7 +10,6 @@ public final class CompactList extends AbstractList<Object> implements ContextBa
 	private final byte     singleType;
 	private       int      removed = 0;
 
-
 	CompactList(final byte pSingleType, final Object[] pData, final long[] pPrims) {
 		this.singleType = pSingleType;
 		this.data       = pData;
@@ -142,4 +141,6 @@ public final class CompactList extends AbstractList<Object> implements ContextBa
 
 	// Retrieves the string representation of the value at the given index
 	@Override public String getString(final int index) { return optString(index, null); }
+
+	@Override public String toString() { return JsonEngine.toString(this); }
 }

@@ -374,6 +374,5 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 	@Override public JSONObject put(final String key, final Collection<?> val) { return p  (key,        val); }
 	@Override public JSONObject put(final String key, final Map<?,?>      val) { return p  (key,        val); }
 	@Override public JSONObject put(final String key, final boolean       val) { return p  (key,        val); }
-
 	@Override public String toString() { return JsonEngine.toString(this); }
 }
