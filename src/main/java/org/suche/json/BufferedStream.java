@@ -64,11 +64,12 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 	ObjectMeta  genericCollectionMeta;
 	ObjectMeta  genericArrayMeta     ;
 	ObjectMeta  genericSetMeta       ;
+	long		readDone = 0;
 
 	final Object[] onceInternal = new Object[32];
 	int            onceInternalSize = 0;
 
-	static void throwInvalid(final String mesg) { throw new IllegalStateException(mesg); }
+	final void throwInvalid(final String mesg) { throw new IllegalStateException("OFF: "+(readDone+pos)+" "+mesg); }
 
 	final void init(final InputStream i, final InternalEngine c) {
 		final var cfg          = c.config();
@@ -205,8 +206,7 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		return new String(src, start, len, isAscii ? StandardCharsets.ISO_8859_1 : StandardCharsets.UTF_8);
 	}
 
-	@Override
-	public final String internBytes(final byte[] src, final int start, final int len, final int hash, final boolean isAscii) {
+	@Override public final String internBytes(final byte[] src, final int start, final int len, final int hash, final boolean isAscii) {
 		// Strings over 36 Zeichen (Text, long URLs) are not pooled.
 		if (stringPoolKeys == null || len > 36) return newString(src, start, len, isAscii);
 		final var keys = this.stringPoolKeys;
@@ -289,6 +289,7 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		final var remaining = limit - pos;
 		if (remaining >= n || limit < 0) return;
 		if (remaining > 0 && pos > 0) System.arraycopy(buffer, pos, buffer, 0, remaining);
+		readDone += pos;
 		pos = 0;
 		limit = remaining;
 		if(in != null) // Else buffered only
@@ -861,7 +862,7 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		}
 	}
 
-	static void unexpect(final byte e, final byte g) { throwInvalid("expect("+(char)e+")!="+(char)g+")"); }
+	final  void unexpect(final byte e, final byte g) { throwInvalid("expect("+(char)e+")!="+(char)g+")"); }
 
 	void expect(final byte b) throws IOException { final var r = read(); if (r != b) unexpect(b, r); }
 
