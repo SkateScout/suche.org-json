@@ -19,16 +19,20 @@ interface MetaPool {
 
 		void upgradeToMixed(final MetaPool s, final int requiredCapacity) {
 			if(objs == null || requiredCapacity > objs.length) ensureObjs(s, requiredCapacity);
-			switch (singleType) {
-			case PRIMITIVE.T_MIXED ->  { return;}
-			case PRIMITIVE.T_LONG  ->  { for (var i = 0; i < cnt; i++) objs[i] = org.suche.json.PRIMITIVE.LONG  ; }
-			case PRIMITIVE.T_DOUBLE->  { for (var i = 0; i < cnt; i++) objs[i] = org.suche.json.PRIMITIVE.DOUBLE; }
-			default               ->  { }
+			if(singleType == PRIMITIVE.T_MIXED) return;
+			final var p = switch (singleType) {
+			case PRIMITIVE.T_LONG  ->  PRIMITIVE.LONG;
+			case PRIMITIVE.T_DOUBLE->  PRIMITIVE.DOUBLE;
+			default                ->   null;
+			};
+			if(p != null) {
+				if (map != 0) { for (var i = 1; i < cnt; i += 2) objs[i] = p; }
+				else          { for (var i = 0; i < cnt; i++)    objs[i] = p; }
 			}
 			singleType = PRIMITIVE.T_MIXED;
 		}
 
-		void ensureObjs(final MetaPool s, final int minCapacity) {
+		void ensureObjs (final MetaPool s, final int minCapacity) {
 			if (objs == null) objs = s.takeArray(minCapacity);
 			else if (minCapacity > objs.length) {
 				var newCap = objs.length << 1;
@@ -40,7 +44,7 @@ interface MetaPool {
 			}
 		}
 
-		void ensurePrims(final MetaPool s, final int minCapacity) {
+		void ensurePrims (final MetaPool s, final int minCapacity) {
 			if (prims == null) {
 				prims = s.takeLongArray(minCapacity);
 			} else if (minCapacity > prims.length) {
@@ -79,8 +83,6 @@ interface MetaPool {
 			}
 			if (index >= this.cnt) this.cnt = index + 1;
 		}
-
-
 	}
 
 	Object[]     takeArray    (int minCapacity);

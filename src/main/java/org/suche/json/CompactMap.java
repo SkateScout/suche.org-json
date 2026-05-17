@@ -360,7 +360,6 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 	@Override public void clear() {
 		if(data != null) Arrays.fill(data, null);
 		singleType = PRIMITIVE.T_EMPTY;
-		keys  = null;
 	}
 
 	@Override public JSONObject put(final String key, final Map<?,?>[]    val) { return p  (key,        val); }

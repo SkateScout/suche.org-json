@@ -845,8 +845,12 @@ public final class JsonOutputStream implements AutoCloseable {
 		pos += 2;
 	}
 
+	private static IOException wrongKeyType(final Object key) throws JSONException {
+		throw JsonEngine.illegalStateException("Key must be STRING not "+(key == null ? "(null)" : key.getClass().getCanonicalName()));
+	}
+
 	private void writeMapKey(final Object key) throws IOException {
-		if(!(key instanceof final String str)) throw JsonEngine.illegalStateException("Key must be STRING");
+		if(!(key instanceof final String str)) throw wrongKeyType(key);
 		final var comma = this.commaNeeded;
 		final var sLen = str.length();
 		if(sLen <= 40) {

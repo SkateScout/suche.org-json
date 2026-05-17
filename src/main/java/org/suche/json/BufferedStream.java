@@ -861,7 +861,9 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		}
 	}
 
-	void expect(final byte b) throws IOException { final var r = read(); if (r != b) throwInvalid("expect("+(char)b+")!="+(char)r); }
+	static void unexpect(final byte e, final byte g) { throwInvalid("expect("+(char)e+")!="+(char)g+")"); }
+
+	void expect(final byte b) throws IOException { final var r = read(); if (r != b) unexpect(b, r); }
 
 	byte peek() throws IOException {
 		if (pos >= limit) ensure(1);

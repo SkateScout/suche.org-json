@@ -437,16 +437,24 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			int targetIdx;
 			var b = buffer[pos];
 			if ((b & 0xC0) == 0 && ((1L << b) & WHITESPACE_MASK) != 0) skipWhitespace();
-
-
 			if (pos < limit && buffer[pos] == (byte) '}') {
 				if (expectKey) throwInvalid("Trailing comma in object");
 				pos++;
 				return meta.end(this, context);
 			}
-
 			targetIdx = parseStringKeyAsIndex(context, meta);
-			expect((byte) ':');
+			ensure(3); // Minimum :1}
+
+			b = buffer[pos++];
+			if ((b & 0xC0) == 0 && ((1L << b) & WHITESPACE_MASK) != 0) {
+				skipWhitespace();
+				ensure(3); // Minimum :1}
+				b = buffer[pos++];
+			}
+
+			if (b != ':') unexpect(b, (byte)':');
+
+			// expect((byte) ':');
 			if (targetIdx < 0) { skipWhitespace(); skipValue(); consumeCommaIfPresent(); continue; }
 			if (pos >= limit) { ensure(1); if (pos >= limit) throwInvalid("Unexpedted END.1"); }
 			b = buffer[pos];
