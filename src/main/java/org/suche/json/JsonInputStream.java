@@ -24,7 +24,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		public void clean() { this.obj = null; this.meta = null; }
 	}
 
-	static final class CtxStack {
+	final class CtxStack {
 		private final CTX[] stack64 = new CTX[64];
 		CTX[] stack = stack64;
 		int depth = -1;
