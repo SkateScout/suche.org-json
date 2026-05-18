@@ -209,6 +209,7 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 
 	@Override public Object remove(final String key) {
 		final var idx = idx(key);
+		if(idx < 0) return null;
 		final var val = resolve(idx);
 		data[ idx << 1     ] = null; // Free key
 		data[(idx << 1) + 1] = null; // Remove value
