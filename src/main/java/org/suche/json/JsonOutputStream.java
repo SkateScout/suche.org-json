@@ -56,9 +56,9 @@ public final class JsonOutputStream implements AutoCloseable {
 	private static final byte   TYPE_COMPACT_MAP   = 6;
 	private static final byte   TYPE_OBJ_ARRAY     = 7;
 	private static final byte   TYPE_POOLED_MAP    = 8;
-	public  static final int    PRINT_NULL         = 1 << Flags.printNull         .ordinal();
-	public  static final int    PRINT_FALSE        = 1 << Flags.printFalse        .ordinal();
-	public  static final int    PRINT_EMPTY        = 1 << Flags.printEmpty        .ordinal();
+	public  static final int    SKIP_NULL         = 1 << Flags.printNull         .ordinal();
+	public  static final int    SKIP_FALSE        = 1 << Flags.printFalse        .ordinal();
+	public  static final int    SKIP_EMPTY        = 1 << Flags.printEmpty        .ordinal();
 	public  static final int    PRINT_1_FRACTIONAL = 1 << Flags.printOneFractional.ordinal();
 	public  static final int    PRINT_3_FRACTIONAL = 1 << Flags.printOneFractional.ordinal();
 
@@ -191,9 +191,9 @@ public final class JsonOutputStream implements AutoCloseable {
 	private void init(final InternalEngine e, final OutputStream newOut, final TimeFormat pTimeFormat, final int flags) {
 		init0(e, newOut, pTimeFormat);
 		var frac = 6;
-		this.skipNull  = (flags & PRINT_NULL)  == 0;
-		this.skipFalse = (flags & PRINT_FALSE) == 0;
-		this.skipEmpty = (flags & PRINT_EMPTY) == 0;
+		this.skipNull  = (flags & SKIP_NULL)  == 1;
+		this.skipFalse = (flags & SKIP_FALSE) == 1;
+		this.skipEmpty = (flags & SKIP_EMPTY) == 1;
 		if ((flags & PRINT_1_FRACTIONAL) != 0) frac = 1;
 		if ((flags & PRINT_3_FRACTIONAL) != 0) frac = 3;
 		this.fractionalLimit = frac;
