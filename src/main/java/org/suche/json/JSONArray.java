@@ -5,7 +5,7 @@ import java.util.List;
 /**
  * A lightweight interface representing a JSON array, optimized for read-heavy operations.
  */
-public sealed interface JSONArray extends List<Object>, ContextBacked permits CompactList {
+public sealed interface JSONArray extends List<Object>, ContextBacked permits CompactList, EmptyJSONArray {
 
 	/** Provides compatibility with org.json array length logic. */
 	int length();
