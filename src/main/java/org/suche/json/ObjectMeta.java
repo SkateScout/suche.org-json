@@ -9,7 +9,6 @@ import java.lang.reflect.Parameter;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -397,7 +396,7 @@ final class ObjectMeta {
 		if (skipDefaultValues && cnt == 0) { s.returnContext(ctx); return null; }
 		if(cnt == 0) {
 			s.returnContext(ctx);
-			return Collections.emptyList();
+			return EmptyJSONArray.ONCE;
 		}
 		lastSize(s.depth(), cnt);
 		if(ctx.prims != null && ctx.prims.length == cnt) {
