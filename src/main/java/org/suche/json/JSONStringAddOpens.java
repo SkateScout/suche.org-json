@@ -175,7 +175,7 @@ final class JSONStringAddOpens implements JSONStringProvider {
 				if (badMask != 0) {
 					final var safeChars = (Long.numberOfTrailingZeros(badMask) >>> 4);
 					if(safeChars > 0) {
-						long w = word & 0x00FF00FF00FF00FFL;
+						var w = word & 0x00FF00FF00FF00FFL;
 						w = (w | (w >>> 8)) & 0x0000FFFF0000FFFFL;
 						INT_VIEW.set(dst, dstOff, (int) (w | (w >>> 16)));						sOff   += safeChars;
 						dstOff += safeChars;
@@ -194,7 +194,12 @@ final class JSONStringAddOpens implements JSONStringProvider {
 				}
 
 				// Pure ASCII success
-				INT_VIEW.set(dst, dstOff, (int) (word  * MAGIC_4X16_to_4X8) >>> 48);
+				// INT_VIEW.set(dst, dstOff, (int) (word  * MAGIC_4X16_to_4X8) >>> 48); // FIXME Defekt
+
+				var w = word;
+				w = (w | (w >>> 8)) & 0x0000FFFF0000FFFFL;
+				INT_VIEW.set(dst, dstOff, (int) (w | (w >>> 16)));
+
 				sOff   += 4;
 				dstOff += 4;
 			}
@@ -327,7 +332,12 @@ final class JSONStringAddOpens implements JSONStringProvider {
 
 			if (badMask == 0) {
 				// Compress UTF-16 to Latin1 und spekulativer Write!
-				INT_VIEW.set(dst, dstOff, (int) (word * MAGIC_4X16_to_4X8 >>> 48));
+				// INT_VIEW.set(dst, dstOff, (int) (word * MAGIC_4X16_to_4X8 >>> 48));
+
+				var w = word;
+				w = (w | (w >>> 8)) & 0x0000FFFF0000FFFFL;
+				INT_VIEW.set(dst, dstOff, (int) (w | (w >>> 16)));
+
 				dstOff += remaining;
 				sOff += remaining;
 				return (((long) (sOff - startS)) << 32) | ((dstOff - startD) & 0xFFFFFFFFL);
