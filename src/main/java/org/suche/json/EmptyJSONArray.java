@@ -17,12 +17,12 @@ final class EmptyJSONArray implements JSONArray {
 		@Override public Object previous() { throw new NoSuchElementException(); }
 		@Override public int nextIndex() { return 0; }
 		@Override public int previousIndex() { return -1; }
-		@Override public void remove() { }
+		@Override public void remove() { /* Nothing to remove from empty list */ }
 		@Override public void set(final Object e) { throw new IllegalStateException("Read Only"); }
 		@Override public void add(final Object e) { throw new IllegalStateException("Read Only"); }
 	};
 
-	@Override public long[] prims() { return null; }
+	@Override public long[] prims() { return CompactList.NO_PRIMS; }
 	@Override public byte singleType() { return PRIMITIVE.T_EMPTY; }
 	@Override public Object rawValueAt(final int logicalIdx) { return null; }
 	@Override public int size() { return 0; }
@@ -38,7 +38,7 @@ final class EmptyJSONArray implements JSONArray {
 	@Override public boolean addAll(final int index, final Collection<? extends Object> c) { throw new UnsupportedOperationException("ReadOnly"); }
 	@Override public boolean removeAll(final Collection<?> c) { return false; }
 	@Override public boolean retainAll(final Collection<?> c) { return false; }
-	@Override public void clear() { }
+	@Override public void clear() { /* Nothing to remove from empty list */ }
 	@Override public Object get(final int index) { throw new UnsupportedOperationException("ReadOnly"); }
 	@Override public Object set(final int index, final Object element) { throw new UnsupportedOperationException("ReadOnly"); }
 	@Override public void add(final int index, final Object element) { throw new UnsupportedOperationException("ReadOnly"); }

@@ -241,7 +241,7 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 	@Override public int       optInt    (final String key) { final var v = oLong  (idx(key)); return(null==v?0:v.intValue()); }
 	@Override public short     optShort  (final String key) { final var v = oLong  (idx(key)); return(null==v?0:v.shortValue()); }
 	@Override public byte      optByte   (final String key) { final var v = oLong  (idx(key)); return(null==v?0:v.byteValue()); }
-	@Override public boolean   optBoolean(final String key) { final var v = oLong  (idx(key)); return(null==v?false:v.longValue()!=0); }
+	@Override public boolean   optBoolean(final String key) { final var v = oLong  (idx(key)); return(null!=v && v.longValue()!=0); }
 	@Override public char      optChar   (final String key) { final var v = oLong  (idx(key)); return(null==v?0:(char)v.intValue()); }
 	@Override public double    optDouble (final String key) { final var v = oDouble(idx(key)); return(null==v?0:v); }
 	@Override public float     optFloat  (final String key) { final var v = oDouble(idx(key)); return(null==v?0:v.floatValue()); }
@@ -263,20 +263,30 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 		} else if ((singleType == PRIMITIVE.T_DOUBLE) && !(value instanceof Number)) upgradeToMixed();
 
 		final var idx = getOrCreateIdx(key);
-		if (singleType == PRIMITIVE.T_LONG) {
-			if (prims == null) prims = new long[data.length >> 1];
-			prims[idx] = ((Number) value).longValue();
-		} else if (singleType == PRIMITIVE.T_DOUBLE) {
-			if (prims == null) prims = new long[data.length >> 1];
-			prims[idx] = Double.doubleToRawLongBits(((Number) value).doubleValue());
-		} else {
-			switch (value) {
-			case final Long l   -> { data[(idx << 1) + 1] = l; if (prims != null) prims[idx] = l; }
-			case final Double d -> { data[(idx << 1) + 1] = d; if (prims != null) prims[idx] = Double.doubleToRawLongBits(d); }
-			case null, default  ->   data[(idx << 1) + 1] = value;
-			}
+		switch (singleType) {
+		case PRIMITIVE.T_LONG   -> longPut(idx, value);
+		case PRIMITIVE.T_DOUBLE -> doublePut(idx, value);
+		default                 -> mixedPut(idx, value);
 		}
 		return this;
+	}
+
+	private void longPut(final int idx, final Object value) {
+		if (prims == null) prims = new long[data.length >> 1];
+		prims[idx] = ((Number) value).longValue();
+	}
+
+	private void doublePut(final int idx, final Object value) {
+		if (prims == null) prims = new long[data.length >> 1];
+		prims[idx] = Double.doubleToRawLongBits(((Number) value).doubleValue());
+	}
+
+	private void mixedPut(final int idx, final Object value) {
+		switch (value) {
+		case final Long l   -> { data[(idx << 1) + 1] = l; if (prims != null) prims[idx] = l; }
+		case final Double d -> { data[(idx << 1) + 1] = d; if (prims != null) prims[idx] = Double.doubleToRawLongBits(d); }
+		case null, default  ->   data[(idx << 1) + 1] = value;
+		}
 	}
 
 	private void upgradeToDouble() {

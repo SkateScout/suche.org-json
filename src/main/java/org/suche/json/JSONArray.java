@@ -51,7 +51,7 @@ public sealed interface JSONArray extends List<Object>, ContextBacked permits Co
 	default int          optInteger(final int idx) { final var v = oLong  (idx); return(null==v?0:v.intValue()); }
 	default short        optShort  (final int idx) { final var v = oLong  (idx); return(null==v?0:v.shortValue()); }
 	default byte         optByte   (final int idx) { final var v = oLong  (idx); return(null==v?0:v.byteValue()); }
-	default boolean      optBoolean(final int idx) { final var v = oLong  (idx); return(null==v?false:v.longValue()!=0); }
+	default boolean      optBoolean(final int idx) { final var v = oLong  (idx); return(null!=v && v.longValue()!=0); }
 	default char         optChar   (final int idx) { final var v = oLong  (idx); return(null==v?0:(char)v.intValue()); }
 	default double       optDouble (final int idx) { final var v = oDouble(idx); return(null==v?0:v); }
 	default float        optFloat  (final int idx) { final var v = oDouble(idx); return(null==v?0:v.floatValue()); }

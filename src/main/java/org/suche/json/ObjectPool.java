@@ -12,13 +12,13 @@ final class ObjectPool<T> {
 	private final int           limit  ;
 	private final AtomicInteger count  ;
 
-	public ObjectPool(final int limit, final Supplier<T> factory) {
-		this.limit = limit;
-		this.factory = factory;
+	public ObjectPool(final int pLimit, final Supplier<T> pFactory) {
+		this.limit = pLimit;
+		this.factory = pFactory;
 		this.pool = new ConcurrentLinkedQueue<>();
-		this.count = new AtomicInteger(limit);
-		for (var i = 0; i < limit; ++i) {
-			this.pool.add(factory.get());
+		this.count = new AtomicInteger(pLimit);
+		for (var i = 0; i < pLimit; ++i) {
+			this.pool.add(pFactory.get());
 		}
 	}
 

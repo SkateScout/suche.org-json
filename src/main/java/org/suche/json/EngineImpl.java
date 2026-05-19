@@ -30,7 +30,7 @@ final class EngineImpl implements InternalEngine {
 		final Object   mutex = new Object();
 		ObjectMeta metaObject;
 		KeyValueObject[] kv;
-		// MethodHandle filter;
+		// MethodHandle filter
 		UnaryOperator<Object> transformer;
 		int cacheIndex = -1;
 		boolean building = false; // Prevents circular dependency infinite loops

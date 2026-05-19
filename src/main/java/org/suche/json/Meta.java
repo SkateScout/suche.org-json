@@ -39,9 +39,16 @@ final class Meta {
 	private static final MethodHandle constructEnumObj;
 	private static final MethodHandle enumFilter;
 
+	private Meta() { }
+
 	static {
-		try {  constructEnumObj = lookup.findStatic(Meta.class, "constructEnumObj", ENUM_MFILTER); } catch(final Throwable t) { throw new IllegalStateException(t); }
+		try {  constructEnumObj = lookup.findStatic(Meta.class, "constructEnumObj", ENUM_MFILTER); } catch(final Exception t) { throw new IllegalStateException(t); }
 		try {  enumFilter       = lookup.findStatic(Meta.class, "resolveEnum", MethodType.methodType(Object.class, Object[].class, Object.class)); } catch(final Exception t) { throw new IllegalStateException(t); }
+	}
+
+	private static IllegalStateException illegalStateException(final Throwable x) {
+		if(x instanceof final RuntimeException e) throw e;
+		throw new IllegalStateException(x);
 	}
 
 	static KeyValueObject createFastFieldGetter(final byte[] key, final Field f, final Filter filter) throws Throwable {
@@ -50,22 +57,34 @@ final class Meta {
 		final var ret    = f.getType();
 		if (filter != null) {
 			final var mh = handle.asType(MT_S_APPLY);
-			return new KeyValueObject(key, 0, obj -> {
-				try { return filter.apply(mh.invokeExact(obj)); }
-				catch (final Throwable x) { throw new IllegalStateException(x); }
-			}, null, null, null, null);
+			return new KeyValueObject(key, 0, obj -> { try { return filter.apply(mh.invokeExact(obj)); } catch (final Throwable x) { throw illegalStateException(x); } }, null, null, null, null);
 		}
-		if (ret == int.class || ret == short.class || ret == byte.class) return new KeyValueObject(key, 1, null, obj -> { try { return (int) handle.asType(MT_S_APPLY_INT).invokeExact(obj); } catch (final Throwable x) { throw new IllegalStateException(x); } }, null, null, null);
-		if (ret == long.class                                          ) return new KeyValueObject(key, 2, null, null, obj -> { try { return (long) handle.asType(MT_S_APPLY_LONG).invokeExact(obj); } catch (final Throwable x) { throw new IllegalStateException(x); } }, null, null);
-		if (ret == double.class || ret == float.class                  ) return new KeyValueObject(key, 3, null, null, null, obj -> { try { return (double) handle.asType(MT_S_APPLY_DOUBLE).invokeExact(obj); } catch (final Throwable x) { throw new IllegalStateException(x); } }, null);
-		if (ret == boolean.class                                       ) return new KeyValueObject(key, 4, null, null, null, null, obj -> { try { return (boolean) handle.asType(MT_S_APPLY_BOOL).invokeExact(obj); } catch (final Throwable x) { throw new IllegalStateException(x); } });
+		if (ret == int.class || ret == short.class || ret == byte.class) return createFastFieldIntGetter    (key, handle);
+		if (ret == long.class                                          ) return createFastFieldLongGetter   (key, handle);
+		if (ret == double.class || ret == float.class                  ) return createFastFieldDoubleGetter (key, handle);
+		if (ret == boolean.class                                       ) return createFastFieldBooleanGetter(key, handle);
 		final var mh = handle.asType(MT_S_APPLY);
-		return new KeyValueObject(key, 0, obj -> { try { return mh.invokeExact(obj); } catch (final Throwable x) { throw new RuntimeException(x); } }, null, null, null, null);
+		return new KeyValueObject(key, 0, obj -> { try { return mh.invokeExact(obj); } catch (final Throwable x) { throw illegalStateException(x); } }, null, null, null, null);
 	}
 
-	@SuppressWarnings("unchecked")
+	static KeyValueObject createFastFieldIntGetter(final byte[] key, final MethodHandle handle) throws Throwable {
+		return new KeyValueObject(key, 1, null, obj -> { try { return (int) handle.asType(MT_S_APPLY_INT).invokeExact(obj); } catch (final Throwable x) { throw illegalStateException(x); } }, null, null, null);
+	}
+
+	static KeyValueObject createFastFieldLongGetter(final byte[] key, final MethodHandle handle) throws Throwable {
+		return new KeyValueObject(key, 2, null, null, obj -> { try { return (long) handle.asType(MT_S_APPLY_LONG).invokeExact(obj); } catch (final Throwable x) { throw illegalStateException(x); } }, null, null);
+	}
+
+	static KeyValueObject createFastFieldDoubleGetter(final byte[] key, final MethodHandle handle) throws Throwable {
+		return new KeyValueObject(key, 3, null, null, null, obj -> { try { return (double) handle.asType(MT_S_APPLY_DOUBLE).invokeExact(obj); } catch (final Throwable x) { throw illegalStateException(x); } }, null);
+	}
+
+	static KeyValueObject createFastFieldBooleanGetter(final byte[] key, final MethodHandle handle) throws Throwable {
+		return new KeyValueObject(key, 4, null, null, null, null, obj -> { try { return (boolean) handle.asType(MT_S_APPLY_BOOL).invokeExact(obj); } catch (final Throwable x) { throw illegalStateException(x); } });
+	}
+
 	static KeyValueObject createFastGetter(final byte[] key, final Method m, final Filter filter) throws Throwable {
-		try { m.setAccessible(true); } catch (final Exception _) {}
+		try { m.setAccessible(true); } catch (final Exception _) { /* Try to open the method */ }
 		final var handle = lookup.unreflect(m);
 		final var c      = m.getDeclaringClass();
 		final var ret    = m.getReturnType();
@@ -76,48 +95,56 @@ final class Meta {
 				catch (final Throwable x) { throw new IllegalStateException(x); }
 			}, null, null, null, null);
 		}
-		if (ret == int.class || ret == short.class || ret == byte.class) {
-			try {
-				final var site = LambdaMetafactory.metafactory(lookup, "applyAsInt", MT_FUNC_INT, MT_S_APPLY_INT, handle, MethodType.methodType(ret, c));
-				return new KeyValueObject(key, 1, null, (ToIntFunction<Object>) site.getTarget().invokeExact(), null, null, null);
-			} catch (final Throwable _) {
-				final var mh = handle.asType(MT_S_APPLY_INT);
-				return new KeyValueObject(key, 1, null, obj -> { try { return (int) mh.invokeExact(obj); } catch (final Throwable x) { throw new IllegalStateException(x); } }, null, null, null);
-			}
-		}
-		if (ret == long.class) {
-			try {
-				final var site = LambdaMetafactory.metafactory(lookup, "applyAsLong", MT_FUNC_LONG, MT_S_APPLY_LONG, handle, MethodType.methodType(long.class, c));
-				return new KeyValueObject(key, 2, null, null, (ToLongFunction<Object>) site.getTarget().invokeExact(), null, null);
-			} catch (final Throwable _) {
-				final var mh = handle.asType(MT_S_APPLY_LONG);
-				return new KeyValueObject(key, 2, null, null, obj -> { try { return (long) mh.invokeExact(obj); } catch (final Throwable x) { throw new IllegalStateException(x); } }, null, null);
-			}
-		}
-		if (ret == double.class || ret == float.class) {
-			try {
-				final var site = LambdaMetafactory.metafactory(lookup, "applyAsDouble", MT_FUNC_DOUBLE, MT_S_APPLY_DOUBLE, handle, MethodType.methodType(ret, c));
-				return new KeyValueObject(key, 3, null, null, null, (ToDoubleFunction<Object>) site.getTarget().invokeExact(), null);
-			} catch (final Throwable _) {
-				final var mh = handle.asType(MT_S_APPLY_DOUBLE);
-				return new KeyValueObject(key, 3, null, null, null, obj -> { try { return (double) mh.invokeExact(obj); } catch (final Throwable x) { throw new IllegalStateException(x); } }, null);
-			}
-		}
-		if (ret == boolean.class) {
-			try {
-				final var site = LambdaMetafactory.metafactory(lookup, "test", MT_FUNC_BOOL, MT_S_APPLY_BOOL, handle, MethodType.methodType(boolean.class, c));
-				return new KeyValueObject(key, 4, null, null, null, null, (Predicate<Object>) site.getTarget().invokeExact());
-			} catch (final Throwable _) {
-				final var mh = handle.asType(MT_S_APPLY_BOOL);
-				return new KeyValueObject(key, 4, null, null, null, null, obj -> { try { return (boolean) mh.invokeExact(obj); } catch (final Throwable x) { throw new IllegalStateException(x); } });
-			}
-		}
+		if (ret == int    .class || ret == short.class || ret == byte.class) return createFastIntGetter(key, c, handle, ret);
+		if (ret == long   .class                                           ) return createFastLongGetter(key, c, handle);
+		if (ret == double .class || ret == float.class                     ) return createFastDoubleGetter(key, c, handle, ret);
+		if (ret == boolean.class                                           ) return createFastBooleanGetter(key, c, handle);
 		try {
 			final var site = LambdaMetafactory.metafactory(lookup, "apply", MT_FUNC, MT_S_APPLY, handle, MethodType.methodType(ret, c));
 			return new KeyValueObject(key, 0, (UnaryOperator<Object>) site.getTarget().invokeExact(), null, null, null, null);
 		} catch (final Throwable _) {
 			final var mh = handle.asType(MT_S_APPLY);
 			return new KeyValueObject(key, 0, obj -> { try { return mh.invokeExact(obj); } catch (final Throwable x) { throw new IllegalStateException(x); } }, null, null, null, null);
+		}
+	}
+
+	static KeyValueObject createFastIntGetter(final byte[] key, final Class<?> c, final MethodHandle handle, final Class<?> ret) throws Throwable {
+		try {
+			final var site = LambdaMetafactory.metafactory(lookup, "applyAsInt", MT_FUNC_INT, MT_S_APPLY_INT, handle, MethodType.methodType(ret, c));
+			return new KeyValueObject(key, 1, null, (ToIntFunction<Object>) site.getTarget().invokeExact(), null, null, null);
+		} catch (final Throwable _) {
+			final var mh = handle.asType(MT_S_APPLY_INT);
+			return new KeyValueObject(key, 1, null, obj -> { try { return (int) mh.invokeExact(obj); } catch (final Throwable x) { throw new IllegalStateException(x); } }, null, null, null);
+		}
+	}
+
+	static KeyValueObject createFastLongGetter(final byte[] key, final Class<?> c, final MethodHandle handle) throws Throwable {
+		try {
+			final var site = LambdaMetafactory.metafactory(lookup, "applyAsLong", MT_FUNC_LONG, MT_S_APPLY_LONG, handle, MethodType.methodType(long.class, c));
+			return new KeyValueObject(key, 2, null, null, (ToLongFunction<Object>) site.getTarget().invokeExact(), null, null);
+		} catch (final Throwable _) {
+			final var mh = handle.asType(MT_S_APPLY_LONG);
+			return new KeyValueObject(key, 2, null, null, obj -> { try { return (long) mh.invokeExact(obj); } catch (final Throwable x) { throw new IllegalStateException(x); } }, null, null);
+		}
+	}
+
+	static KeyValueObject createFastDoubleGetter(final byte[] key, final Class<?> c, final MethodHandle handle, final Class<?> ret) throws Throwable {
+		try {
+			final var site = LambdaMetafactory.metafactory(lookup, "applyAsDouble", MT_FUNC_DOUBLE, MT_S_APPLY_DOUBLE, handle, MethodType.methodType(ret, c));
+			return new KeyValueObject(key, 3, null, null, null, (ToDoubleFunction<Object>) site.getTarget().invokeExact(), null);
+		} catch (final Throwable _) {
+			final var mh = handle.asType(MT_S_APPLY_DOUBLE);
+			return new KeyValueObject(key, 3, null, null, null, obj -> { try { return (double) mh.invokeExact(obj); } catch (final Throwable x) { throw new IllegalStateException(x); } }, null);
+		}
+	}
+
+	static KeyValueObject createFastBooleanGetter(final byte[] key, final Class<?> c, final MethodHandle handle) throws Throwable {
+		try {
+			final var site = LambdaMetafactory.metafactory(lookup, "test", MT_FUNC_BOOL, MT_S_APPLY_BOOL, handle, MethodType.methodType(boolean.class, c));
+			return new KeyValueObject(key, 4, null, null, null, null, (Predicate<Object>) site.getTarget().invokeExact());
+		} catch (final Throwable _) {
+			final var mh = handle.asType(MT_S_APPLY_BOOL);
+			return new KeyValueObject(key, 4, null, null, null, null, obj -> { try { return (boolean) mh.invokeExact(obj); } catch (final Throwable x) { throw new IllegalStateException(x); } });
 		}
 	}
 
@@ -139,15 +166,10 @@ final class Meta {
 	static MethodHandle ofEnum(final Class<?> c) { return MethodHandles.insertArguments(constructEnumObj, 0, (Object)c.getEnumConstants()); }
 
 	static MethodHandle newFilter(final Class<?> c) {
-		if (c.isEnum())
-			try {
-				return MethodHandles.insertArguments(Meta.enumFilter, 0, (Object) c.getEnumConstants()).asType(MethodType.methodType(c, Object.class));
-			} catch (final Throwable e) { throw new IllegalStateException(e); }
+		if (c.isEnum()) try { return MethodHandles.insertArguments(Meta.enumFilter, 0, (Object) c.getEnumConstants()).asType(MethodType.methodType(c, Object.class)); } catch (final Exception e) { throw illegalStateException(e); }
 		return null;
 	}
 
-
-	@ SuppressWarnings("unchecked")
 	static Supplier<Object> asSupplier(final Class<?> type, final MethodHandle ctorHandle) {
 		try {
 			return (Supplier<Object>) LambdaMetafactory.metafactory(lookup, "get", MT_SUPPLIER, MT_OBJECT, ctorHandle, MethodType.methodType(type)).getTarget().invokeExact();

@@ -23,7 +23,6 @@ final class JSONStringAddOpens implements JSONStringProvider {
 	private static final long       UTF16_SWARN             = 0x0001000100010001L;
 	private static final long       UTF16_CONTROL           = 0x0060006000600060L;
 	private static final long       UTF16_CONTROL_MASK      = 0x0080008000800080L;
-	private static final long 		MAGIC_4X16_to_4X8       = 0x0001000001000001L;
 
 	private JSONStringAddOpens() { }
 	static final JSONStringAddOpens ONCE;

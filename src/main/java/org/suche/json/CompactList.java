@@ -4,7 +4,7 @@ import java.util.AbstractList;
 import java.util.RandomAccess;
 
 public final class CompactList extends AbstractList<Object> implements ContextBacked,RandomAccess, JSONArray {
-	private static final long[] NO_PRIMS = { };
+	static final long[] NO_PRIMS = { };
 	private final Object[] data;
 	private final long  [] prims;
 	private final byte     singleType;
@@ -44,15 +44,17 @@ public final class CompactList extends AbstractList<Object> implements ContextBa
 			if (!(element instanceof final Number n)) throw JsonEngine.illegalStateException("Strict T_DOUBLE list requires a Number");
 			prims[index] = Double.doubleToRawLongBits(n.doubleValue());
 		}
-		default -> {
-			switch(element) {
-			case final Long   l -> { data[index] = l; if(prims!=NO_PRIMS) prims[index] = l; }
-			case final Double d -> { data[index] = d; if(prims!=NO_PRIMS) prims[index] = Double.doubleToRawLongBits(d); }
-			case null,default   -> data[index] = element;
-			}
-		}
+		default -> setMixed(index, element);
 		}
 		return oldValue;
+	}
+
+	private void setMixed(final int index, final Object element) {
+		switch(element) {
+		case final Long   l -> { data[index] = l; if(prims!=NO_PRIMS) prims[index] = l; }
+		case final Double d -> { data[index] = d; if(prims!=NO_PRIMS) prims[index] = Double.doubleToRawLongBits(d); }
+		case null,default   -> data[index] = element;
+		}
 	}
 
 	@Override public void removeByIndex(final int index) {

@@ -20,8 +20,11 @@ import org.suche.json.ConstructorGenerator.ObjectArrayFactory;
 import org.suche.json.MetaPool.ParseContext;
 
 final class ObjectMeta {
-	static         final int IDX_GENERIC = 0;	// Must be 0 for speedup with bit checks
-	static         final int  IDX_MAP = 1, IDX_COLLECTION = 2, IDX_SET = 3, IDX_OBJ_ARRAY = 4;
+	static         final int          IDX_GENERIC    = 0;	// Must be 0 for speedup with bit checks
+	static         final int          IDX_MAP        = 1;
+	static         final int          IDX_COLLECTION = 2;
+	static         final int          IDX_SET        = 3;
+	static         final int          IDX_OBJ_ARRAY  = 4;
 	private static final long      [] NO_fieldDescriptors = { };
 	private static final ObjectMeta[] NO_childMetas       = { };
 
@@ -37,26 +40,33 @@ final class ObjectMeta {
 	static         final int TYPE_OBJ_ARRAY    = 6;
 	static         final int TYPE_COLLECTION   = 7;
 	static         final int TYPE_SET          = 8;
-	static final int PRIM_INT = 1, PRIM_LONG = 2, PRIM_DOUBLE = 3, PRIM_FLOAT = 4, PRIM_BOOLEAN = 5, PRIM_OTHER = 6;
-	private static final ComponentMeta[]      ENUM_COMPS = { new ComponentMeta(SealedUnionMapper.ENUM_KEY, String.class, Object.class), new ComponentMeta("value", String.class, Object.class) };
-	private static final FastKeyTable         ENUM_KEYS = FastKeyTable.build(ENUM_COMPS);
+
+	static         final int PRIM_INT          = 1;
+	static         final int PRIM_LONG         = 2;
+	static         final int PRIM_DOUBLE       = 3;
+	static         final int PRIM_FLOAT        = 4;
+	static         final int PRIM_BOOLEAN      = 5;
+	static         final int PRIM_OTHER        = 6;
+
+	private static final ComponentMeta[]      ENUM_COMPS          = { new ComponentMeta(SealedUnionMapper.ENUM_KEY, String.class, Object.class), new ComponentMeta("value", String.class, Object.class) };
+	private static final FastKeyTable         ENUM_KEYS           = FastKeyTable.build(ENUM_COMPS);
 	private static final int                  MOD_FINAL_OR_STATIC = Modifier.STATIC | Modifier.FINAL;
-	private static final ObjectArrayFactory   NO_FACTORY       = null;
-	private static final int                  NO_FACTORY_PARAM = 0;
-	private static final Supplier<Object>     NO_POJO_START    = null;
-	private static final MethodHandles.Lookup LOOKUP = MethodHandles.lookup();
-	private static final Class<?>[]           ENUM_TYPES = { String.class, String.class };
-	static         final ObjectMeta           DEFECT_FIRST = new ObjectMeta(-1);
-	static         final ObjectMeta           DEFECT = new ObjectMeta(-1);
-	static         final RuntimeException     E_DEFEKT2 = new RuntimeException("DEFEKT.2", null, false, false) { };
-	static         final ObjectMeta           NULL = new ObjectMeta(null, null, -1);
-	static         final ObjectMeta           GENERIC_MAP = new ObjectMeta(null, Object.class, IDX_MAP);
+	private static final ObjectArrayFactory   NO_FACTORY          = null;
+	private static final int                  NO_FACTORY_PARAM    = 0;
+	private static final Supplier<Object>     NO_POJO_START       = null;
+	private static final MethodHandles.Lookup LOOKUP              = MethodHandles.lookup();
+	private static final Class<?>[]           ENUM_TYPES          = { String.class, String.class };
+	static         final ObjectMeta           DEFECT_FIRST        = new ObjectMeta(-1);
+	static         final ObjectMeta           DEFECT              = new ObjectMeta(-1);
+	static         final RuntimeException     E_DEFEKT2           = new RuntimeException("DEFEKT.2", null, false, false) { };
+	static         final ObjectMeta           NULL                = new ObjectMeta(null, null, -1);
+	static         final ObjectMeta           GENERIC_MAP         = new ObjectMeta(null, Object.class, IDX_MAP);
 
 	static int getPrimId(final Class<?> type) {
-		if (type == int.class) return PRIM_INT;
-		if (type == long.class) return PRIM_LONG;
-		if (type == double.class) return PRIM_DOUBLE;
-		if (type == float.class) return PRIM_FLOAT;
+		if (type == int.class    ) return PRIM_INT;
+		if (type == long.class   ) return PRIM_LONG;
+		if (type == double.class ) return PRIM_DOUBLE;
+		if (type == float.class  ) return PRIM_FLOAT;
 		if (type == boolean.class) return PRIM_BOOLEAN;
 		return PRIM_OTHER;
 	}
@@ -117,17 +127,17 @@ final class ObjectMeta {
 		else if (isPrimValue) primTarget = type;
 		final int subIdx;
 		if (primTarget != null) subIdx = getPrimId(primTarget);
-		else if (e != null) {
-			if (type.isArray()) subIdx = ((EngineImpl) e).getDynamicMetaId(type.componentType(), TYPE_OBJ_ARRAY);
-			else if (Set       .class.isAssignableFrom(type)) subIdx = ((EngineImpl) e).getDynamicMetaId(valueType, TYPE_SET       );
-			else if (Collection.class.isAssignableFrom(type)) subIdx = ((EngineImpl) e).getDynamicMetaId(valueType, TYPE_COLLECTION);
-			else if (Map       .class.isAssignableFrom(type)) {
-				if (valueType == Object.class) subIdx = IDX_MAP;
-				else subIdx = ((EngineImpl) e).getDynamicMetaId(valueType, TYPE_MAP);
-			}
-			else subIdx = ((EngineImpl) e).metaIdOf(type);
-		} else subIdx = IDX_GENERIC;
+		else if (e instanceof final EngineImpl ei) subIdx = resolveEngineObjectDescriptor(ei, type, valueType);
+		else subIdx = IDX_GENERIC;
 		return EngineImpl.createTypeDesc(isArray, primTarget != null, subIdx);
+	}
+
+	private static int resolveEngineObjectDescriptor(final EngineImpl e, final Class<?> type, final Class<?> valueType) {
+		if (type.isArray()                         ) return e.getDynamicMetaId(type.componentType(), TYPE_OBJ_ARRAY);
+		if (Set       .class.isAssignableFrom(type)) return e.getDynamicMetaId(valueType, TYPE_SET       );
+		if (Collection.class.isAssignableFrom(type)) return e.getDynamicMetaId(valueType, TYPE_COLLECTION);
+		if (Map       .class.isAssignableFrom(type)) return (valueType == Object.class ? IDX_MAP : e.getDynamicMetaId(valueType, TYPE_MAP));
+		return e.metaIdOf(type);
 	}
 
 	private static ObjectMeta[] componentMetaToObjectMeta(final InternalEngine e, final long[] fieldDescriptors) {
@@ -292,7 +302,7 @@ final class ObjectMeta {
 			final var enumConstants = buildEnumConstants(finalTypes);
 			if (bestCtor.getParameterCount() == 0) return new ObjectMeta(engine, c.getCanonicalName(), Meta.asSupplier(c, LOOKUP.unreflectConstructor(bestCtor)), NO_FACTORY, NO_FACTORY_PARAM, keys, finalTypes, finalComps, enumConstants, cacheIndex);
 			return new ObjectMeta(engine, c.getCanonicalName(), NO_POJO_START, ConstructorGenerator.generate(c, finalTypes), params.length, keys, finalTypes, finalComps, enumConstants, cacheIndex);
-		} catch (final Throwable e) {
+		} catch (final Exception e) {
 			e.printStackTrace();
 			return DEFECT_FIRST;
 		}
@@ -308,7 +318,7 @@ final class ObjectMeta {
 				metaComps[i] = new ComponentMeta(comps[i].getName(), types[i], GernericsHandler.extractValueType(comps[i].getGenericType(), types[i]));
 			}
 			return new ObjectMeta(engine, c.getCanonicalName(), NO_POJO_START, ConstructorGenerator.generate(c, types), 0, FastKeyTable.build(metaComps), types, metaComps, buildEnumConstants(types), cacheIndex);
-		} catch (final Throwable e) {
+		} catch (final Exception e) {
 			e.printStackTrace();
 			return DEFECT_FIRST;
 		}
@@ -493,6 +503,8 @@ final class ObjectMeta {
 		}
 	}
 
+	void invalidType() { throw new IllegalStateException("metaType: "+metaType); }
+
 	@SuppressWarnings("unchecked")
 	void set(final MetaPool s, final Object context, final int index, Object value) {
 		if (index < 0) throw new IllegalStateException();
@@ -520,6 +532,7 @@ final class ObjectMeta {
 			if (index >= ctx.cnt) ctx.cnt = index + 1;
 		}
 		case TYPE_SET          -> ((Collection<Object>) context).add(value);
+		default                -> invalidType();
 		}
 	}
 

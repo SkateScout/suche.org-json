@@ -278,37 +278,37 @@ public final class JsonOutputStream implements AutoCloseable {
 					final var data  = cMap.getRawData();
 					final var prims = cMap.prims();
 					final var sType = cMap.singleType();
-					mapLoop: while (c.idx < c.len) {
+					while (c.idx < c.len) {
 						final var entryIdx = c.idx++;
 						final var key      = data[entryIdx << 1];
-						if (key == null) continue mapLoop;
+						if (key == null) continue;
 						if (sType == PRIMITIVE.T_LONG) {
 							final var v = prims[entryIdx];
 							if (v != 0 || !skip0) { writeMapKey(key); writeNumber((char)0, v); }
-							continue mapLoop;
+							continue;
 						}
 						if (sType == PRIMITIVE.T_DOUBLE) {
 							writeMapKey(key);
 							writeDouble((char)0, Double.longBitsToDouble(prims[entryIdx]));
-							continue mapLoop;
+							continue;
 						}
 						final var val = data[(entryIdx << 1) + 1];
 						if (val == PRIMITIVE.LONG) {
 							final var v = prims[entryIdx];
 							if (v != 0 || !skip0) { writeMapKey(key); writeNumber((char)0, v); }
-							continue mapLoop;
+							continue;
 						}
 						if (val == PRIMITIVE.DOUBLE) {
 							writeMapKey(key);
 							writeDouble((char)0, Double.longBitsToDouble(prims[entryIdx]));
-							continue mapLoop;
+							continue;
 						}
 						final var tVal = transform(val);
-						if (isSkipped(tVal)) continue mapLoop;
+						if (isSkipped(tVal)) continue;
 						writeMapKey(key);
 						if (!writePrimitiveInline((char)0, tVal)) {
 							nextVal = tVal;
-							break mapLoop;
+							break;
 						}
 					}
 				}
@@ -377,6 +377,7 @@ public final class JsonOutputStream implements AutoCloseable {
 						if (!writePrimitiveInline(commaNeeded ? ',' : 0, val)) { nextVal = val; break; }
 					}
 				}
+				default               -> { }
 				}
 				if (nextVal == EXHAUSTED) {
 					write(isContainerType(type) ? (byte)']' : (byte)'}');

@@ -15,9 +15,9 @@ final class PRIMITIVE extends Number {
 	private PRIMITIVE(final String pName, final byte pType) { this.name = pName; this.type = pType; }
 	final byte   type;
 	final String name;
-	@Override public int    intValue   () { throw JsonEngine.illegalStateException("Unresolved lazy primitive"); }
-	@Override public long   longValue  () { throw JsonEngine.illegalStateException("Unresolved lazy primitive"); }
-	@Override public float  floatValue () { throw JsonEngine.illegalStateException("Unresolved lazy primitive"); }
-	@Override public double doubleValue() { throw JsonEngine.illegalStateException("Unresolved lazy primitive"); }
+	@Override public int    intValue   () { throw JsonEngine.illegalStateException("Unresolved lazy primitive for int"); }
+	@Override public long   longValue  () { throw JsonEngine.illegalStateException("Unresolved lazy primitive for long"); }
+	@Override public float  floatValue () { throw JsonEngine.illegalStateException("Unresolved lazy primitive for float"); }
+	@Override public double doubleValue() { throw JsonEngine.illegalStateException("Unresolved lazy primitive for double"); }
 	@Override public String toString   () { return name; }
 }

@@ -70,15 +70,13 @@ interface MetaPool {
 
 		void primIdxValue(final MetaPool s, final PRIMITIVE t, final long value, final int index) {
 			if (this.singleType == PRIMITIVE.T_EMPTY) this.singleType = t.type;
-			else if (this.singleType == PRIMITIVE.T_LONG && t.type == PRIMITIVE.T_DOUBLE) this.upgradeToDouble();
-
+			else if (this.singleType == PRIMITIVE.T_LONG && t == PRIMITIVE.DOUBLE) this.upgradeToDouble();
+			if (this.prims == null || index >= this.prims.length) this.ensurePrims(s, index + 1);
 			if (this.singleType == PRIMITIVE.T_MIXED) {
-				if (this.objs == null || index >= this.objs.length) this.ensureObjs(s, index + 1);
-				if (this.prims == null || index >= this.prims.length) this.ensurePrims(s, index + 1);
-				this.objs[index] = t;
+				if (this.objs  == null || index >= this.objs.length) this.ensureObjs(s, index + 1);
+				this.objs [index] = t;
 				this.prims[index] = value;
 			} else {
-				if (this.prims == null || index >= this.prims.length) this.ensurePrims(s, index + 1);
 				this.prims[index] = (this.singleType == PRIMITIVE.T_DOUBLE && t.type == PRIMITIVE.T_LONG) ? Double.doubleToRawLongBits(value) : value;
 			}
 			if (index >= this.cnt) this.cnt = index + 1;

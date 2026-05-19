@@ -25,7 +25,10 @@ public sealed interface JSONObject extends Map<String,Object> permits CompactMap
 
 	default JSONObject computeIfAbsentJSONObject(final String key) {
 		var r = optJSONObject(key);
-		if(r == null) put(key, r = new CompactMap());
+		if(r == null) {
+			r = new CompactMap();
+			put(key, r);
+		}
 		return r;
 	}
 

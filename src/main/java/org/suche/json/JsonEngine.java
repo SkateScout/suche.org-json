@@ -65,7 +65,7 @@ public sealed interface JsonEngine permits InternalEngine {
 	}
 
 	static <T> T of(final Path src, final Class<?> t) {
-		try(	final var i = Files.newInputStream(src)) { return of(i, t); } catch(final Throwable x) { illegalStateException(x); return null; }
+		try(	final var i = Files.newInputStream(src)) { return of(i, t); } catch(final Exception x) { illegalStateException(x); return null; }
 	}
 
 	static JSONArray  ofJSONArray     (final Path   json) { return of(json           , JSONArray.class); }
@@ -75,13 +75,6 @@ public sealed interface JsonEngine permits InternalEngine {
 	static JSONObject ofJSONObject    (final Path   json) { return of(json           , JSONObject.class); }
 	static JSONObject ofJSONObject    (final String json) { return of(json.getBytes(), JSONObject.class); }
 	static JSONObject ofJSONObject    (final byte[] json) { return of(json           , JSONObject.class); }
-
-	static void main(final String[] argc) {
-		final var o = ofJSONObject(Path.of("/FOE-Proxy/keys.json"));
-		System.out.println("O: "+o);
-		System.out.println("de11: "+o.get("de11"));
-	}
-
 
 	static JSONArray  pathToJSONArray (final Path   json) { return of(json           , JSONArray.class); }
 	static JSONArray  textToJSONArray (final String json) { return of(json.getBytes(), JSONArray.class); }

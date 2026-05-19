@@ -8,7 +8,7 @@ import java.util.Map;
 
 import org.suche.annotation.NonNull;
 
-sealed abstract class BufferedStream  implements MetaPool permits JsonInputStream {
+abstract sealed class BufferedStream  implements MetaPool permits JsonInputStream {
 	private static final int        BUFFER_SIZE = 128*1024;
 	private static final int        POOL_SIZE = 128;
 	private static final int        STRING_POOL_SIZE = 4096;
@@ -16,6 +16,8 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 	private static final int TRUE_MAGIC  = 0x65757274; // 'e'|'u'|'r'|'t'
 	private static final int FALSE_MAGIC = 0x736C6166; // 's'|'l'|'a'|'f'
 	private static final int NULL_MAGIC  = 0x6C6C756E; // 'l'|'l'|'u'|'n'
+	private static final long PATTERN_BRACE_OPEN    = 0x7B7B7B7B7B7B7B7BL; // '{'
+	private static final long PATTERN_BRACKET_OPEN  = 0x5B5B5B5B5B5B5B5BL; // '['
 
 	// FNV-1a 64-bit prime
 	private static final long HASH_PRIME = 0x100000001b3L;
@@ -68,6 +70,8 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 
 	final Object[] onceInternal = new Object[32];
 	int            onceInternalSize = 0;
+
+	private static final String ESCAPE_END = "Unexpected end of stream after escape";
 
 	final void throwInvalid(final String mesg) { throw new IllegalStateException("OFF: "+(readDone+pos)+" "+mesg); }
 
@@ -292,12 +296,16 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		readDone += pos;
 		pos = 0;
 		limit = remaining;
-		if(in != null) // Else buffered only
+		if (in != null) {
+			// Reserve 8 bytes at the very end of the buffer for the sentinel padding
+			final var maxLimit = buffer.length - 8;
 			while (limit < n) {
-				final var count = in.read(buffer, limit, buffer.length - limit);
+				final var count = in.read(buffer, limit, maxLimit - limit);
 				if (count == -1) break;
 				limit += count;
 			}
+		}
+		JSONString.LONG_VIEW.set(buffer, limit, 0x2020202020202020L);
 	}
 
 	@Override
@@ -371,7 +379,6 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 			}
 	}
 
-
 	final Object parseNull() throws IOException {
 		if(limit - pos < 4) ensure(4);
 		if (limit - pos < 4 || (int) JSONStringAddOpens.INT_VIEW.get(buffer, pos) != NULL_MAGIC) throwInvalid("Not expected NULL");
@@ -444,10 +451,11 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 		return Boolean.FALSE;
 	}
 
+	// ######################################################################################
+	// ######################################################################################
+	// ######################################################################################
 
-	// ######################################################################################
-	// ######################################################################################
-	// ######################################################################################
+	private static final String UNESCAPE_CONTRL = "Unescaped control character in string";
 
 	private int parseHex4() throws IOException {
 		if (limit - pos < 4) ensure(4);
@@ -546,16 +554,16 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 			// Load 8 bytes at once
 			final var word = (long) JSONString.LONG_VIEW.get(buf, pos);
 			if ((word & JSONString.NON_ASCII_PATTERN) != 0) break; // If byte with bit 7 set, switch to slow scanning
-			final var quoteXor     = word ^ JSONString.QUOTE_PATTERN;
-			final var backslashXor = word ^ JSONString.BACKSLASH_PATTERN;
+			final var quoteXor     = word          ^ JSONString.QUOTE_PATTERN;
+			final var backslashXor = word          ^ JSONString.BACKSLASH_PATTERN;
 			final var hasQuote     = (quoteXor     - JSONString.SWARN) & ~quoteXor;
 			final var hasBackslash = (backslashXor - JSONString.SWARN) & ~backslashXor;
 			final var hasCtrl      = (word - 0x2020202020202020L) & ~word;
-			final var has = (hasQuote | hasBackslash | hasCtrl) & JSONString.NON_ASCII_PATTERN;
+			final var has          = (hasQuote | hasBackslash | hasCtrl) & JSONString.NON_ASCII_PATTERN;
 			if (has != 0) {
 				// A match exists! Find out which character came first.
 				final var match = Long.lowestOneBit(has);
-				if ((hasCtrl & match) != 0) throwInvalid("Unescaped control character in string");
+				if ((hasCtrl & match) != 0) throwInvalid(UNESCAPE_CONTRL);
 				// Determine the exact byte offset (0 to 7)
 				final var offset = (Long.numberOfTrailingZeros(match) >>> 3);
 				pos += offset;
@@ -662,7 +670,6 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 			final var safeLimit = limit - 8;
 			var isEscape = false;
 			var escChar  = -1; // -1 means: must be loaded from RAM
-
 			// --- 1. SWAR Fast-Copy Loop ---
 			var word     = 0L;
 			var has      = 0L;
@@ -672,8 +679,8 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 			while (pos <= safeLimit) {
 				word = (long) JSONString.LONG_VIEW.get(buffer, pos);
 				if ((word & JSONString.NON_ASCII_PATTERN) != 0) isAscii = false;
-				final var quoteXor     = word ^ JSONString.QUOTE_PATTERN;
-				final var backslashXor = word ^ JSONString.BACKSLASH_PATTERN;
+				final var quoteXor     =  word         ^ JSONString.QUOTE_PATTERN    ;
+				final var backslashXor =  word         ^ JSONString.BACKSLASH_PATTERN;
 				hasQuote               = (quoteXor     - JSONString.SWARN) & ~quoteXor;
 				final var hasBackslash = (backslashXor - JSONString.SWARN) & ~backslashXor;
 				hasCtrl                = (word - 0x2020202020202020L) & ~word;
@@ -687,7 +694,7 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 
 			if (has != 0) {
 				final var match  = Long.lowestOneBit(has);
-				if ((hasCtrl & match) != 0) throwInvalid("Unescaped control character in string");
+				if ((hasCtrl & match) != 0) throwInvalid(UNESCAPE_CONTRL);
 				final var offset = (Long.numberOfTrailingZeros(match) >>> 3);
 				if (parsedLen + offset > strBuf.length) expandStrBuf(parsedLen + offset);
 				JSONString.LONG_VIEW.set(strBuf, parsedLen, word);
@@ -713,7 +720,7 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 			if (!isEscape) {
 				while (pos < limit) {
 					final var b = buffer[pos];
-					if (b >= 0 && b < 32) throwInvalid("Unescaped control character in string");
+					if (b >= 0 && b < 32) throwInvalid(UNESCAPE_CONTRL);
 					if (b < 0) isAscii = false;
 					if (b == '"') { pos++; break Outer; }
 					if (b == '\\') { pos++; isEscape = true; break; }
@@ -736,7 +743,7 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 			if (esc == -1) {
 				// Boundary-Case: The backslash was exactly the 8th byte in the word.
 				// The next character must be loaded classically from the buffer.
-				if (pos >= limit) { ensure(1); if (pos >= limit) throwInvalid("Unexpected end of stream after escape"); }
+				if (pos >= limit) { ensure(1); if (pos >= limit) throwInvalid(ESCAPE_END); }
 				esc = buffer[pos++];
 			}
 
@@ -814,51 +821,100 @@ sealed abstract class BufferedStream  implements MetaPool permits JsonInputStrea
 			pos++;
 		}
 	}
+
+	private final void skipComplexValue(final long openPattern) throws IOException {
+		ensure(16); // Optional: Kann auch weg, wenn in skipValue schon ensure() gerufen wurde
+		var curDepth = 1;
+		final var buf = buffer;
+		while (true) {
+			while (pos < limit) {
+				final var word      = (long) JSONString.LONG_VIEW.get(buf, pos);
+				final var shifted   = word     - 0x0202020202020202L;
+				final var orEd      = shifted  | 0x0202020202020202L;
+				final var structX   = orEd     ^ openPattern;
+				final var quoteX    = word     ^ JSONString.QUOTE_PATTERN;
+				final var hasStruct = (structX - JSONString.SWARN) & ~structX;
+				final var hasQuote  = (quoteX  - JSONString.SWARN) & ~quoteX;
+				final var has = (hasStruct | hasQuote) & JSONString.NON_ASCII_PATTERN;
+				final var bitOffset = Long.numberOfTrailingZeros(has);
+				pos += (bitOffset >>> 3);
+				if (has != 0) {
+					final var c = (byte) (word >>> bitOffset);
+					pos++;
+					if (c == '"') { skipString(); continue; }
+					curDepth += (c & 2) - 1;
+				}
+				if (curDepth == 0) return;
+			}
+			pos = limit;
+			ensure(16);
+			if (limit == 0) throwInvalid("Unexpected end of stream in skipValue");
+		}
+	}
+
 	final void skipValue() throws IOException {
-		final var b = peek();
+		ensure(16);
+		if(limit==0) throwInvalid("Skio EOF");
+		final var b = buffer[pos++];
 		switch (b) {
-		case '{' -> { read(); for (var curDepth = 1; curDepth > 0; ) {
-			final var c = read();
-			switch (c) {
-			case '"': skipString(); break;
-			case '{': curDepth++; break;
-			case '}': curDepth--; break;
-			default: break;
+		case '{' -> skipComplexValue(PATTERN_BRACE_OPEN  );
+		case '[' -> skipComplexValue(PATTERN_BRACKET_OPEN);
+		case '"' -> skipString();
+		default  -> skipSkalarValue();
+		}
+	}
+
+	private final void skipSkalarValue() throws IOException {
+		while (true) {
+			final var buf = buffer;
+			while (pos < limit) {
+				final var word = (long) JSONString.LONG_VIEW.get(buf, pos);
+				final var braceOrBracket = word           | 0x2020202020202020L;	// make ] to }
+				final var commaXor       = word           ^ 0x2C2C2C2C2C2C2C2CL; // ',' (0x2C)
+				final var closeXor       = braceOrBracket ^ 0x7D7D7D7D7D7D7D7DL;
+				final var hasComma       = (commaXor - JSONString.SWARN) & ~commaXor;
+				final var hasClose       = (closeXor - JSONString.SWARN) & ~closeXor;
+				final var has = (hasClose | hasComma) & JSONString.NON_ASCII_PATTERN;
+				if (has != 0) {
+					pos += (Long.numberOfTrailingZeros(has) >>> 3);
+					return;
+				}
+				pos += 8;
 			}
-		}
-		}
-		case '[' -> { read(); for (var curDepth = 1; curDepth > 0; ) {
-			final var c = read();
-			switch (c) {
-			case '"': skipString(); break;
-			case '[': curDepth++; break;
-			case ']': curDepth--; break;
-			default: break;
-			}
-		}
-		}
-		case '"' -> { read(); skipString(); }
-		case 't', 'f', 'n' -> { final var len = (b == 'f' ? 5 : 4); ensure(len); pos += len; }
-		default -> {
-			while (true) {
-				if (pos >= limit) { ensure(1); if (pos >= limit) return; }
-				final var c = buffer[pos];
-				if (c <= ' ' || c == ',' || c == '}' || c == ']') return;
-				pos++;
-			}
-		}
+			if (pos > limit) pos = limit;
+			ensure(16);
+			if (pos >= limit) throwInvalid("Unexpected end of stream while skipping value");
 		}
 	}
 
 	final void skipString() throws IOException {
+		ensure(16);
 		while (true) {
-			if (pos >= limit) ensure(1);
-			final var c = buffer[pos++];
-			if (c == '"') return;
-			if (c == '\\') {
-				if (pos >= limit) ensure(1);
-				pos++;
+			final var buf = buffer;
+			while (pos < limit) {
+				final var word = (long) JSONString.LONG_VIEW.get(buf, pos);
+				final var quoteXor     = word ^ JSONString.QUOTE_PATTERN;
+				final var backslashXor = word ^ JSONString.BACKSLASH_PATTERN;
+				final var hasQuote     = (quoteXor     - JSONString.SWARN) & ~quoteXor;
+				final var hasBackslash = (backslashXor - JSONString.SWARN) & ~backslashXor;
+				final var has          = (hasQuote | hasBackslash) & JSONString.NON_ASCII_PATTERN;
+				if (has == 0) pos += 8;
+				else {
+					final var match = Long.lowestOneBit(has);
+					final var offset = (Long.numberOfTrailingZeros(match) >>> 3);
+					if ((hasQuote & match) != 0) { pos += offset + 1;  return; } // First match was "
+					pos += offset + 2;	// Skip Qute and next char
+					if (pos > limit) {	// Edge Case \ before limit
+						pos = limit;
+						ensure(16);
+						if (pos >= limit) throwInvalid(ESCAPE_END);
+						pos++;
+					}
+				}
 			}
+			if (pos > limit) pos = limit;
+			ensure(16);
+			if (pos >= limit) throwInvalid("Unexpected end of stream inside string");
 		}
 	}
 

@@ -57,7 +57,7 @@ final class JSONString {
 			// und die JDK Version EXAKT zur Kompilier-Version passt.
 			final var clazz = Class.forName("org.suche.json.JSONStringVectorAPI");
 			selected = (JSONStringProvider) clazz.getDeclaredConstructor().newInstance();
-		} catch (final Throwable t) {
+		} catch (final Throwable _) {
 			// Catch Throwable fängt UnsupportedClassVersionError (Minor 65535) oder NoClassDefFoundError ab.
 		}
 		if(selected == null) {
@@ -65,7 +65,6 @@ final class JSONString {
 			// Fallback to Vanilla (always works)
 			else                                selected = JSONStringVanilla.INSTANCE;
 		}
-		// System.out.println("\n\n\nJSONString using "+selected.getClass().getCanonicalName()+"\n\n\n");
 		PROVIDER = selected;
 	}
 

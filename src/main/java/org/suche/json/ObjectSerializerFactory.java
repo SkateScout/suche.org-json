@@ -13,6 +13,7 @@ import java.lang.constant.ClassDesc;
 import java.lang.constant.MethodTypeDesc;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodHandles.Lookup;
+import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
 import java.util.function.UnaryOperator;
 
@@ -39,10 +40,12 @@ public class ObjectSerializerFactory {
 	private static final MethodTypeDesc	MT_VJ            = MethodTypeDesc.of(CD_VOID, ClassDesc.ofDescriptor("J"));
 	private static final MethodTypeDesc MT_INIT          = MethodTypeDesc.of(CD_VOID, CD_BYTE_ARR_2D, CD_UNARY_OP_ARR);
 	private static final MethodTypeDesc MT_SERIALIZE     = MethodTypeDesc.of(ClassDesc.ofDescriptor("I"), CD_JSON_OUT, CD_OBJECT, ClassDesc.ofDescriptor("I"));
+	private static final int            ACC_PRIVATE_FINAL = ACC_PRIVATE | ACC_FINAL;
+	private static final String         TRANSFORMERS      = "transformers";
 
 	private static final Lookup LOOKUP = MethodHandles.lookup();
 
-	public static ObjectSerializer build(final Class<?> cls, final PropMeta[] props, final byte[][] keys, final UnaryOperator<Object>[] transformers) throws Exception {
+	public static ObjectSerializer build(final Class<?> cls, final PropMeta[] props, final byte[][] keys, final UnaryOperator<Object>[] transformers) throws IllegalAccessException, InstantiationException, IllegalArgumentException, InvocationTargetException, NoSuchMethodException {
 		final var className  = cls.getName() + "$$InternalSerializer";
 		final var classDesc  = ClassDesc.ofDescriptor("L" + className.replace('.', '/') + ";");
 		final var targetDesc = ClassDesc.ofDescriptor(cls.descriptorString());
@@ -51,8 +54,8 @@ public class ObjectSerializerFactory {
 			classBuilder.withFlags(ACC_PUBLIC | ACC_FINAL);
 			classBuilder.withInterfaceSymbols(CD_SERIALIZER);
 			// Felder für Keys und Transformer anlegen
-			classBuilder.withField("keys"        , CD_BYTE_ARR_2D , ACC_PRIVATE | ACC_FINAL);
-			classBuilder.withField("transformers", CD_UNARY_OP_ARR, ACC_PRIVATE | ACC_FINAL);
+			classBuilder.withField("keys"        , CD_BYTE_ARR_2D , ACC_PRIVATE_FINAL);
+			classBuilder.withField(TRANSFORMERS, CD_UNARY_OP_ARR, ACC_PRIVATE_FINAL);
 			// Konstruktor: public <init>(byte[][] keys, UnaryOperator[] transformers)
 			classBuilder.withMethodBody("<init>", MT_INIT, ACC_PUBLIC, cb -> {
 				cb.aload(0);
@@ -62,7 +65,7 @@ public class ObjectSerializerFactory {
 				cb.putfield(classDesc, "keys", CD_BYTE_ARR_2D);
 				cb.aload(0);
 				cb.aload(2);
-				cb.putfield(classDesc, "transformers", CD_UNARY_OP_ARR);
+				cb.putfield(classDesc, TRANSFORMERS, CD_UNARY_OP_ARR);
 				cb.return_();
 			});
 
@@ -90,43 +93,7 @@ public class ObjectSerializerFactory {
 
 				for (var i = 0; i < numFields; i++) {		// Bytecode für jedes Feld weben
 					cb.labelBinding(caseLabels[i]);
-					final var prop = props[i];
-					final var propDesc = ClassDesc.ofDescriptor(prop.type().descriptorString());
-					cb.aload(1);		// out.writeCommaIfNeeded();
-					cb.invokevirtual(CD_JSON_OUT, "writeCommaIfNeeded", MethodTypeDesc.ofDescriptor("()V"));
-					cb.aload(1);		// out.write(this.keys[i]);
-					cb.aload(0);
-					cb.getfield(classDesc, "keys", CD_BYTE_ARR_2D);
-					pushInt(cb, i);
-					cb.aaload();
-					cb.invokevirtual(CD_JSON_OUT, "write", MethodTypeDesc.of(CD_VOID, CD_BYTE_ARR));
-
-					cb.aload(4);		// Wert auslesen: targetObj.getter() oder targetObj.field
-					if (prop.isField()) cb.getfield     (targetDesc, prop.memberName(), propDesc);
-					else                cb.invokevirtual(targetDesc, prop.memberName(), MethodTypeDesc.of(propDesc));
-
-					// Wert in Stream schreiben
-					if    (prop.type() == int.class || prop.type() == Integer.class) {
-						if (!prop.type().isPrimitive()) { cb.invokevirtual(ClassDesc.ofDescriptor("Ljava/lang/Integer;"), "intValue", MethodTypeDesc.ofDescriptor("()I")); }
-						cb.invokevirtual(CD_JSON_OUT, "writeNumber", MT_VI);
-					}
-					else if (prop.type() == long  .class  || prop.type() == Long.class) {
-						if (!prop.type().isPrimitive()) { cb.invokevirtual(ClassDesc.ofDescriptor("Ljava/lang/Long;"), "longValue", MethodTypeDesc.ofDescriptor("()J")); }
-						cb.invokevirtual(CD_JSON_OUT, "writeNumber", MT_VJ);
-					}
-					else if (prop.type() == double.class  || prop.type() == Double.class) {
-						if (!prop.type().isPrimitive()) { cb.invokevirtual(ClassDesc.ofDescriptor("Ljava/lang/Double;"), "doubleValue", MethodTypeDesc.ofDescriptor("()D")); }
-						cb.invokevirtual(CD_JSON_OUT, "writeDouble", MethodTypeDesc.of(CD_VOID, ClassDesc.ofDescriptor("D")));
-					}
-					else if (prop.type() == boolean.class || prop.type() == Boolean.class) {
-						if (!prop.type().isPrimitive()) { cb.invokevirtual(ClassDesc.ofDescriptor("Ljava/lang/Boolean;"), "booleanValue", MethodTypeDesc.ofDescriptor("()Z")); }
-						cb.invokevirtual(CD_JSON_OUT, "writeBoolean", MethodTypeDesc.of(ClassDesc.ofDescriptor("V"), ClassDesc.ofDescriptor("Z")));
-					}
-					else if (prop.type() == String.class) {
-						cb.invokevirtual(CD_JSON_OUT, "writeEscapedString", MethodTypeDesc.of(ClassDesc.ofDescriptor("V"), CD_STRING));
-					}
-					else objectPropertyHanlder(cb, classDesc, numFields);
-					// Am Ende eines Primitives oder Strings fällt der Code automatisch in das Label des nächsten Cases durch (Fallthrough).
+					serializeProperty(classDesc, targetDesc, cb, i, numFields, props[i]);
 				}
 
 				cb.labelBinding(endLabel);
@@ -135,14 +102,53 @@ public class ObjectSerializerFactory {
 				cb.ireturn();
 			});
 		});
+		final var definedClass = MethodHandles.privateLookupIn(cls, LOOKUP).defineHiddenClass(bytes, true, MethodHandles.Lookup.ClassOption.NESTMATE).lookupClass();
+		return (ObjectSerializer) definedClass.getConstructor(byte[][].class, UnaryOperator[].class).newInstance(keys, transformers);
+	}
 
-		final var definedClass = MethodHandles.privateLookupIn(cls, LOOKUP)
-				.defineHiddenClass(bytes, true, MethodHandles.Lookup.ClassOption.NESTMATE)
-				.lookupClass();
+	private static void serializeProperty(final ClassDesc classDesc, final ClassDesc targetDesc,  final CodeBuilder cb, final int i, final int numFields, final PropMeta prop) {
+		final var propDesc = ClassDesc.ofDescriptor(prop.type().descriptorString());
+		cb.aload(1);		// out.writeCommaIfNeeded();
+		cb.invokevirtual(CD_JSON_OUT, "writeCommaIfNeeded", MethodTypeDesc.ofDescriptor("()V"));
+		cb.aload(1);		// This is out .write ( this.keys[i]);
+		cb.aload(0);
+		cb.getfield(classDesc, "keys", CD_BYTE_ARR_2D);
+		pushInt(cb, i);
+		cb.aaload();
+		cb.invokevirtual(CD_JSON_OUT, "write", MethodTypeDesc.of(CD_VOID, CD_BYTE_ARR));
 
-		return (ObjectSerializer) definedClass
-				.getConstructor(byte[][].class, UnaryOperator[].class)
-				.newInstance(keys, transformers);
+		cb.aload(4);		// Wert auslesen: targetObj.getter() oder targetObj.field
+		if (prop.isField()) cb.getfield     (targetDesc, prop.memberName(), propDesc);
+		else                cb.invokevirtual(targetDesc, prop.memberName(), MethodTypeDesc.of(propDesc));
+
+		// Wert in Stream schreiben
+		if      (prop.type() == int    .class || prop.type() == Integer.class) serializeInt    (cb, prop);
+		else if (prop.type() == long   .class || prop.type() == Long   .class) serializeLong   (cb, prop);
+		else if (prop.type() == double .class || prop.type() == Double .class) serializeDouble (cb, prop);
+		else if (prop.type() == boolean.class || prop.type() == Boolean.class) serializeBoolean(cb, prop);
+		else if (                                prop.type() == String .class) cb.invokevirtual(CD_JSON_OUT, "writeEscapedString", MethodTypeDesc.of(ClassDesc.ofDescriptor("V"), CD_STRING));
+		else objectPropertyHanlder(cb, classDesc, numFields);
+		// Am Ende eines Primitives oder Strings fällt der Code automatisch in das Label des nächsten Cases durch (Fallthrough).
+	}
+
+	private static void  serializeInt(final CodeBuilder cb, final PropMeta prop) {
+		if (!prop.type().isPrimitive()) { cb.invokevirtual(ClassDesc.ofDescriptor("Ljava/lang/Integer;"), "intValue", MethodTypeDesc.ofDescriptor("()I")); }
+		cb.invokevirtual(CD_JSON_OUT, "writeNumber", MT_VI);
+	}
+
+	private static void  serializeLong(final CodeBuilder cb, final PropMeta prop) {
+		if (!prop.type().isPrimitive()) { cb.invokevirtual(ClassDesc.ofDescriptor("Ljava/lang/Long;"), "longValue", MethodTypeDesc.ofDescriptor("()J")); }
+		cb.invokevirtual(CD_JSON_OUT, "writeNumber", MT_VJ);
+	}
+
+	private static void  serializeDouble(final CodeBuilder cb, final PropMeta prop) {
+		if (!prop.type().isPrimitive()) { cb.invokevirtual(ClassDesc.ofDescriptor("Ljava/lang/Double;"), "doubleValue", MethodTypeDesc.ofDescriptor("()D")); }
+		cb.invokevirtual(CD_JSON_OUT, "writeDouble", MethodTypeDesc.of(CD_VOID, ClassDesc.ofDescriptor("D")));
+	}
+
+	private static void  serializeBoolean(final CodeBuilder cb, final PropMeta prop) {
+		if (!prop.type().isPrimitive()) { cb.invokevirtual(ClassDesc.ofDescriptor("Ljava/lang/Boolean;"), "booleanValue", MethodTypeDesc.ofDescriptor("()Z")); }
+		cb.invokevirtual(CD_JSON_OUT, "writeBoolean", MethodTypeDesc.of(ClassDesc.ofDescriptor("V"), ClassDesc.ofDescriptor("Z")));
 	}
 
 	static void objectPropertyHanlder(final CodeBuilder cb, final ClassDesc classDesc, final int i) {
@@ -150,7 +156,7 @@ public class ObjectSerializerFactory {
 		cb.astore(5); // Speichere komplexes Objekt in Local 5
 		// if (this.transformers[i] != null)
 		cb.aload(0);
-		cb.getfield(classDesc, "transformers", CD_UNARY_OP_ARR);
+		cb.getfield(classDesc, TRANSFORMERS, CD_UNARY_OP_ARR);
 		pushInt(cb, i);
 		cb.aaload();
 		cb.dup(); // Stack: [transformer, transformer]
@@ -177,9 +183,7 @@ public class ObjectSerializerFactory {
 		pushInt(cb, i + 1);	// return i + 1; (YIELD!)
 		cb.ireturn();
 		cb.labelBinding(skipLabel); // Hier landet er, wenn skipped, und fällt ins nächste Case!
-
 	}
-
 
 	private static void pushInt(final CodeBuilder cb, final int value) {
 		switch (value) {

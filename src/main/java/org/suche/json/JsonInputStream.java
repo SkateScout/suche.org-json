@@ -199,7 +199,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				skipWhitespace();
 			}
 			case '"' -> {
-				if (needsComma) throwInvalid("Expected comma");
+				if (needsComma) throwInvalid("Expected comma bevore STRING");
 				if (curTypeDesc >= 0L && curIdx < 0) {
 					curIdx = parseStringKeyAsIndex(curObj, curMeta);
 					expect((byte) ':');
@@ -215,8 +215,8 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				}
 			}
 			case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9' -> {
-				if (needsComma) throwInvalid("Expected comma");
-				if (curTypeDesc >= 0L && curIdx < 0) throwInvalid("Expected key");
+				if (needsComma) throwInvalid("Expected comma before NUMBER");
+				if (curTypeDesc >= 0L && curIdx < 0) throwInvalid( "Expected key before NUMBER");
 				parseNumericPrimitive(curMeta, curObj, curIdx, curTypeDesc);
 				curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
 				final var hasComma = consumeCommaIfPresent();
@@ -224,8 +224,8 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				trailingComma = hasComma;
 			}
 			case 'n' -> {
-				if (needsComma) throwInvalid("Expected comma");
-				if (curTypeDesc >= 0L && curIdx < 0) throwInvalid("Expected key");
+				if (needsComma) throwInvalid("Expected comma before NULL");
+				if (curTypeDesc >= 0L && curIdx < 0) throwInvalid("Expected key before NULL");
 				fillNullValue(curTypeDesc, curObj, curIdx, curMeta);
 				curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
 				final var hasComma = consumeCommaIfPresent();
@@ -233,8 +233,8 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				trailingComma = hasComma;
 			}
 			case 't', 'f' -> {
-				if (needsComma) throwInvalid("Expected comma");
-				if (curTypeDesc >= 0L && curIdx < 0) throwInvalid("Expected key");
+				if (needsComma) throwInvalid("Expected comma before BOOLEAN");
+				if (curTypeDesc >= 0L && curIdx < 0) throwInvalid("Expected key before BOOLEAN");
 				curMeta.set(this, curObj, curIdx, parseTrueOrFalse(b == 't'));
 				curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
 				final var hasComma = consumeCommaIfPresent();
@@ -242,8 +242,8 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				trailingComma = hasComma;
 			}
 			case '{' -> {
-				if (needsComma) throwInvalid("Expected comma");
-				if (curTypeDesc >= 0L && curIdx < 0) throwInvalid("Expected key");
+				if (needsComma) throwInvalid("Expected comma before OBJECT");
+				if (curTypeDesc >= 0L && curIdx < 0) throwInvalid("Expected key before OBJECT");
 				engineStack.push(curTypeDesc, curObj, curMeta, curIdx, stackLimit);
 				curTypeDesc = curMeta.fieldDescriptor(curIdx);
 				pos++;
@@ -282,7 +282,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				pos++;
 				var childDesc = curMeta.fieldDescriptor(curIdx);
 				if (childDesc >= 0L) {
-					if (((int) (childDesc >> 1))!= ObjectMeta.IDX_MAP) throwInvalid("Expected object, got '['");
+					if (((int) (childDesc >> 1))!= ObjectMeta.IDX_MAP) throwInvalid(OBJECT_INSTEAD_OF_ARRAY);
 					childDesc = ObjectMeta.DESC_COLLECTION;
 				}
 				if ((childDesc & 1L) != 0L) {
@@ -427,6 +427,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 	// ========================================================================
 	// RECURSIVE FAST-PATH ENGINE (Mit Hybrid-Fallback zur State-Machine)
 	// ========================================================================
+	private static final String OBJECT_INSTEAD_OF_ARRAY = "Expected object, got '['";
 
 	private Object parseRecordRecursive(final ObjectMeta meta, final int recursionDeep) throws Throwable {
 		final var context = meta.start(this);
@@ -484,7 +485,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			case '[' -> {
 				final var fieldDesc = meta.fieldDescriptor(targetIdx);
 				final var metaIdx = (int) (fieldDesc >>> 1);
-				if (fieldDesc >= 0L && metaIdx != ObjectMeta.IDX_GENERIC && metaIdx != ObjectMeta.IDX_MAP) throwInvalid("Expected object, got '['");
+				if (fieldDesc >= 0L && metaIdx != ObjectMeta.IDX_GENERIC && metaIdx != ObjectMeta.IDX_MAP) throwInvalid(OBJECT_INSTEAD_OF_ARRAY);
 				if ((fieldDesc & 1L) != 0L) {
 					pos++;
 					meta.set(this, context, targetIdx, parsePrimitiveArray(fieldDesc));
@@ -520,8 +521,10 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		var idx = 0;
 		byte state = 0;
 		// LAZY EVALUATION VARIABLES (Calculated only when strictly necessary)
-		long objPassDesc = 0, arrPassDesc = 0;
-		ObjectMeta objFallbackMeta = null, arrFallbackMeta = null;
+		var objPassDesc = 0L;
+		var arrPassDesc = 0L;
+		ObjectMeta objFallbackMeta = null;
+		ObjectMeta arrFallbackMeta = null;
 		var isPrimitive = false;
 		var metaIdx = 0;
 		while (true) {
@@ -599,7 +602,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 					arrPassDesc     = isFallbackToCollection ?           ObjectMeta.DESC_COLLECTION : (childDesc == 0L ? ObjectMeta.DESC_COLLECTION : childDesc);
 				}
 
-				if ((childDesc >= 0L) && metaIdx != ObjectMeta.IDX_GENERIC && metaIdx != ObjectMeta.IDX_MAP) throwInvalid("Expected object, got '['");
+				if ((childDesc >= 0L) && metaIdx != ObjectMeta.IDX_GENERIC && metaIdx != ObjectMeta.IDX_MAP) throwInvalid(OBJECT_INSTEAD_OF_ARRAY);
 				if (isPrimitive) {
 					pos++;
 					meta.set(this, context, idx, parsePrimitiveArray(childDesc));

@@ -15,9 +15,9 @@ public final class AppendableOutputStream extends OutputStream {
 	private final CharBuffer charBuf;
 	private final boolean isWriter;
 
-	public AppendableOutputStream(final Appendable target) {
-		this.target = target;
-		this.isWriter = target instanceof Writer;
+	public AppendableOutputStream(final Appendable pTarget) {
+		this.target = pTarget;
+		this.isWriter = pTarget instanceof Writer;
 		this.decoder = StandardCharsets.UTF_8.newDecoder()
 				.onMalformedInput(CodingErrorAction.REPLACE)
 				.onUnmappableCharacter(CodingErrorAction.REPLACE);
@@ -54,7 +54,8 @@ public final class AppendableOutputStream extends OutputStream {
 		decoder.reset();
 	}
 
-	@Override public void close() throws IOException { flush();
-	if (target instanceof final AutoCloseable c) { try { c.close(); } catch (final Exception e) { throw new IOException(e); } }
+	@Override public void close() throws IOException {
+		flush();
+		if (target instanceof final AutoCloseable c) { try { c.close(); } catch (final Exception e) { throw new IOException(e); } }
 	}
 }
