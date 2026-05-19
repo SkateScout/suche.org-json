@@ -110,7 +110,7 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 	}
 
 	// Retrieves the string representation of the value
-	@Override public String getString(final String pKey) { return optString(pKey, null); }
+	@Override public String getString(final String pKey) { return optString(pKey, ""); }
 
 	// Retrieves the string value or returns the provided fallback if missing
 	@Override public String optString(final String pKey, final String fallback) {
