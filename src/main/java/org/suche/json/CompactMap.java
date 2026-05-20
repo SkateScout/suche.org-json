@@ -88,9 +88,9 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 
 	/** Safely retrieves a nested JSON object utilizing pattern matching for performance */
 	@Override
-	public CompactMap optJSONObject(final String pKey) {
+	public JSONObject optJSONObject(final String pKey, final JSONObject fallback) {
 		final var idx = idx(pKey);
-		return (idx >= 0 && rawValueAt(idx) instanceof final CompactMap m ? (CompactMap)m : null);
+		return (idx >= 0 && rawValueAt(idx) instanceof final CompactMap m ? (CompactMap)m : fallback);
 	}
 
 	// Safely retrieves a nested JSON array
@@ -139,7 +139,7 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 		case PRIMITIVE.T_DOUBLE -> Double.valueOf(Double.longBitsToDouble(prims[idx]));
 		default                -> {
 			final var val = rawValueAt(idx);
-			if (val == PRIMITIVE.LONG)   yield Long.valueOf(prims[idx]);
+			if (val == PRIMITIVE.LONG)   yield Long  .valueOf(prims[idx]);
 			if (val == PRIMITIVE.DOUBLE) yield Double.valueOf(Double.longBitsToDouble(prims[idx]));
 			yield val;
 		}
@@ -237,14 +237,6 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 	@Override public double    optDouble (final String key, final double  fallback) { final var v = oDouble(idx(key)); return(v==null?fallback:v); }
 	@Override public long      optLong   (final String key, final long    fallback) { final var v = oLong(idx(key)); return(v==null?fallback:v); }
 	@Override public Number    optNumber (final String key, final Number  fallback) { return (float)optNumber (idx(key), fallback); }
-
-	@Override public int       optInt    (final String key) { final var v = oLong  (idx(key)); return(null==v?0:v.intValue()); }
-	@Override public short     optShort  (final String key) { final var v = oLong  (idx(key)); return(null==v?0:v.shortValue()); }
-	@Override public byte      optByte   (final String key) { final var v = oLong  (idx(key)); return(null==v?0:v.byteValue()); }
-	@Override public boolean   optBoolean(final String key) { final var v = oLong  (idx(key)); return(null!=v && v.longValue()!=0); }
-	@Override public char      optChar   (final String key) { final var v = oLong  (idx(key)); return(null==v?0:(char)v.intValue()); }
-	@Override public double    optDouble (final String key) { final var v = oDouble(idx(key)); return(null==v?0:v); }
-	@Override public float     optFloat  (final String key) { final var v = oDouble(idx(key)); return(null==v?0:v.floatValue()); }
 
 	@Override public void forEach(final BiConsumer<? super String, ? super Object> action) {
 		if (action == null) throw new NullPointerException();

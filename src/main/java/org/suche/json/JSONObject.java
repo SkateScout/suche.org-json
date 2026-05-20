@@ -33,7 +33,7 @@ public sealed interface JSONObject extends Map<String,Object> permits CompactMap
 	}
 
 	/** Safely retrieves a nested JsonObject, returning null if missing or not an object. */
-	JSONObject optJSONObject(String key);
+	default JSONObject optJSONObject(final String key) { return optJSONObject(key, null); }
 
 	/** Safely retrieves a nested JsonArray. Throws ClassCastException if the type mismatches. */
 	JSONArray getJSONArray(String key);
@@ -59,21 +59,21 @@ public sealed interface JSONObject extends Map<String,Object> permits CompactMap
 	float   getFloat  (String key);
 
 	// --- Primitive Retrieval (Optional with Fallback) ---
-
-	Integer optInteger(String key, Integer fallback);
-	long    optLong   (String key, long    fallback);
-	int     optInt    (String key, int     fallback);
-	short   optShort  (String key, short   fallback);
-	byte    optByte   (String key, byte    fallback);
-	boolean optBoolean(String key, boolean fallback);
-	char    optChar   (String key, char    fallback);
-	double  optDouble (String key, double  fallback);
-	float   optFloat  (String key, float   fallback);
-	Number  optNumber (String key, Number  fallback);
+	JSONObject optJSONObject(String Key, JSONObject fallback);
+	Integer    optInteger   (String key, Integer    fallback);
+	long       optLong      (String key, long       fallback);
+	int        optInt       (String key, int        fallback);
+	short      optShort     (String key, short      fallback);
+	byte       optByte      (String key, byte       fallback);
+	boolean    optBoolean   (String key, boolean    fallback);
+	char       optChar      (String key, char       fallback);
+	double     optDouble    (String key, double     fallback);
+	float      optFloat     (String key, float      fallback);
+	Number     optNumber    (String key, Number     fallback);
 
 	// --- Primitive Retrieval (Optional returning Wrapper/Null) ---
 
-	default String  optString (final String key) { return optString (key, null); }
+	default String  optString (final String key) { return optString (key, ""); }
 	default long    optLong   (final String key) { return optLong   (key, 0); }
 	default int     optInt    (final String key) { return optInt    (key, 0); }
 	default short   optShort  (final String key) { return optShort  (key, (short)0); }
