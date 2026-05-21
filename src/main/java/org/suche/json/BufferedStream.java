@@ -579,7 +579,7 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 		}
 		// --- SLOW-PATH FALLBACK ---
 		// Takes effect when we get close to the buffer end, UTF-8 appears, or escapes need to be resolved.
-		return parseStringSlow(start, pos, true);
+		return parseStringSlow(start, pos, true, false);
 	}
 
 	final int parseStringKeyAsIndex(final Object context, final ObjectMeta meta) throws IOException {
@@ -655,12 +655,12 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 
 		// If escapes are present or buffer needs a refill.
 		// parseStringSlow computes its own fallback hash, which is fine for this rare edge case.
-		final var key = parseStringSlow(start, pos, true);
+		final var key = parseStringSlow(start, pos, true, true);
 		return meta.prepareKey(context, key);
 	}
 
 	// SWAR Optimized
-	private String parseStringSlow(final int start, final int lPos, boolean isAscii) throws IOException {
+	private String parseStringSlow(final int start, final int lPos, boolean isAscii, final boolean asKey) throws IOException {
 		var parsedLen = lPos - start;
 		if (parsedLen > strBuf.length) expandStrBuf(parsedLen);
 		if (parsedLen > 0) System.arraycopy(buffer, start, strBuf, 0, parsedLen);
@@ -771,7 +771,7 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 			strBuf[parsedLen++] = (byte) esc;
 			if (esc < 0) isAscii = false;
 		}
-
+		if (!asKey) return newString(strBuf, 0, parsedLen, isAscii);
 		// Consistent FNV-1a Hash for the pool!
 		return internBytes(strBuf, 0, parsedLen, computeHash(strBuf, 0, parsedLen), isAscii);
 	}
