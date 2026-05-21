@@ -3,7 +3,6 @@ package org.suche.json.benchmark;
 import java.io.ByteArrayOutputStream;
 import java.util.concurrent.TimeUnit;
 
-import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Fork;
 import org.openjdk.jmh.annotations.Level;
@@ -61,20 +60,20 @@ public class JsonSerializationBenchmark {
 		testData = jacksonMapper.readValue(jsonData, Object.class);
 	}
 
-	@Benchmark
+	// @Benchmark
 	public void benchmarkJackson(final Blackhole bh) throws Exception {
 		jacksonOs.reset();
 		jacksonMapper.writeValue(jacksonOs, testData);
 		bh.consume(jacksonOs.size());
 	}
 
-	@Benchmark
+	// @Benchmark
 	public void benchmarkFastjson2(final Blackhole bh) {
 		final var bytes = JSON.toJSONBytes(testData);
 		bh.consume(bytes);
 	}
 
-	@Benchmark
+	// @Benchmark
 	@Fork(value = 1, jvmArgsAppend = {"--add-opens", "java.base/java.lang=ALL-UNNAMED"})
 	public void benchmarkMyEngineVanilla(final Blackhole bh) throws Exception {
 		myOs.reset();
@@ -82,7 +81,7 @@ public class JsonSerializationBenchmark {
 		bh.consume(myOs.size());
 	}
 
-	@Benchmark
+	// @Benchmark
 	@Fork(value = 1)
 	public void benchmarkMyEngineAddOpens(final Blackhole bh) throws Exception {
 		myOs.reset();
