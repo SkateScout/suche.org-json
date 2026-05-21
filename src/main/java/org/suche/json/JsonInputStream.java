@@ -443,6 +443,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				pos++;
 				return meta.end(this, context);
 			}
+			if (buffer[pos] != '"') throwInvalid("Expected '\"' for object key but got: " + (char) buffer[pos]);
 			targetIdx = parseStringKeyAsIndex(context, meta);
 			ensure(3); // Minimum :1}
 

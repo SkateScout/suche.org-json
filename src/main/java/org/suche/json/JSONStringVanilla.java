@@ -41,9 +41,6 @@ final class JSONStringVanilla implements JSONStringProvider {
 					acc = 0;
 					accLen = 0;
 				}
-
-				if (c < 32) throw JsonEngine.illegalStateException("Unescaped Control Character");
-
 				if (c < 256) {
 					final var entry = LATIN1_TABLE[c];
 					// 1. OPTIMIZATION: Removed the masking & 0x00FFFF...L!

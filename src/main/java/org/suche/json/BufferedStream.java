@@ -323,19 +323,19 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 
 	final double parseDoublePrimitive() throws IOException {
 		ensure(64);
-		pos = numberParser.parseNumberCore(buffer, pos, limit);
+		pos = numberParser.parseNumberCore(buffer, pos);
 		return numberParser.computeDoubleValue();
 	}
 
 	final long parseLongPrimitive() throws IOException {
 		ensure(64);
-		pos = numberParser.parseNumberCore(buffer, pos, limit);
+		pos = numberParser.parseNumberCore(buffer, pos);
 		return numberParser.computeLongValue();
 	}
 
 	final Object parseNumber(final long typeDesc) throws IOException {
 		ensure(64);
-		pos = numberParser.parseNumberCore(buffer, pos, limit);
+		pos = numberParser.parseNumberCore(buffer, pos);
 
 		final var isPrimitive = (typeDesc >= 0L) && ((typeDesc & 1L) != 0L);
 		final var metaId = typeDesc >= 0L ? (int)(typeDesc >>> 1) : ObjectMeta.IDX_GENERIC;
@@ -360,7 +360,7 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 
 	final void parseNumericPrimitive(final ObjectMeta meta, final Object ctx, final int targetIdx, final long typeDesc) throws IOException {
 		ensure(64);
-		pos = numberParser.parseNumberCore(buffer, pos, limit);
+		pos = numberParser.parseNumberCore(buffer, pos);
 
 		// Fast-Path mit Bit-Operation (Prüfung auf Primitiv-Flag auf Bit 0)
 		if (typeDesc >= 0L && (typeDesc & 1L) != 0L) {
@@ -686,7 +686,7 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 				hasCtrl                = (word - 0x2020202020202020L) & ~word;
 				has                    = (hasQuote | hasBackslash | hasCtrl) & JSONString.NON_ASCII_PATTERN;
 				if (has != 0) break; // Match! Variables are preserved for evaluation
-				if (parsedLen + 8 > strBuf.length) expandStrBuf(parsedLen + 8);
+				if (parsedLen + 8 >= strBuf.length) expandStrBuf(parsedLen + 8);
 				JSONString.LONG_VIEW.set(strBuf, parsedLen, word);
 				parsedLen += 8;
 				pos       += 8;
@@ -696,7 +696,12 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 				final var match  = Long.lowestOneBit(has);
 				if ((hasCtrl & match) != 0) throwInvalid(UNESCAPE_CONTRL);
 				final var offset = (Long.numberOfTrailingZeros(match) >>> 3);
-				if (parsedLen + offset > strBuf.length) expandStrBuf(parsedLen + offset);
+
+				// --- FIX: Immer für 8 Bytes Platz schaffen ---
+				// Da LONG_VIEW.set unweigerlich 8 Bytes schreibt, auch wenn wir
+				// durch 'offset' nur z. B. 2 Bytes davon als echten String werten.
+				if (parsedLen + 8 > strBuf.length) expandStrBuf(parsedLen + 8);
+
 				JSONString.LONG_VIEW.set(strBuf, parsedLen, word);
 				parsedLen += offset;
 				pos       += offset;
@@ -710,9 +715,8 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 				// --- REGISTER-LOOKAHEAD ---
 				if (offset < 7) {
 					// The escape character is still in the register!
-					// Extract via shift (0 CPU latency, 0 RAM access)
 					escChar = (int) ((word >>> ((offset + 1) << 3)) & 0xFFL);
-					pos++; // We practically "read" the character
+					pos++;
 				}
 			}
 

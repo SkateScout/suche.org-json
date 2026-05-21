@@ -55,6 +55,6 @@ final class EmptyJSONArray implements JSONArray {
 	@Override public JSONArray optJSONArray(final int index) { throw new NoSuchElementException(); }
 	@Override public String getString(final int index) { throw new NoSuchElementException(); }
 	@Override public String optString(final int index, final String fallback) { throw new NoSuchElementException(); }
-	@Override public void put(final int idx, final int val) { throw new NoSuchElementException(); }
+	@Override public void put(final int idx, final Object val) { throw new NoSuchElementException(); }
 	@Override public void removeByIndex(final int index) { throw new NoSuchElementException(); }
 }
