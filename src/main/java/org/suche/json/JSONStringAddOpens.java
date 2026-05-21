@@ -216,7 +216,7 @@ final class JSONStringAddOpens implements JSONStringProvider {
 
 			while (sOff < sLen && dstOff < safeLimitD) {
 				// Accumulator Flush
-				if (accLen > 4) {
+				if (accLen > 2) {
 					JSONString.LONG_VIEW.set(dst, dstOff, acc);
 					dstOff += accLen;
 					acc = 0;

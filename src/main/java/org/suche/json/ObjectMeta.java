@@ -94,10 +94,8 @@ final class ObjectMeta {
 	private final ObjectMeta[]        childMetas;
 
 	long fieldDescriptor(final int idx) {
-		final var l = fieldDescriptors.length;
-		if(l == 0) return componentDescriptor;
-		if(l == 1) return fieldDescriptors[0];
-		return fieldDescriptors[idx];
+		// POJO use Feld-Array all other(Map, List, Set) use componentDescriptor!
+		return metaType == TYPE_INSTANTIATOR ? fieldDescriptors[idx] : componentDescriptor;
 	}
 
 	ObjectMeta childMeta(final int index) { return childMetas[index]; }
@@ -478,7 +476,6 @@ final class ObjectMeta {
 
 	@SuppressWarnings("unchecked")
 	void setLong(final MetaPool s, final Object context, final int index, final long v) {
-		if (index < 0) throw new IllegalStateException();
 		if (skipDefaultValues && v == 0L) return;
 		switch (metaType) {
 		case TYPE_INSTANTIATOR               -> ((ParseContext)context).prims[index] = v;
@@ -491,7 +488,6 @@ final class ObjectMeta {
 
 	@SuppressWarnings("unchecked")
 	void setDouble(final MetaPool s, final Object context, final int index, final double v) {
-		if (index < 0) throw new IllegalStateException();
 		if (skipDefaultValues && v == 0.0) return;
 		final var bits = Double.doubleToRawLongBits(v);
 		switch (metaType) {
@@ -507,17 +503,25 @@ final class ObjectMeta {
 
 	@SuppressWarnings("unchecked")
 	void set(final MetaPool s, final Object context, final int index, Object value) {
-		if (index < 0) throw new IllegalStateException();
-		final var targetType = (components != null && index < components.length) ? components[index].type() : null;
-		if (targetType == boolean.class && value != null) { setLong(s, context, index, ((Boolean) value) ? 1 : 0); return; }
-		if (value == null) {
-			if (skipDefaultValues && metaType != TYPE_OBJ_ARRAY && metaType != TYPE_COLLECTION) return;
-			if (targetType != null && targetType.isPrimitive()) value = (targetType == boolean.class ? Boolean.FALSE : 0);
-		}
-		if (this.enumConstants != null && index < enumConstants.length && this.enumConstants[index] != null) value = Meta.resolveEnum(this.enumConstants[index], value);
+		// Globaler Null-Check
+		if (value == null && skipDefaultValues && metaType != TYPE_OBJ_ARRAY && metaType != TYPE_COLLECTION) return;
 		switch (metaType) {
-		case TYPE_INSTANTIATOR -> ((ParseContext) context).objs[index] = value;
-		case TYPE_MAP          -> {
+		case TYPE_INSTANTIATOR -> {
+			if (value == null) {
+				final var targetType = components[index].type();
+				if (targetType.isPrimitive()) value = (targetType == boolean.class ? Boolean.FALSE : 0);
+			} else {
+				if (components[index].type() == boolean.class) {
+					((ParseContext)context).prims[index] = ((Boolean) value) ? 1 : 0;
+					return;
+				}
+				if (this.enumConstants != null && this.enumConstants[index] != null) {
+					value = Meta.resolveEnum(this.enumConstants[index], value);
+				}
+			}
+			((ParseContext) context).objs[index] = value;
+		}
+		case TYPE_MAP -> {
 			final var ctx = (ParseContext) context;
 			ctx.upgradeToMixed(s, ctx.cnt + 2);
 			ctx.objs[ctx.cnt++] = ctx.currentKey;
@@ -531,8 +535,8 @@ final class ObjectMeta {
 			ctx.objs[index] = value;
 			if (index >= ctx.cnt) ctx.cnt = index + 1;
 		}
-		case TYPE_SET          -> ((Collection<Object>) context).add(value);
-		default                -> invalidType();
+		case TYPE_SET -> ((Collection<Object>) context).add(value);
+		default -> invalidType();
 		}
 	}
 

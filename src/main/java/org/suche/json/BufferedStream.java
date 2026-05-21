@@ -211,8 +211,8 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 	}
 
 	@Override public final String internBytes(final byte[] src, final int start, final int len, final int hash, final boolean isAscii) {
-		// Strings over 36 Zeichen (Text, long URLs) are not pooled.
-		if (stringPoolKeys == null || len > 36) return newString(src, start, len, isAscii);
+		// Strings over 36 Zeichen (Text, long URLs) are not pooled or uuids
+		if (stringPoolKeys == null || len > 36 || (len == 36 && src[start + 8] == '-')) return newString(src, start, len, isAscii);
 		final var keys = this.stringPoolKeys;
 		final var mask = keys.length - 1;
 		var idx = hash & mask;
