@@ -30,6 +30,8 @@ public record MetaConfig(boolean emitClassName,
 		int                                maxCollectionSize,
 		boolean                            enableDeduplication) {
 
+	public MetaConfig { if(maxDepth > 128) maxDepth = 128; }
+
 	public interface Filter { Object apply(Object v); }
 	public record NameFilter(String name, Filter filter) { }
 

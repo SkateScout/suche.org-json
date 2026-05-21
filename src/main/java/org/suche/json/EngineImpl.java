@@ -67,9 +67,10 @@ final class EngineImpl implements InternalEngine {
 	@Override public boolean ignoreTrailing() { return ignoreTrailing; }
 
 
-	@Override public void maxRecursiveDepth(final int v) { this.maxRecursiveDepth = v; }
+	@Override public void maxRecursiveDepth(final int v) {
+		if(v <= 128) this.maxRecursiveDepth = v;
+	}
 	@Override public int maxRecursiveDepth() { return maxRecursiveDepth; }
-
 
 	@Override public ObjectMeta[] metaCache() { return metaCache; }
 	@Override public void    skipInvalid(final boolean v) { this.skipInvalid = v; }
