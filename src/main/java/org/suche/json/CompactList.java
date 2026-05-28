@@ -91,6 +91,8 @@ public final class CompactList extends AbstractList<Object> implements ContextBa
 	/** Provides compatibility with org.json array length logic */
 	@Override public int      length    () { return size(); }
 
+	@Override public boolean add(final Object val) { put(size(),val); return true; }
+
 	private Object resolve (final int valIndex) {
 		return switch(singleType) {
 		case PRIMITIVE.T_EMPTY  -> JsonEngine.illegalStateException("empty");

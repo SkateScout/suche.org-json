@@ -19,10 +19,10 @@ public sealed interface JSONArray extends List<Object>, ContextBacked permits Co
 	JSONObject optJSONObject(int index);
 
 	/** Safely retrieves a nested JsonArray at the given index. Throws ClassCastException if type mismatches. */
-	JSONArray getJSONArray(int index);
+	JSONArray getJSONArray  (int index);
 
 	/** Safely retrieves a nested JsonArray, returning null if missing or not an array. */
-	JSONArray optJSONArray(int index);
+	JSONArray optJSONArray  (int index);
 
 	// --- String Retrieval ---
 
