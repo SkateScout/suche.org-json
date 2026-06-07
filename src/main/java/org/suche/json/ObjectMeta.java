@@ -59,8 +59,8 @@ final class ObjectMeta {
 	static         final ObjectMeta           DEFECT_FIRST        = new ObjectMeta(-1);
 	static         final ObjectMeta           DEFECT              = new ObjectMeta(-1);
 	static         final RuntimeException     E_DEFEKT2           = new RuntimeException("DEFEKT.2", null, false, false) { };
-	static         final ObjectMeta           NULL                = new ObjectMeta(null, null, -1);
-	static         final ObjectMeta           GENERIC_MAP         = new ObjectMeta(null, Object.class, IDX_MAP);
+	static         final ObjectMeta           NULL                = new ObjectMeta(null, null, null, -1);
+	static         final ObjectMeta           GENERIC_MAP         = new ObjectMeta(null, null, Object.class, IDX_MAP);
 
 	static int getPrimId(final Class<?> type) {
 		if (type == int.class    ) return PRIM_INT;
@@ -80,7 +80,7 @@ final class ObjectMeta {
 	final         int                 ctorParamCount;
 	private final FastKeyTable        keys;
 	final         Class<?>[]          types;
-	private final Class<?>            baseType;
+	final         Class<?>            baseType;
 	final         Class<?>[]          permitted;
 	final         Object[][]          enumConstants;
 	final         boolean             skipDefaultValues;
@@ -97,7 +97,7 @@ final class ObjectMeta {
 	private final ObjectMeta[]        childMetas;
 
 	long fieldDescriptor(final int idx) {
-		// POJO use Feld-Array all other(Map, List, Set) use componentDescriptor!
+		// POJOs use field arrays, all others (Map, List, Set) use componentDescriptor!
 		return metaType == TYPE_INSTANTIATOR ? fieldDescriptors[idx] : componentDescriptor;
 	}
 
@@ -128,17 +128,9 @@ final class ObjectMeta {
 		else if (isPrimValue) primTarget = type;
 		final int subIdx;
 		if (primTarget != null) subIdx = getPrimId(primTarget);
-		else if (e instanceof final EngineImpl ei) subIdx = resolveEngineObjectDescriptor(ei, type, valueType);
+		else if (e instanceof final EngineImpl ei) subIdx = ei.resolveEngineObjectDescriptor(type, valueType);
 		else subIdx = IDX_GENERIC;
 		return EngineImpl.createTypeDesc(isArray, primTarget != null, subIdx);
-	}
-
-	private static int resolveEngineObjectDescriptor(final EngineImpl e, final Class<?> type, final Class<?> valueType) {
-		if (type.isArray()                         ) return e.getDynamicMetaId(type.componentType(), TYPE_OBJ_ARRAY);
-		if (Set       .class.isAssignableFrom(type)) return e.getDynamicMetaId(valueType, TYPE_SET       );
-		if (Collection.class.isAssignableFrom(type)) return e.getDynamicMetaId(valueType, TYPE_COLLECTION);
-		if (Map       .class.isAssignableFrom(type)) return (valueType == Object.class ? IDX_MAP : e.getDynamicMetaId(valueType, TYPE_MAP));
-		return e.metaIdOf(type);
 	}
 
 	private static ObjectMeta[] componentMetaToObjectMeta(final InternalEngine e, final long[] fieldDescriptors) {
@@ -159,8 +151,8 @@ final class ObjectMeta {
 		return descriptors;
 	}
 
-	ObjectMeta(final InternalEngine e, final Class<?> compType, final int targetMetaType, final int cacheIndex) {
-		this.cacheIndex = cacheIndex;
+	ObjectMeta(final InternalEngine e, final Class<?> baseTyp, final Class<?> compType, final int targetMetaType, final int pCacheIndex) {
+		this.cacheIndex = pCacheIndex;
 		this.className = targetMetaType == TYPE_OBJ_ARRAY ? "<ARRAY>" : (targetMetaType == TYPE_SET ? "<SET>" : "<COLLECTION>");
 		this.metaType = targetMetaType;
 		this.failOnUnknown = false;
@@ -169,7 +161,7 @@ final class ObjectMeta {
 		this.arrayCreator = (compType != null && targetMetaType == TYPE_OBJ_ARRAY) ? size -> Array.newInstance(compType, size) : null;
 		this.ctorParamCount = 0;
 		this.permitted = null;
-		this.baseType = null;
+		this.baseType = baseTyp;
 		this.keys = new FastKeyTable(new byte[0][], new int[0], 0);
 		this.types = new Class<?>[] { compType != null ? compType : Object.class };
 		this.components = new ComponentMeta[0];
@@ -236,7 +228,7 @@ final class ObjectMeta {
 		this.childMetas       = componentMetaToObjectMeta(e, fieldDescriptors);
 	}
 
-	ObjectMeta(final InternalEngine e, final Class<?> mapValueType, final int pCacheIndex) {
+	ObjectMeta(final InternalEngine e, final Class<?> baseTyp, final Class<?> mapValueType, final int pCacheIndex) {
 		this.cacheIndex     = pCacheIndex;
 		this.className      = "<MAP>";
 		this.metaType       = TYPE_MAP;
@@ -246,7 +238,7 @@ final class ObjectMeta {
 		this.arrayCreator   = null;
 		this.ctorParamCount = 0;
 		this.permitted      = null;
-		this.baseType       = null;
+		this.baseType       = baseTyp;
 		this.keys           = new FastKeyTable(new byte[0][], new int[0], 0);
 		this.types          = new Class<?>[] { mapValueType };
 		this.components     = new ComponentMeta[0];
@@ -332,7 +324,7 @@ final class ObjectMeta {
 				types[i] = comps[i].getType();
 				metaComps[i] = new ComponentMeta(comps[i].getName(), types[i], GernericsHandler.extractValueType(comps[i].getGenericType(), types[i]));
 			}
-			return new ObjectMeta(engine, c.getCanonicalName(), NO_POJO_START, ConstructorGenerator.generate(c, types), 0, FastKeyTable.build(metaComps), types, metaComps, buildEnumConstants(types), cacheIndex);
+			return new ObjectMeta(engine, c.getCanonicalName(), NO_POJO_START, ConstructorGenerator.generate(c, types), comps.length, FastKeyTable.build(metaComps), types, metaComps, buildEnumConstants(types), cacheIndex);
 		} catch (final Exception e) {
 			e.printStackTrace();
 			return DEFECT_FIRST;
@@ -383,7 +375,10 @@ final class ObjectMeta {
 	int prepareKey(final int hash, final byte[] buffer, final int off, final int len) {
 		if (metaType == TYPE_MAP) return -1;
 		final var idx = keys.get(hash, buffer, off, len);
-		if (idx == -1 && failOnUnknown) throw new IllegalArgumentException("Unknown property in class " + className);
+		if (idx == -1) {
+			if(failOnUnknown) throw new IllegalArgumentException("JSON: Unknown property["+new String(buffer, off, len)+"] in class " + className);
+			System.err.println("JSON: Unknown property["+new String(buffer, off, len)+"] in class " + className);
+		}
 		return idx;
 	}
 
@@ -410,7 +405,16 @@ final class ObjectMeta {
 			ctx.cnt = len;
 			yield ctx;
 		}
-		case TYPE_SET -> new HashSet<>();
+		case TYPE_SET -> {
+			if (baseType != null && baseType != Set.class && !Modifier.isAbstract(baseType.getModifiers()) && !baseType.isInterface()) {
+				try {
+					yield baseType.getDeclaredConstructor().newInstance();
+				} catch (final Exception ex) {
+					// Ignored, fallback to HashSet
+				}
+			}
+			yield new HashSet<>();
+		}
 		default -> throw new IllegalArgumentException();
 		};
 	}
@@ -464,7 +468,20 @@ final class ObjectMeta {
 		case TYPE_MAP -> {
 			final var ctx = (ParseContext) context;
 			if (setEmpty && ctx.cnt == 0) { s.returnContext(ctx); yield null; }
-			if (ctx.objs == null) yield null; // No data -> no key -> no prims => empty => null
+			if (ctx.objs == null) yield null;
+			if (baseType != null && baseType != Map.class && !Modifier.isAbstract(baseType.getModifiers()) && !baseType.isInterface() && baseType != CompactMap.class) {
+				try {
+					@SuppressWarnings("unchecked")
+					final var map = (Map<Object, Object>) baseType.getDeclaredConstructor().newInstance();
+					for (var i = 0; i < ctx.cnt; i += 2) {
+						map.put(ctx.objs[i], ctx.objs[i+1]);
+					}
+					s.returnContext(ctx);
+					yield map;
+				} catch (final Exception ex) {
+					// Fallback to CompactMap
+				}
+			}
 			final var data = Arrays.copyOf(ctx.objs, ctx.cnt);
 			final var prims = ctx.prims == null ? null : Arrays.copyOf(ctx.prims, ctx.cnt >> 1);
 			s.returnContext(ctx);
@@ -477,7 +494,7 @@ final class ObjectMeta {
 			final var result = arrayCreator.apply(ctx.cnt);
 			if (ctx.objs != null) System.arraycopy(ctx.objs, 0, result, 0, ctx.cnt);
 			else if (ctx.prims != null) {
-				// Primitive Werte in Ziel-Array boxen (z.B. für Double[] vs double[])
+				// Box primitive values into target array (e.g., for Double[] vs double[])
 				if (ctx.singleType == PRIMITIVE.T_DOUBLE) for (var i = 0; i < ctx.cnt; i++) Array.set(result, i, Double.longBitsToDouble(ctx.prims[i]));
 				else if (ctx.singleType == PRIMITIVE.T_LONG) for (var i = 0; i < ctx.cnt; i++) Array.set(result, i, ctx.prims[i]);
 			}
@@ -520,7 +537,7 @@ final class ObjectMeta {
 
 	@SuppressWarnings("unchecked")
 	void set(final MetaPool s, final Object context, final int index, Object value) {
-		// Globaler Null-Check
+		// Global null check
 		if (value == null && setEmpty && metaType != TYPE_OBJ_ARRAY && metaType != TYPE_COLLECTION) return;
 		switch (metaType) {
 		case TYPE_INSTANTIATOR -> {

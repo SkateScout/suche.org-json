@@ -5,6 +5,7 @@ import java.io.OutputStream;
 import java.lang.reflect.Modifier;
 import java.util.Collection;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Predicate;
@@ -41,7 +42,7 @@ final class EngineImpl implements InternalEngine {
 
 	private boolean hasCoreTransformer = false;
 	private boolean skipInvalid = false;
-	private boolean failOnUnknownProperties = true;
+	private boolean failOnUnknownProperties = false;
 
 	private final ConcurrentHashMap<Class<?>, TypeRecord> typeRecordCache = new ConcurrentHashMap<>();
 	private TypeRecord getTypeRecord(final Class<?> c) { return typeRecordCache.computeIfAbsent(c, TypeRecord::new); }
@@ -62,6 +63,9 @@ final class EngineImpl implements InternalEngine {
 	private int maxRecursiveDepth = 128;
 	private boolean ignoreTrailing = false;
 	final MetaConfig cfg;
+	private final ObjectMeta[] dynamicMetaCache;
+	private int dynamicMetaCount = 0;
+	private final int flags;
 
 	@Override public void ignoreTrailing(final boolean v) { ignoreTrailing = v; }
 	@Override public boolean ignoreTrailing() { return ignoreTrailing; }
@@ -92,16 +96,23 @@ final class EngineImpl implements InternalEngine {
 
 	EngineImpl(final MetaConfig config) {
 		this.cfg = config;
-		this.defaultMapMeta        = new ObjectMeta(this, Map.class, ObjectMeta.IDX_MAP);
-		this.genericCollectionMeta = new ObjectMeta(this, Object.class, ObjectMeta.TYPE_COLLECTION, ObjectMeta.IDX_COLLECTION);
-		this.genericArrayMeta      = new ObjectMeta(this, Object.class, ObjectMeta.TYPE_OBJ_ARRAY, ObjectMeta.IDX_OBJ_ARRAY);
-		this.genericSetMeta        = new ObjectMeta(this, Object.class, ObjectMeta.TYPE_SET, ObjectMeta.IDX_SET);
+		this.dynamicMetaCache = new ObjectMeta[config.dynamicMetaCacheSize()];
+		this.defaultMapMeta        = new ObjectMeta(this, null, Map.class, ObjectMeta.IDX_MAP);
+		this.genericCollectionMeta = new ObjectMeta(this, null, Object.class, ObjectMeta.TYPE_COLLECTION, ObjectMeta.IDX_COLLECTION);
+		this.genericArrayMeta      = new ObjectMeta(this, null, Object.class, ObjectMeta.TYPE_OBJ_ARRAY, ObjectMeta.IDX_OBJ_ARRAY);
+		this.genericSetMeta        = new ObjectMeta(this, null, Object.class, ObjectMeta.TYPE_SET, ObjectMeta.IDX_SET);
 
 		metaCache[ObjectMeta.IDX_MAP       ] = defaultMapMeta;
 		metaCache[ObjectMeta.IDX_COLLECTION] = genericCollectionMeta;
 		metaCache[ObjectMeta.IDX_OBJ_ARRAY ] = genericArrayMeta;
 		metaCache[ObjectMeta.IDX_SET       ] = genericSetMeta;
-
+		var f = 0;
+		if(config.skipDefaultNulls ()) f |= JsonOutputStream.SKIP_NULL;
+		if(config.skipDefaultValues()) f |= JsonOutputStream.SKIP_FALSE;
+		if(config.setEmpty         ()) f |= JsonOutputStream.SKIP_EMPTY;
+		if(config.enumObject       ()) f |= JsonOutputStream.ENUM_OBJECT;
+		// boolean                  setNumeric0       ,
+		this.flags = f;
 		putMeta(Object.class, defaultMapMeta);
 		putMeta(Map.class, defaultMapMeta);
 	}
@@ -113,13 +124,21 @@ final class EngineImpl implements InternalEngine {
 		return desc;
 	}
 
-	private final ObjectMeta[] dynamicMetaCache = new ObjectMeta[32];
-	private int dynamicMetaCount = 0;
+
+	int resolveEngineObjectDescriptor(final Class<?> type, final Class<?> valueType) {
+		if (type.isArray()                         ) return this.getDynamicMetaId(type, type.componentType(), ObjectMeta.TYPE_OBJ_ARRAY);
+		if (Set       .class.isAssignableFrom(type)) return this.getDynamicMetaId(type, valueType, ObjectMeta.TYPE_SET       );
+		if (Collection.class.isAssignableFrom(type)) return this.getDynamicMetaId(type, valueType, ObjectMeta.TYPE_COLLECTION);
+		if (Map       .class.isAssignableFrom(type)) return this.getDynamicMetaId(type, valueType, ObjectMeta.TYPE_MAP       );
+		return this.metaIdOf(type);
+	}
 
 	// Not used in hot path only by resolveDescriptor in Constructor
-	synchronized int getDynamicMetaId(final Class<?> compType, final int targetMetaType) {
+	synchronized int getDynamicMetaId(final Class<?> baseType, final Class<?> compType, final int targetMetaType) {
 		final var searchType = compType == null ? Object.class : compType;
-		if (searchType == Object.class) {
+		final var searchBase = baseType == null ? Object.class : baseType;
+
+		if (searchType == Object.class && (searchBase == Object.class || searchBase == Map.class || searchBase == Set.class || searchBase == Collection.class)) {
 			return switch (targetMetaType) {
 			case ObjectMeta.TYPE_COLLECTION -> ObjectMeta.IDX_COLLECTION;
 			case ObjectMeta.TYPE_OBJ_ARRAY  -> ObjectMeta.IDX_OBJ_ARRAY;
@@ -129,15 +148,21 @@ final class EngineImpl implements InternalEngine {
 			};
 		}
 		for (var i = 0; i < dynamicMetaCount; i++) {
-			if (dynamicMetaCache[i].metaType == targetMetaType && dynamicMetaCache[i].types[0] == searchType) return dynamicMetaCache[i].cacheIndex;
+			if (dynamicMetaCache[i].metaType == targetMetaType && dynamicMetaCache[i].types[0] == searchType && dynamicMetaCache[i].baseType == searchBase)
+				return dynamicMetaCache[i].cacheIndex;
 		}
 
 		final ObjectMeta m;
-		if (targetMetaType == ObjectMeta.TYPE_MAP) m = new ObjectMeta(this, searchType, registerMeta(null));
-		else m = new ObjectMeta(this, searchType, targetMetaType, registerMeta(null));
+		if (targetMetaType == ObjectMeta.TYPE_MAP) m = new ObjectMeta(this, searchBase, searchType, registerMeta(null));
+		else m = new ObjectMeta(this, searchBase, searchType, targetMetaType, registerMeta(null));
 
 		metaCache[m.cacheIndex] = m;
 		if (dynamicMetaCount < dynamicMetaCache.length) dynamicMetaCache[dynamicMetaCount++] = m;
+		else if (dynamicMetaCount == dynamicMetaCache.length) {
+			// Trigger warning exactly once to avoid console flooding
+			System.err.println("JSON Engine Warning: dynamicMetaCache limit (" + dynamicMetaCache.length + ") reached. Please increase dynamicMetaCacheSize in MetaConfig to avoid performance degradation.");
+			dynamicMetaCount++;
+		}
 		return m.cacheIndex;
 	}
 
@@ -178,7 +203,7 @@ final class EngineImpl implements InternalEngine {
 
 	@Override public JsonOutputStream jsonOutputStream(final OutputStream out, final TimeFormat timeFormat, final Flags... flags) { return JsonOutputStream.of(this, out, timeFormat, flags); }
 	@Override public JsonOutputStream jsonOutputStream(final OutputStream out, final TimeFormat timeFormat, final int flags) { return JsonOutputStream.of(this, out, timeFormat, flags); }
-	@Override public JsonOutputStream jsonOutputStream(final OutputStream out) { return JsonOutputStream.of(this, out, null, 0); }
+	@Override public JsonOutputStream jsonOutputStream(final OutputStream out) { return JsonOutputStream.of(this, out, null, flags); }
 	@Override public UnaryOperator<Object> transformer(final Class<?> c) { return getTypeRecord(c).transformer; }
 	@Override public boolean    hasCoreTransformer() { return hasCoreTransformer; }
 	@Override public <C> void   registerTransformer(final Class<C> c, final UnaryOperator<Object> f) { getTypeRecord(c).transformer = f; if (c.getClassLoader() == null || c.isArray()) hasCoreTransformer = true; }

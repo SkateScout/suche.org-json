@@ -50,7 +50,9 @@ public class JsonDeserializationBenchmark {
 	private Class<?> dest;
 	private byte[] jsonData;
 
-	@Param({"canada.json" ,"citm_catalog.json", "twitter.json" })
+	@Param({"canada.json"
+		// ,"citm_catalog.json", "twitter.json"
+	})
 	public String fileName;
 
 	@Setup(Level.Trial)

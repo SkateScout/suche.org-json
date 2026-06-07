@@ -31,12 +31,22 @@ public record MetaConfig(boolean emitClassName,
 		int                                maxDepth         ,
 		int                                maxStringLength  ,
 		int                                maxCollectionSize,
-		boolean                            enableDeduplication) {
+		boolean                            enableDeduplication,
+		int                                dynamicMetaCacheSize,
+		boolean                            enumObject
+		) {
 
 	public interface Filter { Object apply(Object v); }
 	public record NameFilter(String name, Filter filter) { }
 
 	public static final RuntimeException SKIP_FIELD = new RuntimeException("ILLEGALSTATE", null, false, false) { };
 
-	public static final MetaConfig DEFAULT = new MetaConfig(false, true, false, false, false, null, null, null, 128, 5 * 1024 * 1024, 100_000, true);
+
+	public static final MetaConfig DEFAULT = new MetaConfig(
+			/* emitClassName    */ false,
+			/* skipDefaultNulls */ true ,
+			/*setNumeric0       */ false,
+			/*setEmpty          */ false, false
+			, null, null, null
+			, 128, 5 * 1024 * 1024, 100_000, true, 32, true);
 }

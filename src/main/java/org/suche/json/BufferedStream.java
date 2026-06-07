@@ -604,9 +604,11 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 				final var match  = Long.lowestOneBit(has); // x86 BLSI instruction (1 cycle)
 				if ((hasCtrl & match) != 0) throwInvalid("Unescaped control character in key");
 				final var offset = (Long.numberOfTrailingZeros(match) >>> 3);
-				final var tailMask = (match >>> 7) - 1L;
-				hash64 ^= (word & tailMask);
-				hash64 *= HASH_PRIME;
+				if(match>0x80L) {
+					final var tailMask = (match >>> 7) - 1L;
+					hash64 ^= (word & tailMask);
+					hash64 *= HASH_PRIME;
+				}
 				pos += offset;
 				// If the found bit is NOT in the quote mask, it was a backslash.
 				if ((hasQuote & match) == 0) break; // Backslash found, jump to slow path
@@ -632,13 +634,22 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 
 	private int parseStringKeyAsIndexSlow(final Object context, final ObjectMeta meta, final int start, long hash64) throws IOException {
 		final var buf = buffer;
+		var tailWord = 0L;
+		var tailLen = 0;
+
 		while (pos < limit) {
 			final var b = buf[pos];
 			if (b >= 0 && b < 32) throwInvalid("Unescaped control character in key");
 			if (b == '"') {
 				final var len = pos - start;
 				pos++;
-				// Fold the 64-bit hash state down to a 32-bit integer for the lookup tables
+
+				// Process any remaining bytes in the accumulator identically to computeHash
+				if (tailLen > 0) {
+					hash64 ^= tailWord;
+					hash64 *= HASH_PRIME;
+				}
+
 				final var finalHash = finalizeHash(hash64);
 				final var idx = meta.prepareKey(finalHash, buf, start, len);
 				if (idx != -1) return idx;
@@ -646,15 +657,24 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 				return meta.prepareKey(context, key);
 			}
 
-			if (b == '\\' || b < 0) break;
-			// Continue the FNV-1a 64-bit hashing sequentially
-			hash64 ^= (b & 0xFFL);
-			hash64 *= HASH_PRIME;
+			if (b == '\\' || b < 0) break; // Escapes or UTF-8
+
+			// Pack byte into tailWord (Little-Endian)
+			tailWord |= (b & 0xFFL) << (tailLen * 8);
+			tailLen++;
 			pos++;
+
+			// If we accumulate a full 8-byte block, process it
+			if (tailLen == 8) {
+				hash64 ^= tailWord;
+				hash64 *= HASH_PRIME;
+				tailWord = 0L;
+				tailLen = 0;
+			}
 		}
 
-		// If escapes are present or buffer needs a refill.
-		// parseStringSlow computes its own fallback hash, which is fine for this rare edge case.
+		// If we break due to '\\' or UTF-8, the raw bytes no longer represent the final string.
+		// parseStringSlow will build the unescaped string and compute the hash from scratch.
 		final var key = parseStringSlow(start, pos, true, true);
 		return meta.prepareKey(context, key);
 	}

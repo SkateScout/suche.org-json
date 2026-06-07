@@ -56,9 +56,10 @@ public final class JsonOutputStream implements AutoCloseable {
 	private static final byte   TYPE_COMPACT_MAP   = 6;
 	private static final byte   TYPE_OBJ_ARRAY     = 7;
 	private static final byte   TYPE_POOLED_MAP    = 8;
-	public  static final int    SKIP_NULL         = 1 << Flags.printNull         .ordinal();
-	public  static final int    SKIP_FALSE        = 1 << Flags.printFalse        .ordinal();
-	public  static final int    SKIP_EMPTY        = 1 << Flags.printEmpty        .ordinal();
+	public  static final int    SKIP_NULL          = 1 << Flags.printNull         .ordinal();
+	public  static final int    SKIP_FALSE         = 1 << Flags.printFalse        .ordinal();
+	public  static final int    SKIP_EMPTY         = 1 << Flags.printEmpty        .ordinal();
+	public  static final int    ENUM_OBJECT        = 1 << Flags.enumObject        .ordinal();
 	public  static final int    PRINT_1_FRACTIONAL = 1 << Flags.printOneFractional.ordinal();
 	public  static final int    PRINT_3_FRACTIONAL = 1 << Flags.printOneFractional.ordinal();
 
@@ -124,6 +125,7 @@ public final class JsonOutputStream implements AutoCloseable {
 	private boolean skipFalse;
 	private boolean skipEmpty;
 	private boolean skip0;
+	private boolean enumObject;
 	private boolean commaNeeded;
 	private int          fractionalLimit;
 	Supplier<Object> cycleMarker = ERROR;
@@ -145,7 +147,7 @@ public final class JsonOutputStream implements AutoCloseable {
 		if (arrayPoolSize < arrayPool.length) { Arrays.fill(arr, null); arrayPool[arrayPoolSize++] = arr; }
 	}
 
-	public enum Flags { printNull, printFalse, printEmpty, printOneFractional, printThreeFractional }
+	public enum Flags { printNull, printFalse, printEmpty, printOneFractional, printThreeFractional, enumObject }
 
 	private final Object DEFAULTOBJ   = new Object();
 
@@ -191,9 +193,10 @@ public final class JsonOutputStream implements AutoCloseable {
 	private void init(final InternalEngine e, final OutputStream newOut, final TimeFormat pTimeFormat, final int flags) {
 		init0(e, newOut, pTimeFormat);
 		var frac = 6;
-		this.skipNull  = (flags & SKIP_NULL)  == 1;
-		this.skipFalse = (flags & SKIP_FALSE) == 1;
-		this.skipEmpty = (flags & SKIP_EMPTY) == 1;
+		this.skipNull  = (flags & SKIP_NULL  ) != 0;
+		this.skipFalse = (flags & SKIP_FALSE ) != 0;
+		this.skipEmpty = (flags & SKIP_EMPTY ) != 0;
+		this.enumObject= (flags & ENUM_OBJECT) != 0;
 		if ((flags & PRINT_1_FRACTIONAL) != 0) frac = 1;
 		if ((flags & PRINT_3_FRACTIONAL) != 0) frac = 3;
 		this.fractionalLimit = frac;
@@ -782,6 +785,21 @@ public final class JsonOutputStream implements AutoCloseable {
 		commaNeeded = true;
 	}
 
+	private static final byte[] ENUM_OBJECT_A = "{\"__enum__\":".getBytes();
+	private static final byte[] ENUM_OBJECT_B = ",\"value\":".getBytes();
+
+	private void writeEnum(final Enum<?> v) throws IOException {
+		if(enumObject) {
+			write(ENUM_OBJECT_A);
+			writeEscapedString(v.getClass().getSimpleName());
+			write(ENUM_OBJECT_B);
+			writeEscapedString(v.name());
+			write((byte)'}');
+		} else {
+			writeEscapedString(v.name());
+		}
+	}
+
 	private boolean handleSimple(final Object val) throws IOException {
 		if (pos + 32 > buffer.length) flushBuffer();
 		if (handleCycle(val)) return true;
@@ -804,7 +822,7 @@ public final class JsonOutputStream implements AutoCloseable {
 		case final Float         t -> writeDouble((char)0, t.doubleValue());
 		case final BigInteger    t -> writeBaseAscii(t.toString());
 		case final Number        t -> writeFractionalLimited(t.toString());
-		case final Enum<?>       t -> writeEscapedString(t.name());
+		case final Enum<?>       t -> writeEnum(t);
 		case final Date          t -> timeFormat.writeDate(this, t);
 		case final Temporal      t -> timeFormat.writeTemp(this, t);
 		case final double []     t -> { if(t.length>0) { writeDouble('[', t[0]); for(var i=1; i<t.length; i++) { writeDouble(',',t[i]); } closeArray(); } else safeEmptyArray(); }

@@ -360,7 +360,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 	public <T> T[] readRecords(final Class<T> targetClass) throws IOException {
 		skipWhitespace();
 		expect((byte) '[');
-		final var metaIdx = ((EngineImpl) engine).getDynamicMetaId(targetClass, ObjectMeta.TYPE_OBJ_ARRAY);
+		final var metaIdx = ((EngineImpl) engine).getDynamicMetaId(targetClass, targetClass, ObjectMeta.TYPE_OBJ_ARRAY);
 		final var meta = metaCache[metaIdx];
 		final var typeDesc = EngineImpl.createTypeDesc(true, false, metaIdx);
 		try {
@@ -377,7 +377,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 	public <V> Map<String, V> readMap(final Class<V> valueClass) throws IOException {
 		skipWhitespace();
 		expect((byte) '{');
-		final var metaIdx = ((EngineImpl) engine).getDynamicMetaId(valueClass, ObjectMeta.TYPE_MAP);
+		final var metaIdx = ((EngineImpl) engine).getDynamicMetaId(valueClass, valueClass, ObjectMeta.TYPE_MAP);
 		final var meta = metaCache[metaIdx];
 		final var typeDesc = EngineImpl.createTypeDesc(false, false, metaIdx);
 		try {
@@ -394,7 +394,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 	public <T> List<T> readList(final Class<T> elementClass) throws IOException {
 		skipWhitespace();
 		expect((byte) '[');
-		final var metaIdx = ((EngineImpl) engine).getDynamicMetaId(elementClass, ObjectMeta.TYPE_COLLECTION);
+		final var metaIdx = ((EngineImpl) engine).getDynamicMetaId(elementClass, elementClass, ObjectMeta.TYPE_COLLECTION);
 		final var meta = metaCache[metaIdx];
 		final var typeDesc = EngineImpl.createTypeDesc(true, false, metaIdx);
 		try {
@@ -411,7 +411,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 	public <T> Set<T> readSet(final Class<T> elementClass) throws IOException {
 		skipWhitespace();
 		expect((byte) '[');
-		final var metaIdx = ((EngineImpl) engine).getDynamicMetaId(elementClass, ObjectMeta.TYPE_SET);
+		final var metaIdx = ((EngineImpl) engine).getDynamicMetaId(elementClass, elementClass, ObjectMeta.TYPE_SET);
 		final var meta = metaCache[metaIdx];
 		final var typeDesc = EngineImpl.createTypeDesc(true, false, metaIdx);
 		try {
