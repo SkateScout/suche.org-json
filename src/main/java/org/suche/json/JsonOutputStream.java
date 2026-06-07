@@ -242,8 +242,16 @@ public final class JsonOutputStream implements AutoCloseable {
 					while (c.idx < c.len) {
 						final var comp = comps[c.idx++];
 						switch (comp.type()) {
-						case 1 -> { write(comp.jsonKeyBytes(commaNeeded)); writeNumber((char)0, comp.intGetter   ().applyAsInt   (c.obj)); }
-						case 2 -> { write(comp.jsonKeyBytes(commaNeeded)); writeNumber((char)0, comp.longGetter  ().applyAsLong  (c.obj)); }
+						case 1 -> {
+							final var v = comp.intGetter().applyAsInt(c.obj);
+							// if(v != 0 || !skip0)
+							{ write(comp.jsonKeyBytes(commaNeeded)); writeNumber((char)0, v); }
+						}
+						case 2 -> {
+							final var v = comp.longGetter  ().applyAsLong  (c.obj);
+							// if(v != 0 || !skip0)
+							{ write(comp.jsonKeyBytes(commaNeeded)); writeNumber((char)0, v); }
+						}
 						case 3 -> { write(comp.jsonKeyBytes(commaNeeded)); writeDouble((char)0, comp.doubleGetter().applyAsDouble(c.obj)); }
 						case 4 -> {
 							final var bVal = comp.boolGetter().test(c.obj);
@@ -810,10 +818,6 @@ public final class JsonOutputStream implements AutoCloseable {
 	}
 
 	private void handleValue(final Object val) throws IOException {
-		if(null == val) {
-			if (pos + 4 > buffer.length) flushBuffer();
-			return;
-		}
 		if(handleSimple(val)) return;
 		final var h = (engine.ofComplex(val.getClass()) instanceof final KeyValueObject[] kv ? kv : DEFAULTOBJ);
 		if (h instanceof final KeyValueObject[] parts) push((byte)'{', TYPE_RECORD, val, parts, parts.length);

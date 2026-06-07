@@ -6,6 +6,9 @@ import java.lang.reflect.RecordComponent;
 import java.util.function.BiFunction;
 
 public record MetaConfig(boolean emitClassName,
+		boolean                  skipDefaultNulls  ,
+		boolean                  setNumeric0       ,
+		boolean                  setEmpty          ,
 		boolean                  skipDefaultValues ,
 		/**
 		 * @return String     -> nameName
@@ -35,5 +38,5 @@ public record MetaConfig(boolean emitClassName,
 
 	public static final RuntimeException SKIP_FIELD = new RuntimeException("ILLEGALSTATE", null, false, false) { };
 
-	public static final MetaConfig DEFAULT = new MetaConfig(false, false, null, null, null, 128, 5 * 1024 * 1024, 100_000, true);
+	public static final MetaConfig DEFAULT = new MetaConfig(false, true, false, false, false, null, null, null, 128, 5 * 1024 * 1024, 100_000, true);
 }

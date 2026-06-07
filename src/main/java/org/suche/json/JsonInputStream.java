@@ -87,7 +87,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 
 	private void fillNullValue(final long typeDesc, final Object obj, final int targetIdx, final ObjectMeta meta) throws IOException {
 		parseNull();
-		if (engine.config().skipDefaultValues() && typeDesc >= 0L) return;
+		if (engine.config().skipDefaultNulls() && typeDesc >= 0L) return;
 		if ((typeDesc & 1L) != 0L) {
 			final var primId = (int) (typeDesc >> 1);
 			switch (primId) {

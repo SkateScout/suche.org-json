@@ -84,6 +84,9 @@ final class ObjectMeta {
 	final         Class<?>[]          permitted;
 	final         Object[][]          enumConstants;
 	final         boolean             skipDefaultValues;
+	final         boolean             setNumeric0      ;
+	final         boolean             setEmpty         ;
+
 	private final int[]               lastSeenSizeByDepth = new int[64];
 	final         boolean             needsPrims;
 
@@ -171,7 +174,10 @@ final class ObjectMeta {
 		this.types = new Class<?>[] { compType != null ? compType : Object.class };
 		this.components = new ComponentMeta[0];
 		this.enumConstants = null;
-		this.skipDefaultValues = e.config().skipDefaultValues();
+		final var cfg = e.config();
+		this.skipDefaultValues = cfg == null ? false : cfg.skipDefaultValues();
+		this.setNumeric0       = cfg == null ? false : cfg.setNumeric0();
+		this.setEmpty          = cfg == null ? false : cfg.setEmpty   ();
 		this.needsPrims = compType != null && compType.isPrimitive();
 		this.componentDescriptor = resolveDescriptor(e, compType, Object.class);
 		this.fieldDescriptors = componentMetaToDescriptor(e, null                  );
@@ -194,6 +200,8 @@ final class ObjectMeta {
 		this.baseType = null;
 		this.enumConstants = null;
 		this.skipDefaultValues = false;
+		this.setNumeric0       = false;
+		this.setEmpty          = false;
 		this.needsPrims = false;
 		this.componentDescriptor = 0L;
 		this.fieldDescriptors = componentMetaToDescriptor(null, null                  );
@@ -216,7 +224,10 @@ final class ObjectMeta {
 		this.components = pComponents;
 		this.enumConstants = pEnums;
 		this.failOnUnknown = e.failOnUnknownProperties();
-		this.skipDefaultValues = e.config().skipDefaultValues();
+		final var cfg = e.config();
+		this.skipDefaultValues = cfg == null ? false : cfg.skipDefaultValues();
+		this.setNumeric0       = cfg == null ? false : cfg.setNumeric0();
+		this.setEmpty          = cfg == null ? false : cfg.setEmpty   ();
 		var primFound = false;
 		for (final var t : pTypes) if (t != null && t.isPrimitive()) { primFound = true; break; }
 		this.needsPrims = primFound;
@@ -240,7 +251,10 @@ final class ObjectMeta {
 		this.types          = new Class<?>[] { mapValueType };
 		this.components     = new ComponentMeta[0];
 		this.enumConstants  = null;
-		this.skipDefaultValues = e == null ? true : e.config().skipDefaultValues();
+		final var cfg = e == null ? null : e.config();
+		this.skipDefaultValues = cfg == null ? false : cfg.skipDefaultValues();
+		this.setNumeric0       = cfg == null ? false : cfg.setNumeric0();
+		this.setEmpty          = cfg == null ? false : cfg.setEmpty   ();
 		this.needsPrims = mapValueType != null && mapValueType.isPrimitive();
 		this.componentDescriptor = resolveDescriptor(e, mapValueType, Object.class);
 		this.fieldDescriptors = new long[] { this.componentDescriptor };
@@ -264,7 +278,10 @@ final class ObjectMeta {
 		this.types          = pTypes;
 		this.components     = possibleComponents;
 		this.enumConstants  = buildEnumConstants(pTypes);
-		this.skipDefaultValues = e.config().skipDefaultValues();
+		final var cfg = e.config();
+		this.skipDefaultValues = cfg == null ? false : cfg.skipDefaultValues();
+		this.setNumeric0       = cfg == null ? false : cfg.setNumeric0();
+		this.setEmpty          = cfg == null ? false : cfg.setEmpty   ();
 		this.needsPrims = false;
 		this.componentDescriptor = 0L;
 		this.fieldDescriptors = componentMetaToDescriptor(e, null            );
@@ -401,7 +418,7 @@ final class ObjectMeta {
 	private Object endCollection(final MetaPool s, final Object context) {
 		final var ctx = (ParseContext) context;
 		final var cnt = ctx.cnt;
-		if (skipDefaultValues && cnt == 0) { s.returnContext(ctx); return null; }
+		if (setEmpty && cnt == 0) { s.returnContext(ctx); return null; }
 		if(cnt == 0) {
 			s.returnContext(ctx);
 			return EmptyJSONArray.ONCE;
@@ -446,7 +463,7 @@ final class ObjectMeta {
 		}
 		case TYPE_MAP -> {
 			final var ctx = (ParseContext) context;
-			if (skipDefaultValues && ctx.cnt == 0) { s.returnContext(ctx); yield null; }
+			if (setEmpty && ctx.cnt == 0) { s.returnContext(ctx); yield null; }
 			if (ctx.objs == null) yield null; // No data -> no key -> no prims => empty => null
 			final var data = Arrays.copyOf(ctx.objs, ctx.cnt);
 			final var prims = ctx.prims == null ? null : Arrays.copyOf(ctx.prims, ctx.cnt >> 1);
@@ -455,7 +472,7 @@ final class ObjectMeta {
 		}
 		case TYPE_OBJ_ARRAY -> {
 			final var ctx = (ParseContext) context;
-			if (skipDefaultValues && ctx.cnt == 0) { s.returnContext(ctx); yield null; }
+			if (setEmpty && ctx.cnt == 0) { s.returnContext(ctx); yield null; }
 			lastSize(s.depth(), ctx.cnt);
 			final var result = arrayCreator.apply(ctx.cnt);
 			if (ctx.objs != null) System.arraycopy(ctx.objs, 0, result, 0, ctx.cnt);
@@ -468,15 +485,15 @@ final class ObjectMeta {
 			yield result;
 		}
 		case TYPE_COLLECTION -> endCollection(s, context);
-		case TYPE_SET -> skipDefaultValues && ((Collection<Object>) context).isEmpty() ? null : context;
-		case TYPE_SEALED -> SealedUnionMapper.end(s, context, baseType, permitted, keys, types);
+		case TYPE_SET        -> setEmpty && ((Collection<Object>) context).isEmpty() ? null : context;
+		case TYPE_SEALED     -> SealedUnionMapper.end(s, context, baseType, permitted, keys, types);
 		default -> throw new IllegalArgumentException();
 		};
 	}
 
 	@SuppressWarnings("unchecked")
 	void setLong(final MetaPool s, final Object context, final int index, final long v) {
-		if (skipDefaultValues && v == 0L) return;
+		if (setNumeric0 && v == 0L) return;
 		switch (metaType) {
 		case TYPE_INSTANTIATOR               -> ((ParseContext)context).prims[index] = v;
 		case TYPE_MAP                        -> ((ParseContext)context).primKeyValue(s, PRIMITIVE.LONG, v);
@@ -488,7 +505,7 @@ final class ObjectMeta {
 
 	@SuppressWarnings("unchecked")
 	void setDouble(final MetaPool s, final Object context, final int index, final double v) {
-		if (skipDefaultValues && v == 0.0) return;
+		if (setNumeric0 && v == 0.0) return;
 		final var bits = Double.doubleToRawLongBits(v);
 		switch (metaType) {
 		case TYPE_INSTANTIATOR               -> ((ParseContext)context).prims[index] = bits;
@@ -504,7 +521,7 @@ final class ObjectMeta {
 	@SuppressWarnings("unchecked")
 	void set(final MetaPool s, final Object context, final int index, Object value) {
 		// Globaler Null-Check
-		if (value == null && skipDefaultValues && metaType != TYPE_OBJ_ARRAY && metaType != TYPE_COLLECTION) return;
+		if (value == null && setEmpty && metaType != TYPE_OBJ_ARRAY && metaType != TYPE_COLLECTION) return;
 		switch (metaType) {
 		case TYPE_INSTANTIATOR -> {
 			if (value == null) {

@@ -1,12 +1,13 @@
 package org.suche.json;
 
 import java.util.AbstractList;
+import java.util.Arrays;
 import java.util.RandomAccess;
 
 public final class CompactList extends AbstractList<Object> implements ContextBacked,RandomAccess, JSONArray {
 	static final long[] NO_PRIMS = { };
-	private final Object[] data;
-	private final long  [] prims;
+	private       Object[] data;
+	private       long  [] prims;
 	private final byte     singleType;
 	private       int      removed = 0;
 
@@ -16,28 +17,47 @@ public final class CompactList extends AbstractList<Object> implements ContextBa
 		this.prims      = pPrims == null ? NO_PRIMS : pPrims;
 	}
 
-	public void put(final int index, final int    val) {
+	private void ensureCapacity(final int requiredIndex) {
+		final var physicalCapacity = (prims != NO_PRIMS) ? prims.length : (data != null ? data.length : 0);
+
+		// If the physical array is already large enough, adjust the logical size by reducing 'removed'
+		if (requiredIndex < physicalCapacity) {
+			final var currentLogicalSize = physicalCapacity - removed;
+			if (requiredIndex >= currentLogicalSize) {
+				removed = physicalCapacity - (requiredIndex + 1);
+			}
+			return;
+		}
+
+		// Increase by index + 2 to accommodate rare, small additions efficiently
+		final var newCapacity = requiredIndex + 2;
+
+		if (data != null) data = Arrays.copyOf(data, newCapacity);
+		if (prims != NO_PRIMS) prims = Arrays.copyOf(prims, newCapacity);
+		// Update 'removed' to reflect the new logical size against the new physical capacity
+		removed = newCapacity - (requiredIndex + 1);
+	}
+
+	public void put(final int index, final int val) {
 		if (index < 0) throw JsonEngine.illegalStateException("Index can not be negative");
-		if(index == size() && removed > 0) removed--;
-		if (index >= size()) throw JsonEngine.illegalStateException("Index: " + index + ", Size: " + size());
+		ensureCapacity(index);
 		switch (singleType) {
 		case PRIMITIVE.T_EMPTY  -> JsonEngine.illegalStateException("Cannot modify empty list");
 		case PRIMITIVE.T_LONG   -> prims[index] = val;
 		case PRIMITIVE.T_DOUBLE -> prims[index] = Double.doubleToRawLongBits(val);
-		default -> { data[index] = val; if(prims!=NO_PRIMS) prims[index] = val; }
+		default -> { data[index] = val; if(prims != NO_PRIMS) prims[index] = val; }
 		}
 	}
 
 	@Override public Object set(final int index, final Object element) {
 		if (index < 0) throw JsonEngine.illegalStateException("Index can not be negative");
-		if(index == size() && removed > 0) removed--;
-		if (index >= size()) JsonEngine.illegalStateException("Index: " + index + ", Size: " + size());
+		ensureCapacity(index);
 		final var oldValue = resolve(index);
 		switch (singleType) {
 		case PRIMITIVE.T_EMPTY  -> JsonEngine.illegalStateException("Cannot modify empty list");
 		case PRIMITIVE.T_LONG   -> {
 			if (!(element instanceof final Number n)) throw JsonEngine.illegalStateException("Strict T_LONG list requires a Number");
-			if(n.longValue() != n.doubleValue()) throw JsonEngine.illegalStateException("Strict T_LONG fast frac check");
+			if (n.longValue() != n.doubleValue()) throw JsonEngine.illegalStateException("Strict T_LONG fast frac check");
 			prims[index] = n.longValue();
 		}
 		case PRIMITIVE.T_DOUBLE -> {
@@ -78,7 +98,7 @@ public final class CompactList extends AbstractList<Object> implements ContextBa
 		case PRIMITIVE.T_EMPTY  -> 0;
 		case PRIMITIVE.T_LONG   -> prims.length - removed;
 		case PRIMITIVE.T_DOUBLE -> prims.length - removed;
-		default                -> data .length - removed;
+		default                 -> data .length - removed;
 		};
 	}
 
