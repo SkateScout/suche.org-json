@@ -285,6 +285,7 @@ final class ObjectMeta {
 	long getComponentDescriptor() { return componentDescriptor; }
 
 	static ObjectMeta ofPojo(final InternalEngine engine, final Class<?> c, final int cacheIndex) {
+		if(c.getCanonicalName().startsWith("java.lang.String")) throw new IllegalStateException(c.getCanonicalName());
 		try {
 			final var ctors = c.getDeclaredConstructors();
 			Constructor<?> bestCtor = null;
@@ -350,6 +351,7 @@ final class ObjectMeta {
 	}
 
 	private static LinkedHashMap<String, Prop> pojoProps(final Class<?> c, final Parameter[] params) throws IllegalAccessException {
+		if(c.getCanonicalName().startsWith("java.lang.")) throw new IllegalStateException(c.getCanonicalName());
 		final var props = new LinkedHashMap<String, Prop>();
 		for (var i = 0; i < params.length; i++) props.put(params[i].getName(), new Prop(params[i].getName(), false, params[i].getType(), GernericsHandler.extractValueType(params[i].getParameterizedType(), params[i].getType()), i, null));
 		for (final var m : c.getMethods()) {
@@ -363,7 +365,7 @@ final class ObjectMeta {
 		for (final var f : c.getDeclaredFields()) {
 			if (0 != (f.getModifiers() & MOD_FINAL_OR_STATIC)) continue;
 			if (!props.containsKey(f.getName())) {
-				f.setAccessible(true);
+				try { f.setAccessible(true); } catch(final Throwable t) { System.out.println(f.getDeclaringClass().getCanonicalName()+"."+f.getName()+" setAccessible(true) => "+t.getMessage()); }
 				props.put(f.getName(), new Prop(f.getName(), true, f.getType(), GernericsHandler.extractValueType(f.getGenericType(), f.getType()), -1, LOOKUP.unreflectSetter(f)));
 			}
 		}

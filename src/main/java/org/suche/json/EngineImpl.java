@@ -124,7 +124,6 @@ final class EngineImpl implements InternalEngine {
 		return desc;
 	}
 
-
 	int resolveEngineObjectDescriptor(final Class<?> type, final Class<?> valueType) {
 		if (type.isArray()                         ) return this.getDynamicMetaId(type, type.componentType(), ObjectMeta.TYPE_OBJ_ARRAY);
 		if (Set       .class.isAssignableFrom(type)) return this.getDynamicMetaId(type, valueType, ObjectMeta.TYPE_SET       );
@@ -168,7 +167,6 @@ final class EngineImpl implements InternalEngine {
 
 	int metaIdOf(final Class<?> clazz) {
 		if (clazz == null || clazz == Object.class || Map.class.isAssignableFrom(clazz)) return ObjectMeta.IDX_MAP;
-
 		final var t = getTypeRecord(clazz);
 		if (t.cacheIndex == -1) {
 			synchronized (t.mutex) {
@@ -176,16 +174,15 @@ final class EngineImpl implements InternalEngine {
 			}
 		}
 		if (t.metaObject != null) return t.cacheIndex;
-
 		synchronized (t.mutex) {
 			// Circular reference detected! Returning the ID early is sufficient for linking.
 			if ((t.metaObject != null) || t.building) return t.cacheIndex;
 
 			t.building = true;
 			final ObjectMeta r;
-			if (clazz.isPrimitive() || clazz.isArray() || 0 != (clazz.getModifiers() & MOG_IGNORE)) r = ObjectMeta.NULL;
+			if ((clazz.isPrimitive() || clazz.isArray() || 0 != (clazz.getModifiers() & MOG_IGNORE)) || clazz.getCanonicalName().startsWith("java.lang.")) r = ObjectMeta.NULL;
 			else if (clazz.isRecord()) r = ObjectMeta.ofRecord(this, clazz.asSubclass(Record.class), t.cacheIndex);
-			else if (clazz.isEnum()) r = ObjectMeta.ofEnum(this, clazz.asSubclass(Enum.class), t.cacheIndex);
+			else if (clazz.isEnum  ()) r = ObjectMeta.ofEnum(this, clazz.asSubclass(Enum.class), t.cacheIndex);
 			else r = ObjectMeta.ofPojo(this, clazz, t.cacheIndex);
 
 			t.metaObject = r;
@@ -206,7 +203,10 @@ final class EngineImpl implements InternalEngine {
 	@Override public JsonOutputStream jsonOutputStream(final OutputStream out) { return JsonOutputStream.of(this, out, null, flags); }
 	@Override public UnaryOperator<Object> transformer(final Class<?> c) { return getTypeRecord(c).transformer; }
 	@Override public boolean    hasCoreTransformer() { return hasCoreTransformer; }
-	@Override public <C> void   registerTransformer(final Class<C> c, final UnaryOperator<Object> f) { getTypeRecord(c).transformer = f; if (c.getClassLoader() == null || c.isArray()) hasCoreTransformer = true; }
+	@Override public <C> void   registerTransformer(final Class<C> c, final UnaryOperator<Object> f) {
+		getTypeRecord(c).transformer = f;
+		if (c.getClassLoader() == null || c.isArray()) hasCoreTransformer = true;
+	}
 	@Override public JsonInputStream jsonInputStream(final InputStream is) { return JsonInputStream.of(is, this); }
 	@Override public JsonInputStream jsonInputStream(final byte[]      bs) { return JsonInputStream.of(bs, this); }
 	@Override public MetaConfig config() { return cfg; }
