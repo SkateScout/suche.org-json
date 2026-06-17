@@ -810,7 +810,7 @@ public final class JsonOutputStream implements AutoCloseable {
 		case final Double        t -> writeDouble((char)0, t);
 		case final CompactList   t -> push((byte)'[', TYPE_OBJ_ARRAY  , t, null, t.size());
 		case final CompactMap    t -> push((byte)'{', TYPE_COMPACT_MAP, t, null, t.size());
-		case final String[]      t -> { if(t.length>0) { write((byte)'['); writeEscapedString(t[0]); for(var i=1; i<t.length; i++) { write((byte)','); writeEscapedString(t[i]); } } closeArray(); }
+		case final String[]      t -> { if(t.length>0) { write((byte)'['); writeEscapedString(t[0]); for(var i=1; i<t.length; i++) { write((byte)','); writeEscapedString(t[i]); } closeArray(); } else safeEmptyArray(); }
 		case final Object[]      t -> push((byte)'[', TYPE_OBJ_ARRAY  , t, null, t.length);
 		case final Record        t -> { final var parts = engine.ofComplex(t.getClass()); push((byte)'{', TYPE_RECORD, t, parts, parts.length); }
 		case final List<?>       t when t instanceof java.util.RandomAccess -> push((byte)'[', TYPE_LIST, t, null, t.size());
@@ -830,7 +830,7 @@ public final class JsonOutputStream implements AutoCloseable {
 		case final int    []     t -> { if(t.length>0) { writeNumber('[', t[0]); for(var i=1; i<t.length; i++) { writeNumber(',',t[i]); } closeArray(); } else safeEmptyArray(); }
 		case final short  []     t -> { if(t.length>0) { writeNumber('[', t[0]); for(var i=1; i<t.length; i++) { writeNumber(',',t[i]); } closeArray(); } else safeEmptyArray(); }
 		case final float  []     t -> { if(t.length>0) { writeDouble('[', t[0]); for(var i=1; i<t.length; i++) { writeDouble(',',t[i]); } closeArray(); } else safeEmptyArray(); }
-		case final boolean[]     t -> { if(t.length>0) { write((byte)'['); safeBoolean(t[0]); for(var i=1; i<t.length; i++) { write((byte)','); writeBoolean(t[i]); } } closeArray(); }
+		case final boolean[]     t -> { if(t.length>0) { write((byte)'['); safeBoolean(t[0]); for(var i=1; i<t.length; i++) { write((byte)','); writeBoolean(t[i]); } closeArray(); } else safeEmptyArray(); }
 		default                    -> { if(val.getClass().isArray()) { push((byte)'[', TYPE_ARRAY, val, null, Array.getLength(val)); return true; } return false; } }
 		return true;
 	}
