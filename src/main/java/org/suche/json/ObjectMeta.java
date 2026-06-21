@@ -155,7 +155,7 @@ final class ObjectMeta {
 		this.cacheIndex = pCacheIndex;
 		this.className = targetMetaType == TYPE_OBJ_ARRAY ? "<ARRAY>" : (targetMetaType == TYPE_SET ? "<SET>" : "<COLLECTION>");
 		this.metaType = targetMetaType;
-		this.failOnUnknown = false;
+		this.failOnUnknown = true;
 		this.pojoStart = null;
 		this.factory = null;
 		this.arrayCreator = (compType != null && targetMetaType == TYPE_OBJ_ARRAY) ? size -> Array.newInstance(compType, size) : null;
@@ -179,7 +179,7 @@ final class ObjectMeta {
 	private ObjectMeta(final int pCacheIndex) {
 		this.cacheIndex = pCacheIndex;
 		this.pojoStart = null;
-		this.failOnUnknown = false;
+		this.failOnUnknown = true;
 		this.className = null;
 		this.metaType = TYPE_DEFECT;
 		this.factory = null;
@@ -295,21 +295,33 @@ final class ObjectMeta {
 			}
 			if (bestCtor == null) return DEFECT_FIRST;
 			if (!bestCtor.canAccess(null)) bestCtor.setAccessible(true);
-			final var params = bestCtor.getParameters();
-			final var props = pojoProps(c, params);
-			final var totalProps = props.size();
-			final var finalComps = new ComponentMeta[totalProps];
-			final var finalTypes = new Class<?>[totalProps];
-			var setterCounter = params.length;
+			final var params       = bestCtor.getParameters();
+			final var props        = pojoProps(c, params);
+			final var totalProps   = props.size();
+			final var finalComps   = new ComponentMeta[totalProps];
+			final var finalTypes   = new Class<?>[totalProps];
+			final var ctorArgs     = params.length;
+			final var propDefsList = new java.util.ArrayList<ConstructorGenerator.PropDef>();
+			final var ctorTypes    = new Class<?>[ctorArgs];
+
+			var setterCounter = ctorArgs;
 			for (final var entry : props.entrySet()) {
-				final var targetIdx = entry.getValue().ctorIdx != -1 ? entry.getValue().ctorIdx : setterCounter++;
-				finalComps[targetIdx] = new ComponentMeta(entry.getKey(), entry.getValue().type(), entry.getValue().valueType());
-				finalTypes[targetIdx] = entry.getValue().type();
+				final var  jsonKey = entry.getKey();
+				final var  prop    = entry.getValue();
+				final var  targetIdx = prop.ctorIdx != -1 ? prop.ctorIdx : setterCounter++;
+				finalComps[targetIdx] = new ComponentMeta(jsonKey, prop.type(), prop.valueType());
+				finalTypes[targetIdx] = prop.type();
+				if (prop.ctorIdx != -1) ctorTypes[prop.ctorIdx] = prop.type();
+				else propDefsList.add(new ConstructorGenerator.PropDef(prop.name(), prop.type(), prop.isField())); // Important: Bytecode require real Java-Name
 			}
-			final var keys = FastKeyTable.build(finalComps);
+
+			final var keys          = FastKeyTable.build(finalComps);
 			final var enumConstants = buildEnumConstants(finalTypes);
-			if (bestCtor.getParameterCount() == 0) return new ObjectMeta(engine, c.getCanonicalName(), Meta.asSupplier(c, LOOKUP.unreflectConstructor(bestCtor)), NO_FACTORY, NO_FACTORY_PARAM, keys, finalTypes, finalComps, enumConstants, cacheIndex);
-			return new ObjectMeta(engine, c.getCanonicalName(), NO_POJO_START, ConstructorGenerator.generate(c, finalTypes), params.length, keys, finalTypes, finalComps, enumConstants, cacheIndex);
+			final var propDefs      = propDefsList.isEmpty() ? null : propDefsList.toArray(new ConstructorGenerator.PropDef[0]);
+			final var factory       = ConstructorGenerator.generate(c, "<init>", ctorTypes, propDefs);
+
+			// ALLES läuft durch die generierte Hochgeschwindigkeits-Factory (kein NO_FACTORY Bypass mehr).
+			return new ObjectMeta(engine, c.getCanonicalName(), NO_POJO_START, factory, ctorArgs, keys, finalTypes, finalComps, enumConstants, cacheIndex);
 		} catch (final Exception e) {
 			e.printStackTrace();
 			return DEFECT_FIRST;
@@ -322,8 +334,11 @@ final class ObjectMeta {
 		final var types = new Class<?>[comps.length];
 		try {
 			for (var i = 0; i < comps.length; i++) {
-				types[i] = comps[i].getType();
-				metaComps[i] = new ComponentMeta(comps[i].getName(), types[i], GernericsHandler.extractValueType(comps[i].getGenericType(), types[i]));
+				final var comp = comps[i];
+				types[i] = comp.getType();
+				var name = comp.getName();
+				if(comp.getAnnotation(org.suche.json.JsonProperty.class) instanceof final org.suche.json.JsonProperty p && !p.value().isEmpty()) name = p.value();
+				metaComps[i] = new ComponentMeta(name, types[i], GernericsHandler.extractValueType(comp.getGenericType(), types[i]));
 			}
 			return new ObjectMeta(engine, c.getCanonicalName(), NO_POJO_START, ConstructorGenerator.generate(c, types), comps.length, FastKeyTable.build(metaComps), types, metaComps, buildEnumConstants(types), cacheIndex);
 		} catch (final Exception e) {
@@ -353,20 +368,34 @@ final class ObjectMeta {
 	private static LinkedHashMap<String, Prop> pojoProps(final Class<?> c, final Parameter[] params) throws IllegalAccessException {
 		if(c.getCanonicalName().startsWith("java.lang.")) throw new IllegalStateException(c.getCanonicalName());
 		final var props = new LinkedHashMap<String, Prop>();
-		for (var i = 0; i < params.length; i++) props.put(params[i].getName(), new Prop(params[i].getName(), false, params[i].getType(), GernericsHandler.extractValueType(params[i].getParameterizedType(), params[i].getType()), i, null));
-		for (final var m : c.getMethods()) {
-			if (m.getParameterCount() != 1 || m.getName().length() < 4 || !m.getName().startsWith("set")) continue;
-			final var name = Character.toLowerCase(m.getName().charAt(3)) + m.getName().substring(4);
-			if (!props.containsKey(name)) {
-				m.setAccessible(true);
-				props.put(name, new Prop(name, false, m.getParameterTypes()[0], GernericsHandler.extractValueType(m.getGenericParameterTypes()[0], m.getParameterTypes()[0]), -1, LOOKUP.unreflect(m)));
+
+		for (var i = 0; i < params.length; i++) {
+			props.put(params[i].getName(), new Prop(params[i].getName(), false, params[i].getType(), GernericsHandler.extractValueType(params[i].getParameterizedType(), params[i].getType()), i, null));
+		}
+
+		for (final var e : c.getMethods()) {
+			if (e.getParameterCount() != 1 || e.getName().length() < 4 || !e.getName().startsWith("set")) continue;
+			final var javaName = e.getName(); // z.B. setNewReg
+			var jsonName = Character.toLowerCase(javaName.charAt(3)) + javaName.substring(4);
+			if(e.getAnnotation(org.suche.json.JsonProperty.class) instanceof final org.suche.json.JsonProperty p && !p.value().isEmpty()) {
+				jsonName = p.value();
+			}
+			if (!props.containsKey(jsonName)) {
+				e.setAccessible(true);
+				props.put(jsonName, new Prop(javaName, false, e.getParameterTypes()[0], GernericsHandler.extractValueType(e.getGenericParameterTypes()[0], e.getParameterTypes()[0]), -1, null));
 			}
 		}
-		for (final var f : c.getDeclaredFields()) {
-			if (0 != (f.getModifiers() & MOD_FINAL_OR_STATIC)) continue;
-			if (!props.containsKey(f.getName())) {
-				try { f.setAccessible(true); } catch(final Throwable t) { System.out.println(f.getDeclaringClass().getCanonicalName()+"."+f.getName()+" setAccessible(true) => "+t.getMessage()); }
-				props.put(f.getName(), new Prop(f.getName(), true, f.getType(), GernericsHandler.extractValueType(f.getGenericType(), f.getType()), -1, LOOKUP.unreflectSetter(f)));
+
+		for (final var e : c.getDeclaredFields()) {
+			if (0 != (e.getModifiers() & MOD_FINAL_OR_STATIC)) continue;
+			final var javaName = e.getName(); // z.B. newReg
+			var jsonName = javaName;
+			if(e.getAnnotation(org.suche.json.JsonProperty.class) instanceof final org.suche.json.JsonProperty p && !p.value().isEmpty()) {
+				jsonName = p.value();
+			}
+			if (!props.containsKey(jsonName)) {
+				try { e.setAccessible(true); } catch(final Throwable t) { System.out.println(e.getDeclaringClass().getCanonicalName()+"."+e.getName()+" setAccessible(true) => "+t.getMessage()); }
+				props.put(jsonName, new Prop(javaName, true, e.getType(), GernericsHandler.extractValueType(e.getGenericType(), e.getType()), -1, null));
 			}
 		}
 		return props;

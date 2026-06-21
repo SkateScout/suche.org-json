@@ -53,6 +53,7 @@ record KeyValueObject(
 	static int addComponent(final KeyValueObject[] result, int cnt, final RecordComponent comp, final BiFunction<String, RecordComponent, Object> mapComponent) {
 		Filter filter = null;
 		var name = comp.getName();
+		if(comp.getAnnotation(org.suche.json.JsonProperty.class) instanceof final org.suche.json.JsonProperty p && !p.value().isEmpty()) name = p.value();
 		if(mapComponent != null)
 			try {
 				switch(mapComponent.apply(name,comp)) {

@@ -4,6 +4,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.function.Predicate;
@@ -63,6 +64,8 @@ public sealed interface JsonEngine permits InternalEngine {
 	static <T> T of(final byte[] src, final Class<?> t) {
 		try(	var s = DEFAULT.jsonInputStream(src)) { return (T)s.readObject(t); } catch(final Throwable x) { illegalStateException(x); return null; }
 	}
+
+	static <T> T of(final String src, final Class<?> t) { return of(src.getBytes(StandardCharsets.UTF_8), t); }
 
 	static <T> T of(final Path src, final Class<?> t) {
 		try(	final var i = Files.newInputStream(src)) { return of(i, t); } catch(final Exception x) { illegalStateException(x); return null; }

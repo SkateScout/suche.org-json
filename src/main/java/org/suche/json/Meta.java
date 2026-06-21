@@ -83,6 +83,7 @@ final class Meta {
 		return new KeyValueObject(key, 4, null, null, null, null, obj -> { try { return (boolean) handle.asType(MT_S_APPLY_BOOL).invokeExact(obj); } catch (final Throwable x) { throw illegalStateException(x); } });
 	}
 
+	@SuppressWarnings("unchecked")
 	static KeyValueObject createFastGetter(final byte[] key, final Method m, final Filter filter) throws Throwable {
 		try { m.setAccessible(true); } catch (final Exception _) { /* Try to open the method */ }
 		final var handle = lookup.unreflect(m);

@@ -218,8 +218,19 @@ final class EngineImpl implements InternalEngine {
 		synchronized (t.mutex) {
 			if (t.kv != null) return t.kv == KeyValueObject.NULL ? null : t.kv;
 			KeyValueObject[] rp = null;
-			if (Record.class.isAssignableFrom(c)) rp = KeyValueObject.ofRecord(c.asSubclass(Record.class), cfg);
-			else for (final var p : autoPojo) if (p.test(c)) rp = KeyValueObject.registerComplex(c, cfg);
+			if (Record.class.isAssignableFrom(c)) return t.kv = KeyValueObject.ofRecord(c.asSubclass(Record.class), cfg);
+
+			var isAutoPojo = false;
+			for (final var p : autoPojo) if (p.test(c)) { isAutoPojo = true; break; }
+
+			if (isAutoPojo) rp = KeyValueObject.registerComplex(c, cfg);
+			else {
+				// OUPUT-FIX: Wenn die Klasse bereits durch den InputStream als POJO (TYPE_INSTANTIATOR) geparst wurde, generieren wir auch den Output!
+				final var mId = metaIdOf(c);
+				if (mId >= 0 && metaCache[mId] != null && metaCache[mId].metaType == ObjectMeta.TYPE_INSTANTIATOR) {
+					rp = KeyValueObject.registerComplex(c, cfg);
+				}
+			}
 			t.kv = rp == null ? KeyValueObject.NULL : rp;
 			return rp;
 		}

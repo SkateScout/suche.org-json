@@ -604,7 +604,7 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 				final var match  = Long.lowestOneBit(has); // x86 BLSI instruction (1 cycle)
 				if ((hasCtrl & match) != 0) throwInvalid("Unescaped control character in key");
 				final var offset = (Long.numberOfTrailingZeros(match) >>> 3);
-				if(match>0x80L) {
+				if(offset > 0) {
 					final var tailMask = (match >>> 7) - 1L;
 					hash64 ^= (word & tailMask);
 					hash64 *= HASH_PRIME;
