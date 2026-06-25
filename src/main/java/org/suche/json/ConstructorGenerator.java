@@ -90,8 +90,14 @@ public class ConstructorGenerator {
 				codeBuilder.areturn();
 			});
 		});
-		final var definedClass = MethodHandles.privateLookupIn(cls, LOOKUP).defineHiddenClass(bytes, true, MethodHandles.Lookup.ClassOption.NESTMATE).lookupClass();
-		return (ObjectArrayFactory) definedClass.getConstructor().newInstance();
+		try {
+			final var definedClass = MethodHandles.privateLookupIn(cls, LOOKUP).defineHiddenClass(bytes, true, MethodHandles.Lookup.ClassOption.NESTMATE).lookupClass();
+			return (ObjectArrayFactory) definedClass.getConstructor().newInstance();
+		} catch(final IllegalAccessException e) {
+			final var x = new IllegalAccessException("generate("+cls+" , "+methodName+" , factoryArgs , setters) => "+e.getMessage());
+			x.setStackTrace(e.getStackTrace());
+			throw x;
+		}
 	}
 
 	private static void callSetter(final CodeBuilder codeBuilder, final ClassDesc recordDesc, final int idx, final PropDef prop) {
