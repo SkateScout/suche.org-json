@@ -4,6 +4,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -55,21 +56,17 @@ public sealed interface JsonEngine permits InternalEngine {
 	static JSONException illegalStateException(final Throwable t) { throw (t instanceof final RuntimeException e  ? e : new JSONException(t)); }
 	static JSONException illegalStateException(final String    t) { throw new JSONException(t); }
 
-	@SuppressWarnings("unchecked")
-	static <T> T of(final InputStream src, final Class<?> t) {
-		try(	var s = DEFAULT.jsonInputStream(src)) { return (T)s.readObject(t); } catch(final Throwable x) { illegalStateException(x); return null; }
-	}
+	static <T> T of(final InputStream src, final Class<?> t) {return of(src, (Type)t); }
+	static <T> T of(final byte[]      src, final Class<T> t) {return of(src, (Type)t); }
+	static <T> T of(final String      src, final Class<T> t) {return of(src, (Type)t); }
+	static <T> T of(final Path        src, final Class<T> t) {return of(src, (Type)t); }
 
 	@SuppressWarnings("unchecked")
-	static <T> T of(final byte[] src, final Class<?> t) {
-		try(	var s = DEFAULT.jsonInputStream(src)) { return (T)s.readObject(t); } catch(final Throwable x) { illegalStateException(x); return null; }
-	}
-
-	static <T> T of(final String src, final Class<?> t) { return of(src.getBytes(StandardCharsets.UTF_8), t); }
-
-	static <T> T of(final Path src, final Class<?> t) {
-		try(	final var i = Files.newInputStream(src)) { return of(i, t); } catch(final Exception x) { illegalStateException(x); return null; }
-	}
+	static <T> T of(final InputStream src, final Type t) { try(	var s = DEFAULT.jsonInputStream(src)) { return (T)s.readObject(t); } catch(final Throwable x) { illegalStateException(x); return null; } }
+	@SuppressWarnings("unchecked")
+	static <T> T of(final byte[] src     , final Type t) { try(	var s = DEFAULT.jsonInputStream(src)) { return (T)s.readObject(t); } catch(final Throwable x) { illegalStateException(x); return null; } }
+	static <T> T of(final String src     , final Type t) { return of(src.getBytes(StandardCharsets.UTF_8), t); }
+	static <T> T of(final Path src       , final Type t) { try(	final var i = Files.newInputStream(src)) { return of(i, t); } catch(final Exception x) { illegalStateException(x); return null; } }
 
 	static JSONArray  ofJSONArray     (final Path   json) { return of(json           , JSONArray.class); }
 	static JSONArray  ofJSONArray     (final String json) { return of(json.getBytes(), JSONArray.class); }

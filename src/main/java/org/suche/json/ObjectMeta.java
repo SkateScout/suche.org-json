@@ -6,6 +6,7 @@ import java.lang.reflect.Array;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Parameter;
+import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collection;
@@ -95,6 +96,7 @@ final class ObjectMeta {
 	final         int                 cacheIndex;
 	private final long[]              fieldDescriptors   ;
 	private final ObjectMeta[]        childMetas;
+	final ComponentMeta[] components;
 
 	long fieldDescriptor(final int idx) {
 		// POJOs use field arrays, all others (Map, List, Set) use componentDescriptor!
@@ -105,7 +107,7 @@ final class ObjectMeta {
 
 	private void lastSize(final int depth, final int size) { if (depth >= 0 && depth < 64) lastSeenSizeByDepth[depth] = size; }
 
-	record ComponentMeta(String name, Class<?> type, Class<?> valueType) {
+	record ComponentMeta(String name, Class<?> type, Type valueType) {
 		ComponentMeta {
 			if (name == null) throw new IllegalStateException("Missing name");
 			if (type == null) throw new IllegalStateException("Missing type");
@@ -113,22 +115,30 @@ final class ObjectMeta {
 		}
 	}
 
-	final ComponentMeta[] components;
+	static final record Prop(String name, boolean isField, Class<?> type, Type valueType, int ctorIdx, MethodHandle setterHandle) { }
 
-	static final record Prop(String name, boolean isField, Class<?> type, Class<?> valueType, int ctorIdx, MethodHandle setterHandle) { }
-
-	private static long resolveDescriptor(final InternalEngine e, Class<?> type, Class<?> valueType) {
+	private static long resolveDescriptor(final InternalEngine e, Type type, Type valueType) {
 		if (type      == null) type = Object.class;
 		if (valueType == null) valueType = Object.class;
-		final var isArray = type.isArray() || Collection.class.isAssignableFrom(type);
-		final var isPrimArray = isArray && (type.isArray() ? type.componentType().isPrimitive() : valueType.isPrimitive());
-		final var isPrimValue = !isArray && type.isPrimitive();
+
+		final Class<?> rawType = GernericsHandler.resolveClass(type);
+		final var isArray = rawType.isArray() || Collection.class.isAssignableFrom(rawType);
+
+		final Class<?> resolvedValClass = GernericsHandler.resolveClass(valueType);
+		final var isPrimArray = isArray && (rawType.isArray() ? rawType.componentType().isPrimitive() : resolvedValClass.isPrimitive());
+		final var isPrimValue = !isArray && rawType.isPrimitive();
+
 		Class<?> primTarget = null;
-		if      (isPrimArray) primTarget = type.isArray() ? type.componentType() : valueType;
-		else if (isPrimValue) primTarget = type;
+		if      (isPrimArray) primTarget = rawType.isArray() ? rawType.componentType() : resolvedValClass;
+		else if (isPrimValue) primTarget = rawType;
+
 		final int subIdx;
 		if (primTarget != null) subIdx = getPrimId(primTarget);
-		else if (e instanceof final EngineImpl ei) subIdx = ei.resolveEngineObjectDescriptor(type, valueType);
+		else if (e instanceof final EngineImpl ei) {
+			// Bei Arrays (Station[]) übergeben wir resolvedValClass (Station.class) als targetValType!
+			final var targetValType = rawType.isArray() ? resolvedValClass : valueType;
+			subIdx = ei.resolveEngineObjectDescriptor(type, targetValType);
+		}
 		else subIdx = IDX_GENERIC;
 		return EngineImpl.createTypeDesc(isArray, primTarget != null, subIdx);
 	}
@@ -284,7 +294,31 @@ final class ObjectMeta {
 	long getChildDescriptor(final int index) { return (this.metaType == TYPE_MAP ? this.componentDescriptor : (fieldDescriptors == null ? 0L : fieldDescriptors[index])); }
 	long getComponentDescriptor() { return componentDescriptor; }
 
-	static ObjectMeta ofPojo(final InternalEngine engine, final Class<?> c, final int cacheIndex) {
+	static ObjectMeta ofRecord(final InternalEngine engine, final Type genericType, final Class<? extends Record> c, final int cacheIndex) {
+		final var comps = c.getRecordComponents();
+		final var metaComps = new ComponentMeta[comps.length];
+		final var types = new Class<?>[comps.length];
+		try {
+			for (var i = 0; i < comps.length; i++) {
+				final var comp = comps[i];
+				// WICHTIG: types[i] MUSS für den Bytecode-Generator exakt die rohe JVM-Klasse bleiben (z. B. Object[].class)!
+				types[i] = comp.getType();
+				var name = comp.getName();
+				if(comp.getAnnotation(org.suche.json.JsonProperty.class) instanceof final org.suche.json.JsonProperty p && !p.value().isEmpty()) name = p.value();
+
+				// Der aufgelöste Typ (z. B. Station.class) geht AUSSCHLIESSLICH in den valueType für die Array-Instanziierung
+				final var resolvedValueType = GernericsHandler.extractValueType(comp.getGenericType(), genericType);
+
+				metaComps[i] = new ComponentMeta(name, types[i], resolvedValueType);
+			}
+			return new ObjectMeta(engine, c.getCanonicalName(), NO_POJO_START, ConstructorGenerator.generate(c, types), comps.length, FastKeyTable.build(metaComps), types, metaComps, buildEnumConstants(types), cacheIndex);
+		} catch (final Exception e) {
+			e.printStackTrace();
+			return DEFECT_FIRST;
+		}
+	}
+
+	static ObjectMeta ofPojo(final InternalEngine engine, final Type genericType, final Class<?> c, final int cacheIndex) {
 		if(c.getCanonicalName().startsWith("java.lang.String")) throw new IllegalStateException(c.getCanonicalName());
 		try {
 			final var ctors = c.getDeclaredConstructors();
@@ -296,7 +330,7 @@ final class ObjectMeta {
 			if (bestCtor == null) return DEFECT_FIRST;
 			if (!bestCtor.canAccess(null)) bestCtor.setAccessible(true);
 			final var params       = bestCtor.getParameters();
-			final var props        = pojoProps(c, params);
+			final var props        = pojoProps(genericType, c, params);
 			final var totalProps   = props.size();
 			final var finalComps   = new ComponentMeta[totalProps];
 			final var finalTypes   = new Class<?>[totalProps];
@@ -312,7 +346,7 @@ final class ObjectMeta {
 				finalComps[targetIdx] = new ComponentMeta(jsonKey, prop.type(), prop.valueType());
 				finalTypes[targetIdx] = prop.type();
 				if (prop.ctorIdx != -1) ctorTypes[prop.ctorIdx] = prop.type();
-				else propDefsList.add(new ConstructorGenerator.PropDef(prop.name(), prop.type(), prop.isField())); // Important: Bytecode require real Java-Name
+				else propDefsList.add(new ConstructorGenerator.PropDef(prop.name(), prop.type(), prop.isField()));
 			}
 
 			final var keys          = FastKeyTable.build(finalComps);
@@ -320,7 +354,6 @@ final class ObjectMeta {
 			final var propDefs      = propDefsList.isEmpty() ? null : propDefsList.toArray(new ConstructorGenerator.PropDef[0]);
 			final var factory       = ConstructorGenerator.generate(c, "<init>", ctorTypes, propDefs);
 
-			// ALLES läuft durch die generierte Hochgeschwindigkeits-Factory (kein NO_FACTORY Bypass mehr).
 			return new ObjectMeta(engine, c.getCanonicalName(), NO_POJO_START, factory, ctorArgs, keys, finalTypes, finalComps, enumConstants, cacheIndex);
 		} catch (final Exception e) {
 			e.printStackTrace();
@@ -328,24 +361,56 @@ final class ObjectMeta {
 		}
 	}
 
-	static ObjectMeta ofRecord(final InternalEngine engine, final Class<? extends Record> c, final int cacheIndex) {
-		final var comps = c.getRecordComponents();
-		final var metaComps = new ComponentMeta[comps.length];
-		final var types = new Class<?>[comps.length];
-		try {
-			for (var i = 0; i < comps.length; i++) {
-				final var comp = comps[i];
-				types[i] = comp.getType();
-				var name = comp.getName();
-				if(comp.getAnnotation(org.suche.json.JsonProperty.class) instanceof final org.suche.json.JsonProperty p && !p.value().isEmpty()) name = p.value();
-				metaComps[i] = new ComponentMeta(name, types[i], GernericsHandler.extractValueType(comp.getGenericType(), types[i]));
-			}
-			return new ObjectMeta(engine, c.getCanonicalName(), NO_POJO_START, ConstructorGenerator.generate(c, types), comps.length, FastKeyTable.build(metaComps), types, metaComps, buildEnumConstants(types), cacheIndex);
-		} catch (final Exception e) {
-			e.printStackTrace();
-			return DEFECT_FIRST;
+	private static LinkedHashMap<String, Prop> pojoProps(final Type genericContext, final Class<?> c, final Parameter[] params) throws IllegalAccessException {
+		if(c.getCanonicalName().startsWith("java.lang.")) throw new IllegalStateException(c.getCanonicalName());
+		final var props = new LinkedHashMap<String, Prop>();
+
+		for (var i = 0; i < params.length; i++) {
+			final var resolvedVal = GernericsHandler.extractValueType(params[i].getParameterizedType(), genericContext);
+			props.put(params[i].getName(), new Prop(params[i].getName(), false, params[i].getType(), resolvedVal, i, null));
 		}
+
+		for (final var e : c.getMethods()) {
+			if (e.getParameterCount() != 1 || e.getName().length() < 4 || !e.getName().startsWith("set")) continue;
+			final var javaName = e.getName();
+			var jsonName = Character.toLowerCase(javaName.charAt(3)) + javaName.substring(4);
+			if(e.getAnnotation(org.suche.json.JsonProperty.class) instanceof final org.suche.json.JsonProperty p && !p.value().isEmpty()) {
+				jsonName = p.value();
+			}
+			if (!props.containsKey(jsonName)) {
+				e.setAccessible(true);
+				final var resolvedVal = GernericsHandler.extractValueType(e.getGenericParameterTypes()[0], genericContext);
+				props.put(jsonName, new Prop(javaName, false, e.getParameterTypes()[0], resolvedVal, -1, null));
+			}
+		}
+
+		for (final var e : c.getDeclaredFields()) {
+			if (0 != (e.getModifiers() & MOD_FINAL_OR_STATIC)) continue;
+			final var javaName = e.getName();
+			var jsonName = javaName;
+			if(e.getAnnotation(org.suche.json.JsonProperty.class) instanceof final org.suche.json.JsonProperty p && !p.value().isEmpty()) {
+				jsonName = p.value();
+			}
+			if (!props.containsKey(jsonName)) {
+				try { e.setAccessible(true); } catch(final Throwable t) { }
+				final var resolvedVal = GernericsHandler.extractValueType(e.getGenericType(), genericContext);
+				props.put(jsonName, new Prop(javaName, true, e.getType(), resolvedVal, -1, null));
+			}
+		}
+		return props;
 	}
+
+
+
+
+
+
+
+
+
+
+
+
 
 	static ObjectMeta ofEnum(final InternalEngine e, final Class<?> c, final int cacheIndex) {
 		final var values = c.getEnumConstants();

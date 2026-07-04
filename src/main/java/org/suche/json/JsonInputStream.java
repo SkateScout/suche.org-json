@@ -3,6 +3,7 @@ package org.suche.json;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.reflect.Type;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -308,8 +309,10 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 
 	// ############################### Public Part #############################################
 
+	public <T> T readObject(final Class<T> targetType) throws Throwable { return readObject((Type)targetType); }
+
 	@SuppressWarnings("unchecked")
-	public <T> T readObject(final Class<T> targetType) throws Throwable {
+	public <T> T readObject(final Type targetType) throws Throwable {
 		skipWhitespace();
 		if (pos >= limit) throwInvalid("Empty JSON document");
 
@@ -340,6 +343,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		if (!engine.ignoreTrailing()) checkTrailing();
 		return result;
 	}
+
 
 	private  void checkTrailing() throws IOException {
 		skipWhitespace();

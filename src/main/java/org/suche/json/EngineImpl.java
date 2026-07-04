@@ -3,6 +3,8 @@ package org.suche.json;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
 import java.util.Collection;
 import java.util.Map;
 import java.util.Set;
@@ -15,39 +17,45 @@ import org.suche.json.JsonOutputStream.Flags;
 import org.suche.json.JsonOutputStream.TimeFormat;
 
 sealed interface InternalEngine extends JsonEngine permits EngineImpl {
-	ObjectMeta              metaOf   (Class<?> clazz);
+	ObjectMeta              metaOf   (Type clazz);
 	MetaConfig              config   ();
 	KeyValueObject[]        ofComplex( final Class<?> c);
 	UnaryOperator<Object>   transformer(Class<?> c);
 	boolean                 hasCoreTransformer();
 	ObjectMeta[]            metaCache();
+	int resolveEngineObjectDescriptor(Type type, Type valueType);
 }
 
 final class EngineImpl implements InternalEngine {
 	private static final int MOG_IGNORE = Modifier.INTERFACE | Modifier.ABSTRACT;
 
+	// 1. TypeRecord speichert jetzt Type und löst die rawClass einmalig vorab auf
 	private static class TypeRecord {
-		final Class<?> clazz;
+		final Type type;
+		final Class<?> rawClass;
 		final Object   mutex = new Object();
 		ObjectMeta metaObject;
 		KeyValueObject[] kv;
-		// MethodHandle filter
 		UnaryOperator<Object> transformer;
 		int cacheIndex = -1;
 		boolean building = false; // Prevents circular dependency infinite loops
-		public TypeRecord(final Class<?> cls) { this.clazz = cls; }
-		@Override public String toString() { return "TypeRecord [clazz=" + clazz + "]"; }
 
+		public TypeRecord(final Type t) {
+			this.type = t;
+			this.rawClass = GernericsHandler.resolveClass(t);
+		}
+		@Override public String toString() { return "TypeRecord [type=" + type + "]"; }
 	}
 
 	private boolean hasCoreTransformer = false;
 	private boolean skipInvalid = false;
 	private boolean failOnUnknownProperties = false;
 
-	private final ConcurrentHashMap<Class<?>, TypeRecord> typeRecordCache = new ConcurrentHashMap<>();
-	private TypeRecord getTypeRecord(final Class<?> c) { return typeRecordCache.computeIfAbsent(c, TypeRecord::new); }
+	// 2. Cache-Key ist nun java.lang.reflect.Type
+	private final ConcurrentHashMap<Type, TypeRecord> typeRecordCache = new ConcurrentHashMap<>();
+	private TypeRecord getTypeRecord(final Type c) { return typeRecordCache.computeIfAbsent(c, TypeRecord::new); }
 
-	void putMeta(final Class<?> c, final ObjectMeta m) {
+	void putMeta(final Type c, final ObjectMeta m) {
 		final var t = getTypeRecord(c);
 		t.metaObject = m;
 		t.cacheIndex = m.cacheIndex;
@@ -124,12 +132,20 @@ final class EngineImpl implements InternalEngine {
 		return desc;
 	}
 
-	int resolveEngineObjectDescriptor(final Class<?> type, final Class<?> valueType) {
-		if (type.isArray()                         ) return this.getDynamicMetaId(type, type.componentType(), ObjectMeta.TYPE_OBJ_ARRAY);
-		if (Set       .class.isAssignableFrom(type)) return this.getDynamicMetaId(type, valueType, ObjectMeta.TYPE_SET       );
-		if (Collection.class.isAssignableFrom(type)) return this.getDynamicMetaId(type, valueType, ObjectMeta.TYPE_COLLECTION);
-		if (Map       .class.isAssignableFrom(type)) return this.getDynamicMetaId(type, valueType, ObjectMeta.TYPE_MAP       );
-		return this.metaIdOf(type);
+	@Override public int resolveEngineObjectDescriptor(final Type type, final Type valueType) {
+		final Class<?> rawType = GernericsHandler.resolveClass(type);
+		final Class<?> rawVal  = GernericsHandler.resolveClass(valueType);
+
+		if (rawType.isArray()) {
+			// CRITICAL FIX: Verhindert, dass compType bei T[] auf Object.class zurückfällt!
+			final var compType = (rawVal != null && rawVal != Object.class) ? rawVal : rawType.componentType();
+			return this.getDynamicMetaId(rawType, compType, ObjectMeta.TYPE_OBJ_ARRAY);
+		}
+		if (Set       .class.isAssignableFrom(rawType)) return this.getDynamicMetaId(rawType, rawVal, ObjectMeta.TYPE_SET       );
+		if (Collection.class.isAssignableFrom(rawType)) return this.getDynamicMetaId(rawType, rawVal, ObjectMeta.TYPE_COLLECTION);
+		if (Map       .class.isAssignableFrom(rawType)) return this.getDynamicMetaId(rawType, rawVal, ObjectMeta.TYPE_MAP       );
+
+		return this.metaIdOf((valueType != null && valueType != Object.class) ? valueType : type);
 	}
 
 	// Not used in hot path only by resolveDescriptor in Constructor
@@ -165,25 +181,47 @@ final class EngineImpl implements InternalEngine {
 		return m.cacheIndex;
 	}
 
-	int metaIdOf(final Class<?> clazz) {
-		if (clazz == null || clazz == Object.class || Map.class.isAssignableFrom(clazz)) return ObjectMeta.IDX_MAP;
-		final var t = getTypeRecord(clazz);
+	// 4. Das Herzstück: metaIdOf mit nativer GernericsHandler-Integration
+	int metaIdOf(final Type type) {
+		if (type == null || type == Object.class) return ObjectMeta.IDX_MAP;
+		final var t = getTypeRecord(type);
+		final Class<?> clazz = t.rawClass;
+
+		// Fast-Path für rohe Maps ohne Typ-Parameter
+		if (type == Map.class || (clazz == Map.class && !(type instanceof ParameterizedType))) {
+			return ObjectMeta.IDX_MAP;
+		}
+
 		if (t.cacheIndex == -1) {
 			synchronized (t.mutex) {
 				if (t.cacheIndex == -1) t.cacheIndex = registerMeta(null);
 			}
 		}
 		if (t.metaObject != null) return t.cacheIndex;
-		synchronized (t.mutex) {
-			// Circular reference detected! Returning the ID early is sufficient for linking.
-			if ((t.metaObject != null) || t.building) return t.cacheIndex;
 
+		synchronized (t.mutex) {
+			if ((t.metaObject != null) || t.building) return t.cacheIndex;
 			t.building = true;
+
+			// SCHRITT A: Abfangen von parametrisierten Collections & Maps mittels GernericsHandler
+			if (Collection.class.isAssignableFrom(clazz) || Map.class.isAssignableFrom(clazz)) {
+				final Class<?> valType = GernericsHandler.resolveClass(GernericsHandler.extractValueType(type, clazz));
+				final var targetMetaType = Map.class.isAssignableFrom(clazz) ? ObjectMeta.TYPE_MAP :
+					(Set.class.isAssignableFrom(clazz) ? ObjectMeta.TYPE_SET : ObjectMeta.TYPE_COLLECTION);
+				final var dynId = getDynamicMetaId(clazz, valType, targetMetaType);
+				t.cacheIndex = dynId;
+				t.metaObject = metaCache[dynId];
+				t.building = false;
+				return dynId;
+			}
+
+			// SCHRITT B: Standard POJO / Record / Enum Behandlung über die rawClass
+			// SCHRITT B in EngineImpl.metaIdOf(Type type):
 			final ObjectMeta r;
 			if ((clazz.isPrimitive() || clazz.isArray() || 0 != (clazz.getModifiers() & MOG_IGNORE)) || clazz.getCanonicalName().startsWith("java.lang.")) r = ObjectMeta.NULL;
-			else if (clazz.isRecord()) r = ObjectMeta.ofRecord(this, clazz.asSubclass(Record.class), t.cacheIndex);
+			else if (clazz.isRecord()) r = ObjectMeta.ofRecord(this, type, clazz.asSubclass(Record.class), t.cacheIndex);
 			else if (clazz.isEnum  ()) r = ObjectMeta.ofEnum(this, clazz.asSubclass(Enum.class), t.cacheIndex);
-			else r = ObjectMeta.ofPojo(this, clazz, t.cacheIndex);
+			else r = ObjectMeta.ofPojo(this, type, clazz, t.cacheIndex);
 
 			t.metaObject = r;
 			if (r != ObjectMeta.NULL) metaCache[t.cacheIndex] = r;
@@ -192,7 +230,7 @@ final class EngineImpl implements InternalEngine {
 		}
 	}
 
-	@Override public ObjectMeta metaOf(final Class<?> clazz) {
+	@Override public ObjectMeta metaOf(final Type clazz) {
 		final var id = metaIdOf(clazz);
 		if (id == ObjectMeta.IDX_GENERIC || metaCache[id] == null) return null;
 		return metaCache[id];
