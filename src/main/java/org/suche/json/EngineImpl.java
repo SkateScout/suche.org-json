@@ -187,7 +187,6 @@ final class EngineImpl implements InternalEngine {
 		final var t = getTypeRecord(type);
 		final Class<?> clazz = t.rawClass;
 
-		// Fast-Path für rohe Maps ohne Typ-Parameter
 		if (type == Map.class || (clazz == Map.class && !(type instanceof ParameterizedType))) {
 			return ObjectMeta.IDX_MAP;
 		}
@@ -203,7 +202,6 @@ final class EngineImpl implements InternalEngine {
 			if ((t.metaObject != null) || t.building) return t.cacheIndex;
 			t.building = true;
 
-			// SCHRITT A: Abfangen von parametrisierten Collections & Maps mittels GernericsHandler
 			if (Collection.class.isAssignableFrom(clazz) || Map.class.isAssignableFrom(clazz)) {
 				final Class<?> valType = GernericsHandler.resolveClass(GernericsHandler.extractValueType(type, clazz));
 				final var targetMetaType = Map.class.isAssignableFrom(clazz) ? ObjectMeta.TYPE_MAP :
@@ -215,10 +213,9 @@ final class EngineImpl implements InternalEngine {
 				return dynId;
 			}
 
-			// SCHRITT B: Standard POJO / Record / Enum Behandlung über die rawClass
-			// SCHRITT B in EngineImpl.metaIdOf(Type type):
 			final ObjectMeta r;
-			if ((clazz.isPrimitive() || clazz.isArray() || 0 != (clazz.getModifiers() & MOG_IGNORE)) || clazz.getCanonicalName().startsWith("java.lang.")) r = ObjectMeta.NULL;
+			if (clazz.isSealed()) r = SealedUnionMapper.build(this, clazz, t.cacheIndex);
+			else if ((clazz.isPrimitive() || clazz.isArray() || 0 != (clazz.getModifiers() & MOG_IGNORE)) || clazz.getCanonicalName().startsWith("java.lang.")) r = ObjectMeta.NULL;
 			else if (clazz.isRecord()) r = ObjectMeta.ofRecord(this, type, clazz.asSubclass(Record.class), t.cacheIndex);
 			else if (clazz.isEnum  ()) r = ObjectMeta.ofEnum(this, clazz.asSubclass(Enum.class), t.cacheIndex);
 			else r = ObjectMeta.ofPojo(this, type, clazz, t.cacheIndex);

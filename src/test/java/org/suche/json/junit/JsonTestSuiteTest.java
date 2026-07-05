@@ -15,6 +15,39 @@ import org.suche.json.MetaConfig;
 
 public class JsonTestSuiteTest {
 
+
+	public sealed interface SealedInterface permits ClassA, ClassB {}
+	public record ClassA(String name, int power) implements SealedInterface {}
+	public record ClassB(String name, int count, int power) implements SealedInterface {}
+	public record ContainerObject(java.util.List<SealedInterface> units) {}
+
+	@Test
+	public void testSealedInterfacePolymorphism() {
+		final var json = """
+				{
+				  "units": [
+				    { "__class__": "ClassA", "name": "a", "power": 15 },
+				    { "__class__": "ClassB", "name": "b", "count": 10, "power": 5 }
+				  ]
+				}
+				""";
+
+		final var info = JsonEngine.of(json, ContainerObject.class);
+
+		assertEquals(2, info.units().size());
+		assertEquals(ClassA.class, info.units().get(0).getClass());
+		assertEquals(ClassB.class, info.units().get(1).getClass());
+
+		final var unit1 = (ClassA) info.units().get(0);
+		assertEquals("a", unit1.name());
+		assertEquals(15, unit1.power());
+
+		final var unit2 = (ClassB) info.units().get(1);
+		assertEquals("b", unit2.name());
+		assertEquals(10, unit2.count());
+		assertEquals(5, unit2.power());
+	}
+
 	@Test
 	public void testNstJsonTestSuite() throws Exception {
 		// 1. ZIP-Datei im Temp-Verzeichnis zwischenspeichern (Cache)

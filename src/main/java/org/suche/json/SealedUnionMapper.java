@@ -1,4 +1,3 @@
-// text
 package org.suche.json;
 
 import java.lang.reflect.Array;
@@ -7,7 +6,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
@@ -106,37 +104,36 @@ final class SealedUnionMapper {
 		return r.toArray(new Class<?>[0]);
 	}
 
-	static ObjectMeta build(final InternalEngine e, final Class<?> sealedInterface) {
-		final var subclasses    = getPermittedClasses(sealedInterface);
-		final var keyToAllTypes = new HashMap<String, Set<Class<?>>>();
+	static ObjectMeta build(final InternalEngine e, final Class<?> sealedInterface, final int cacheIdx) {
+		final var subclasses = getPermittedClasses(sealedInterface);
+		final var propMap    = new java.util.LinkedHashMap<String, ObjectMeta.ComponentMeta>();
+		propMap.put(CLASS_KEY, new ObjectMeta.ComponentMeta(CLASS_KEY, String.class, Object.class));
 		for (final var sub : subclasses) {
 			final var meta = e.metaOf(sub);
-			for (final var comp : meta.components) keyToAllTypes.computeIfAbsent(comp.name(), _ -> new HashSet<>()).add(comp.type());
+			if (meta != null && meta.components != null) {
+				for (final var comp : meta.components) {
+					if (comp != null && !propMap.containsKey(comp.name())) {
+						propMap.put(comp.name(), comp);
+					}
+				}
+			}
 		}
-		var totalKeys = 1;
-		final var keyToIndex = new HashMap<String, Integer>();
-		final var typeMap    = new HashMap<Integer, Class<?>>();
-		for (final var entry : keyToAllTypes.entrySet()) {
-			final var key = entry.getKey();
-			if(CLASS_KEY.equals(key) || ENUM_KEY .equals(key)) continue;
-			final var idx = totalKeys++;
-			keyToIndex.put(entry.getKey(), idx);
-			final var common = getCommonSuperTypes(entry.getValue());
-			typeMap.put(idx, common.size() == 1 ? common.iterator().next() : Object.class);
+		for (final String alias : new String[]{"type", "__type__", "@type", ENUM_KEY}) {
+			propMap.putIfAbsent(alias, new ObjectMeta.ComponentMeta(alias, String.class, Object.class));
 		}
-
-		final var unionKeys  = new String  [totalKeys];
+		final var totalKeys  = propMap.size();
+		final var unionKeys  = new String[totalKeys];
 		final var unionTypes = new Class<?>[totalKeys];
-		for (final var entry : keyToIndex.entrySet()) {
-			unionKeys [entry.getValue()] = entry.getKey();
-			unionTypes[entry.getValue()] = typeMap.get(entry.getValue());
+		final var unionComps = new ObjectMeta.ComponentMeta[totalKeys];
+		var idx = 0;
+		for (final var comp : propMap.values()) {
+			unionKeys[idx]  = comp.name();
+			unionTypes[idx] = comp.type();
+			unionComps[idx] = comp;
+			idx++;
 		}
-		unionKeys [0] = CLASS_KEY;
-		unionTypes[0] = String.class;
-		final var cacheIdx = ((EngineImpl) e).registerMeta(null);
-		return new ObjectMeta(e, sealedInterface.getCanonicalName(), subclasses, unionKeys, unionTypes, cacheIdx);
+		return new ObjectMeta(e, sealedInterface, sealedInterface.getCanonicalName(), subclasses, unionKeys, unionTypes, unionComps, cacheIdx);
 	}
-
 	static Object end(final MetaPool s, final Object context, final Class<?> baseType, final Class<?>[] permitted, final FastKeyTable keys, final Class<?>[] unionTypes) throws Throwable {
 		if(null == permitted) throw new IllegalStateException("permitted=null");
 		final var unionCtx  = (MetaPool.ParseContext) context;
@@ -144,9 +141,14 @@ final class SealedUnionMapper {
 		final var unionPrim = unionCtx.prims;
 		var className = (String) unionObj[0];
 		if (className == null) {
-			final var enumBytes = ENUM_KEY.getBytes(StandardCharsets.UTF_8);
-			final var enumIdx = keys.get(BufferedStream.computeHash(enumBytes, 0, enumBytes.length), enumBytes, 0, enumBytes.length);
-			if (enumIdx >= 0) className = (String) unionObj[enumIdx];
+			for (final String alias : new String[]{"type", "__type__", "@type", ENUM_KEY}) {
+				final var aliasBytes = alias.getBytes(StandardCharsets.UTF_8);
+				final var aliasIdx = keys.get(BufferedStream.computeHash(aliasBytes, 0, aliasBytes.length), aliasBytes, 0, aliasBytes.length);
+				if (aliasIdx >= 0 && unionObj[aliasIdx] instanceof final String str) {
+					className = str;
+					break;
+				}
+			}
 		}
 		final var targetClass = resolvePermittedSubclass(baseType, permitted, className);
 		final var engine      = s.engine();
@@ -161,7 +163,13 @@ final class SealedUnionMapper {
 			if (unionIdx < 0) continue;
 			final var uType = unionTypes[unionIdx];
 			if (uType.isPrimitive()) {
-				targetPrim[i] = unionPrim[unionIdx];
+				var primVal = (unionPrim != null) ? unionPrim[unionIdx] : 0L;
+				if (primVal == 0L && unionObj != null && unionObj[unionIdx] instanceof final Number n) {
+					if      (uType == double.class) primVal = Double.doubleToRawLongBits(n.doubleValue());
+					else if (uType == float .class) primVal = Float.floatToRawIntBits(n.floatValue());
+					else                            primVal = n.longValue();
+				}
+				if (targetPrim != null) targetPrim[i] = primVal;
 			} else {
 				var val = unionObj[unionIdx];
 				if (val != null) {
@@ -181,7 +189,7 @@ final class SealedUnionMapper {
 						else if (comp.type() == float .class) primVal = Float.floatToRawIntBits(n.floatValue());
 						else                                  primVal = n.longValue();
 					}
-					targetPrim[i] = primVal;
+					if (targetPrim != null) targetPrim[i] = primVal;
 				} else {
 					var objVal = val;
 					if (targetMeta.enumConstants != null && targetMeta.enumConstants[i] != null && objVal != null) {
@@ -198,10 +206,9 @@ final class SealedUnionMapper {
 	}
 
 	private static Class<?> resolvePermittedSubclass(final Class<?> baseType, final Class<?>[] permitted, final String className) {
-		if(null == permitted) throw new IllegalStateException("permitted=null");
+		if (null == permitted) throw new IllegalStateException("permitted=null");
 		if (className == null) {
-			if(baseType==null) throw new IllegalArgumentException("className and baseType is null");
-			return baseType;
+			throw new IllegalArgumentException("Missing class discriminator (__class__, type, @type, etc.) to deserialize sealed interface " + (baseType != null ? baseType.getName() : Arrays.toString(permitted)));
 		}
 		for (final var c : permitted) if (c.getSimpleName().equals(className) || c.getName().equals(className)) return c;
 		throw new IllegalArgumentException("Unknown subclass: " + className + " for " + Arrays.toString(permitted));
@@ -247,7 +254,6 @@ final class SealedUnionMapper {
 						var val = c.raw[c.idx];
 						final var currentIdx = c.idx++;
 
-						// LAZY PRIMITIVE RESOLUTION (LIST)
 						if (c.singleType == PRIMITIVE.T_LONG) {
 							val = c.prims[currentIdx];
 						} else if (c.singleType == PRIMITIVE.T_DOUBLE) {
@@ -288,8 +294,7 @@ final class SealedUnionMapper {
 					while (c.idx < c.len) {
 						final var key = (String) c.raw[c.idx];
 						var val = c.raw[c.idx + 1];
-						// LAZY PRIMITIVE RESOLUTION (MAP)
-						final var logicalIdx = c.idx >> 1; // Sicherer Bit-Shift für Value-Index
+						final var logicalIdx = c.idx >> 1;
 					if (c.singleType == PRIMITIVE.T_LONG) {
 						val = c.prims[logicalIdx];
 					} else if (c.singleType == PRIMITIVE.T_DOUBLE) {
@@ -303,7 +308,7 @@ final class SealedUnionMapper {
 					final var targetIdx = c.meta.prepareKey(c.context, key);
 					if (targetIdx >= 0) {
 
-						final Class<?> expectedType = c.meta.type(targetIdx); // TODO replace with typedesc + fetch class from engine
+						final Class<?> expectedType = c.meta.type(targetIdx);
 						if (val instanceof final CompactMap m && expectedType != Object.class && expectedType != java.util.Map.class) {
 							final var childRaw = m.getRawData();
 							final var childPrims = m.prims();

@@ -99,8 +99,7 @@ final class ObjectMeta {
 	final ComponentMeta[] components;
 
 	long fieldDescriptor(final int idx) {
-		// POJOs use field arrays, all others (Map, List, Set) use componentDescriptor!
-		return metaType == TYPE_INSTANTIATOR ? fieldDescriptors[idx] : componentDescriptor;
+		return (metaType == TYPE_INSTANTIATOR || metaType == TYPE_SEALED) ? fieldDescriptors[idx] : componentDescriptor;
 	}
 
 	ObjectMeta childMeta(final int index) { return childMetas[index]; }
@@ -263,35 +262,56 @@ final class ObjectMeta {
 		this.childMetas       = componentMetaToObjectMeta(e, fieldDescriptors);
 	}
 
-	ObjectMeta(final InternalEngine e,final String pClassName, final Class<?>[] pSubclasses, final String[] pKeys, final Class<?>[] pTypes, final int pCacheIndex) {
+	Class<?> type(final int index) { return types[1==types.length?0:index]; }
+
+	long getChildDescriptor(final int index) {
+		return (this.metaType == TYPE_INSTANTIATOR || this.metaType == TYPE_SEALED) ? fieldDescriptors[index] : this.componentDescriptor;
+	}
+
+	// Überladene Brücken-Konruktoren für Abwärtskompatibilität
+	ObjectMeta(final InternalEngine e, final String pClassName, final Class<?>[] pSubclasses, final String[] pKeys, final Class<?>[] pTypes, final int pCacheIndex) {
+		this(e, null, pClassName, pSubclasses, pKeys, pTypes, null, pCacheIndex);
+	}
+
+	ObjectMeta(final InternalEngine e, final Class<?> baseTyp, final String pClassName, final Class<?>[] pSubclasses, final String[] pKeys, final Class<?>[] pTypes, final int pCacheIndex) {
+		this(e, baseTyp, pClassName, pSubclasses, pKeys, pTypes, null, pCacheIndex);
+	}
+
+	// Der einheitliche Hauptkonstruktor für TYPE_SEALED
+	ObjectMeta(final InternalEngine e, final Class<?> baseTyp, final String pClassName, final Class<?>[] pSubclasses, final String[] pKeys, final Class<?>[] pTypes, final ComponentMeta[] pComponents, final int pCacheIndex) {
 		this.cacheIndex     = pCacheIndex;
 		this.className      = pClassName;
-		final var possibleComponents = new ComponentMeta[pKeys.length];
-		this.failOnUnknown  = e.failOnUnknownProperties();
-		for (var i = 0; i < pKeys.length; i++) possibleComponents[i] = new ComponentMeta(pKeys[i], pTypes[i], Object.class);
+		final var possibleComponents = (pComponents != null) ? pComponents : new ComponentMeta[pKeys.length];
+		if (pComponents == null) {
+			for (var i = 0; i < pKeys.length; i++) possibleComponents[i] = new ComponentMeta(pKeys[i], pTypes[i], Object.class);
+		}
+		this.failOnUnknown  = e != null && e.failOnUnknownProperties();
 		this.metaType       = TYPE_SEALED;
 		this.pojoStart      = null;
 		this.factory        = null;
 		this.arrayCreator   = null;
 		this.ctorParamCount = 0;
 		this.permitted      = pSubclasses;
-		this.baseType       = null;
+		this.baseType       = baseTyp;
 		this.keys           = FastKeyTable.build(possibleComponents);
 		this.types          = pTypes;
 		this.components     = possibleComponents;
 		this.enumConstants  = buildEnumConstants(pTypes);
-		final var cfg = e.config();
+		final var cfg = e == null ? null : e.config();
 		this.skipDefaultValues = cfg == null ? false : cfg.skipDefaultValues();
 		this.setNumeric0       = cfg == null ? false : cfg.setNumeric0();
 		this.setEmpty          = cfg == null ? false : cfg.setEmpty   ();
-		this.needsPrims = false;
+
+		var primFound = false;
+		if (pTypes != null) {
+			for (final var t : pTypes) if (t != null && t.isPrimitive()) { primFound = true; break; }
+		}
+		this.needsPrims          = primFound;
 		this.componentDescriptor = 0L;
-		this.fieldDescriptors = componentMetaToDescriptor(e, null            );
-		this.childMetas       = componentMetaToObjectMeta(e, fieldDescriptors);
+		this.fieldDescriptors    = componentMetaToDescriptor(e, possibleComponents);
+		this.childMetas          = componentMetaToObjectMeta(e, fieldDescriptors);
 	}
 
-	Class<?> type(final int index) { return types[1==types.length?0:index]; }
-	long getChildDescriptor(final int index) { return (this.metaType == TYPE_MAP ? this.componentDescriptor : (fieldDescriptors == null ? 0L : fieldDescriptors[index])); }
 	long getComponentDescriptor() { return componentDescriptor; }
 
 	static ObjectMeta ofRecord(final InternalEngine engine, final Type genericType, final Class<? extends Record> c, final int cacheIndex) {
@@ -400,17 +420,40 @@ final class ObjectMeta {
 		return props;
 	}
 
+	static ObjectMeta ofSealed(final InternalEngine engine, final Class<?> c, final int cacheIndex) {
+		try {
+			final var permitted = c.getPermittedSubclasses();
+			if (permitted == null || permitted.length == 0) return DEFECT_FIRST;
 
+			final var propMap = new LinkedHashMap<String, ComponentMeta>();
+			propMap.put(SealedUnionMapper.ENUM_KEY, new ComponentMeta(SealedUnionMapper.ENUM_KEY, String.class, Object.class));
+			propMap.put("type", new ComponentMeta("type", String.class, Object.class));
+			propMap.put("__type__", new ComponentMeta("__type__", String.class, Object.class));
+			propMap.put("@type", new ComponentMeta("@type", String.class, Object.class));
 
+			for (final Class<?> sub : permitted) {
+				final var subMeta = engine.metaOf(sub);
+				if (subMeta != null && subMeta.components != null) {
+					for (final var comp : subMeta.components) {
+						propMap.putIfAbsent(comp.name(), comp);
+					}
+				}
+			}
 
+			final var comps = propMap.values().toArray(new ComponentMeta[0]);
+			final var keys  = new String[comps.length];
+			final var types = new Class<?>[comps.length];
+			for (var i = 0; i < comps.length; i++) {
+				keys[i]  = comps[i].name();
+				types[i] = comps[i].type();
+			}
 
-
-
-
-
-
-
-
+			return new ObjectMeta(engine, c, c.getCanonicalName(), permitted, keys, types, comps, cacheIndex);
+		} catch (final Exception e) {
+			e.printStackTrace();
+			return DEFECT_FIRST;
+		}
+	}
 
 	static ObjectMeta ofEnum(final InternalEngine e, final Class<?> c, final int cacheIndex) {
 		final var values = c.getEnumConstants();
@@ -493,7 +536,7 @@ final class ObjectMeta {
 	Object start(final MetaPool s) {
 		return switch (metaType) {
 		case TYPE_MAP, TYPE_OBJ_ARRAY, TYPE_COLLECTION -> s.takeContext(TYPE_MAP == metaType);
-		case TYPE_INSTANTIATOR -> {
+		case TYPE_INSTANTIATOR, TYPE_SEALED -> {
 			final var len = fieldDescriptors != null ? fieldDescriptors.length : 0;
 			final var ctx = s.takeContext(false);
 			if (ctx.objs == null) ctx.objs = s.takeArray(len);
@@ -608,7 +651,7 @@ final class ObjectMeta {
 	void setLong(final MetaPool s, final Object context, final int index, final long v) {
 		if (setNumeric0 && v == 0L) return;
 		switch (metaType) {
-		case TYPE_INSTANTIATOR               -> ((ParseContext)context).prims[index] = v;
+		case TYPE_INSTANTIATOR, TYPE_SEALED  -> ((ParseContext)context).prims[index] = v;
 		case TYPE_MAP                        -> ((ParseContext)context).primKeyValue(s, PRIMITIVE.LONG, v);
 		case TYPE_OBJ_ARRAY, TYPE_COLLECTION -> ((ParseContext)context).primIdxValue(s, PRIMITIVE.LONG, v, index);
 		case TYPE_SET                        -> ((Collection<Object>) context).add(v);
@@ -621,7 +664,7 @@ final class ObjectMeta {
 		if (setNumeric0 && v == 0.0) return;
 		final var bits = Double.doubleToRawLongBits(v);
 		switch (metaType) {
-		case TYPE_INSTANTIATOR               -> ((ParseContext)context).prims[index] = bits;
+		case TYPE_INSTANTIATOR, TYPE_SEALED  -> ((ParseContext)context).prims[index] = bits;
 		case TYPE_MAP                        -> ((ParseContext)context).primKeyValue(s, PRIMITIVE.DOUBLE, bits);
 		case TYPE_OBJ_ARRAY, TYPE_COLLECTION -> ((ParseContext)context).primIdxValue(s, PRIMITIVE.DOUBLE, bits, index);
 		case TYPE_SET -> ((Collection<Object>) context).add(v);
@@ -636,7 +679,7 @@ final class ObjectMeta {
 		// Global null check
 		if (value == null && setEmpty && metaType != TYPE_OBJ_ARRAY && metaType != TYPE_COLLECTION) return;
 		switch (metaType) {
-		case TYPE_INSTANTIATOR -> {
+		case TYPE_INSTANTIATOR, TYPE_SEALED -> {
 			if (value == null) {
 				final var targetType = components[index].type();
 				if (targetType.isPrimitive()) value = (targetType == boolean.class ? Boolean.FALSE : 0);
