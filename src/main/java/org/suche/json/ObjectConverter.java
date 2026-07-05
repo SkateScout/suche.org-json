@@ -29,21 +29,17 @@ public final class ObjectConverter {
 	}
 
 	@SuppressWarnings("unchecked")
-	public static <T> T fromMap(final Map<String, Object> source, final Class<T> targetType) throws Throwable {
+	public static <T> T fromMap(final Map<String, Object> source, final Class<T> targetType) {
 		final var engine = (InternalEngine)JsonEngine.DEFAULT;
 		if (source == null) return null;
 		final var meta = meta(source, targetType, engine);
 		if (meta.metaType != ObjectMeta.TYPE_INSTANTIATOR) throw new IllegalArgumentException("Unsupported " + targetType.getName());
-
-		if (source instanceof final CompactMap cm) {
-			return fromCompactMap(cm, meta);
-		}
-
+		if (source instanceof final CompactMap cm) return fromCompactMap(cm, meta);
 		return fromDefaultMap(source, meta);
 	}
 
 	@SuppressWarnings("unchecked")
-	private static <T> T fromDefaultMap(final Map<String, Object> source, final ObjectMeta meta) throws Throwable {
+	private static <T> T fromDefaultMap(final Map<String, Object> source, final ObjectMeta meta) {
 		final var objs = new Object[meta.components.length];
 		final var prims = meta.needsPrims ? new long[meta.components.length] : null;
 
@@ -86,7 +82,7 @@ public final class ObjectConverter {
 	}
 
 	@SuppressWarnings("unchecked")
-	private static <T> T fromCompactMap(final CompactMap source, final ObjectMeta meta) throws Throwable {
+	private static <T> T fromCompactMap(final CompactMap source, final ObjectMeta meta) {
 		final var objs = new Object[meta.components.length];
 		final var prims = meta.needsPrims ? new long[meta.components.length] : null;
 
@@ -133,7 +129,7 @@ public final class ObjectConverter {
 				}
 
 				if (targetType.isPrimitive()) {
-					if (prims == null) JsonEngine.illegalStateException("Missing prims");
+					if (prims == null) throw JsonEngine.illegalStateException("Missing prims");
 					if (isLong) {
 						if      (targetType == double.class) prims[targetIdx] = Double.doubleToRawLongBits(primBits);
 						else if (targetType == float.class)  prims[targetIdx] = Float.floatToRawIntBits(primBits);
@@ -188,7 +184,7 @@ public final class ObjectConverter {
 	}
 
 	@SuppressWarnings("unchecked")
-	private static <T> T fromCollection(final Collection<?> source, final ObjectMeta.ComponentMeta comp) throws Throwable {
+	private static <T> T fromCollection(final Collection<?> source, final ObjectMeta.ComponentMeta comp) {
 		if (source == null) return null;
 		final var targetType = comp.type();
 		var compClass = GernericsHandler.resolveClass(comp.valueType());
