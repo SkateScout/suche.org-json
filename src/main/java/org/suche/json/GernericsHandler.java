@@ -9,7 +9,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 
-final class GernericsHandler {
+public final class GernericsHandler {
 
 	static Type extractValueType(Type genericType, final Type contextType) {
 		if (genericType == null) return Object.class;
@@ -120,7 +120,7 @@ final class GernericsHandler {
 		@Override public Type   getOwnerType          () { return original.getOwnerType(); }
 	}
 
-	static Class<?> resolveClass(Type t) {
+	public static Class<?> resolveClass(Type t) {
 		while(true) {
 			switch(t) {
 			case final Class<?> c           -> { return c; }

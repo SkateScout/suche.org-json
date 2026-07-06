@@ -3,4 +3,5 @@ module org.suche.json {
 	requires java.compiler;
 	requires static jdk.incubator.vector;	// Optional dependend on runtime
 	exports org.suche.json;
+	exports org.suche.protobuf;
 }

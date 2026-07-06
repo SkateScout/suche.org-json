@@ -109,6 +109,7 @@ final class Meta {
 		}
 	}
 
+	@SuppressWarnings("unchecked")
 	static KeyValueObject createFastIntGetter(final byte[] key, final Class<?> c, final MethodHandle handle, final Class<?> ret) throws Throwable {
 		try {
 			final var site = LambdaMetafactory.metafactory(lookup, "applyAsInt", MT_FUNC_INT, MT_S_APPLY_INT, handle, MethodType.methodType(ret, c));
@@ -139,6 +140,7 @@ final class Meta {
 		}
 	}
 
+	@SuppressWarnings("unchecked")
 	static KeyValueObject createFastBooleanGetter(final byte[] key, final Class<?> c, final MethodHandle handle) throws Throwable {
 		try {
 			final var site = LambdaMetafactory.metafactory(lookup, "test", MT_FUNC_BOOL, MT_S_APPLY_BOOL, handle, MethodType.methodType(boolean.class, c));
@@ -171,6 +173,7 @@ final class Meta {
 		return null;
 	}
 
+	@SuppressWarnings("unchecked")
 	static Supplier<Object> asSupplier(final Class<?> type, final MethodHandle ctorHandle) {
 		try {
 			return (Supplier<Object>) LambdaMetafactory.metafactory(lookup, "get", MT_SUPPLIER, MT_OBJECT, ctorHandle, MethodType.methodType(type)).getTarget().invokeExact();
