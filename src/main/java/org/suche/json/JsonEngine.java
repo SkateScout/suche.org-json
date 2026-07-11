@@ -68,6 +68,10 @@ public sealed interface JsonEngine permits InternalEngine {
 	static <T> T of(final String src     , final Type t) { return of(src.getBytes(StandardCharsets.UTF_8), t); }
 	static <T> T of(final Path src       , final Type t) { try(	final var i = Files.newInputStream(src)) { return of(i, t); } catch(final Exception x) { illegalStateException(x); return null; } }
 
+	@SuppressWarnings("unchecked")
+	default <T> T ofBytes (final byte[] src     , final Type t) { try(	var s = jsonInputStream(src)) { return (T)s.readObject(t); } catch(final Throwable x) { illegalStateException(x); return null; } }
+	default <T> T ofString(final String src     , final Type t) { return ofBytes(src.getBytes(StandardCharsets.UTF_8), t); }
+
 	static JSONArray  ofJSONArray     (final Path   json) { return of(json           , JSONArray.class); }
 	static JSONArray  ofJSONArray     (final String json) { return of(json.getBytes(), JSONArray.class); }
 	static JSONArray  ofJSONArray     (final byte[] json) { return of(json           , JSONArray.class); }

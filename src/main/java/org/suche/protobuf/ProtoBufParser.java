@@ -1,5 +1,6 @@
 package org.suche.protobuf;
 
+import java.lang.reflect.Type;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
@@ -18,8 +19,8 @@ public class ProtoBufParser {
 		throw new IllegalArgumentException(mesg.replace("{val}", Integer.toString(val)));
 	}
 
-	private static final IllegalArgumentException error(final String mesg, final Class<?> cls, final FieldInfo info) {
-		throw new IllegalArgumentException(mesg.replace("{cls}", cls.getCanonicalName()).replace("{name}", info.keyName()));
+	private static final IllegalArgumentException error(final String mesg, final Type cls, final FieldInfo info) {
+		throw new IllegalArgumentException(mesg.replace("{cls}", cls.getTypeName()).replace("{name}", info.keyName()));
 	}
 
 	public static int    readLength (final ByteBuffer buffer) {
@@ -122,12 +123,12 @@ public class ProtoBufParser {
 		return java.util.Arrays.copyOf(temp, count);
 	}
 
-	public static <T extends Record> T decode(final byte[] protobufBytes, final Class<T> recordClass) {
+	public static <T extends Record> T decode(final byte[] protobufBytes, final Type recordClass) {
 		return decode(ByteBuffer.wrap(protobufBytes).order(ByteOrder.LITTLE_ENDIAN), recordClass);
 	}
 
 	@SuppressWarnings("unchecked")
-	public static <T extends Record> T decode(final ByteBuffer buf, final Class<T> recordClass) {
+	public static <T extends Record> T decode(final ByteBuffer buf, final Type recordClass) {
 		final ObjectMeta<T> meta = ObjectMeta.of(recordClass);
 		final var clen = meta.fieldSize();
 		final var objects = new Object[clen];
@@ -201,7 +202,7 @@ public class ProtoBufParser {
 			case ObjectMeta.T_RECORD     -> { // 4. VERSCHACHTELTE RECORDS
 				final var length = readLength(buf);
 				final var subBuffer = buf.slice().limit(length).order(ByteOrder.LITTLE_ENDIAN);
-				addObj(objects, prims, info, decode(subBuffer, (Class<? extends Record>) info.effCls()), 0);
+				addObj(objects, prims, info, decode(subBuffer, info.effCls()), 0);
 				buf.position(buf.position() + length);
 			}
 			default                      -> skipField(buf, wireType);

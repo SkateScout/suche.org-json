@@ -29,7 +29,7 @@ sealed interface InternalEngine extends JsonEngine permits EngineImpl {
 final class EngineImpl implements InternalEngine {
 	private static final int MOG_IGNORE = Modifier.INTERFACE | Modifier.ABSTRACT;
 
-	// 1. TypeRecord speichert jetzt Type und löst die rawClass einmalig vorab auf
+	// 1. TypeRecord now stores Type and resolves the rawClass once in advance
 	private static class TypeRecord {
 		final Type type;
 		final Class<?> rawClass;
@@ -51,7 +51,7 @@ final class EngineImpl implements InternalEngine {
 	private boolean skipInvalid = false;
 	private boolean failOnUnknownProperties = false;
 
-	// 2. Cache-Key ist nun java.lang.reflect.Type
+	// 2. Cache key is now java.lang.reflect.Type
 	private final ConcurrentHashMap<Type, TypeRecord> typeRecordCache = new ConcurrentHashMap<>();
 	private TypeRecord getTypeRecord(final Type c) { return typeRecordCache.computeIfAbsent(c, TypeRecord::new); }
 
@@ -134,26 +134,28 @@ final class EngineImpl implements InternalEngine {
 
 	@Override public int resolveEngineObjectDescriptor(final Type type, final Type valueType) {
 		final Class<?> rawType = GernericsHandler.resolveClass(type);
-		final Class<?> rawVal  = GernericsHandler.resolveClass(valueType);
 
 		if (rawType.isArray()) {
-			// CRITICAL FIX: Verhindert, dass compType bei T[] auf Object.class zurückfällt!
+			final Class<?> rawVal = GernericsHandler.resolveClass(valueType);
 			final var compType = (rawVal != null && rawVal != Object.class) ? rawVal : rawType.componentType();
 			return this.getDynamicMetaId(rawType, compType, ObjectMeta.TYPE_OBJ_ARRAY);
 		}
-		if (Set       .class.isAssignableFrom(rawType)) return this.getDynamicMetaId(rawType, rawVal, ObjectMeta.TYPE_SET       );
-		if (Collection.class.isAssignableFrom(rawType)) return this.getDynamicMetaId(rawType, rawVal, ObjectMeta.TYPE_COLLECTION);
-		if (Map       .class.isAssignableFrom(rawType)) return this.getDynamicMetaId(rawType, rawVal, ObjectMeta.TYPE_MAP       );
+		if (Set       .class.isAssignableFrom(rawType)) return this.getDynamicMetaId(type, valueType, ObjectMeta.TYPE_SET       );
+		if (Collection.class.isAssignableFrom(rawType)) return this.getDynamicMetaId(type, valueType, ObjectMeta.TYPE_COLLECTION);
+		if (Map       .class.isAssignableFrom(rawType)) return this.getDynamicMetaId(type, valueType, ObjectMeta.TYPE_MAP       );
 
 		return this.metaIdOf((valueType != null && valueType != Object.class) ? valueType : type);
 	}
 
 	// Not used in hot path only by resolveDescriptor in Constructor
-	synchronized int getDynamicMetaId(final Class<?> baseType, final Class<?> compType, final int targetMetaType) {
+	synchronized int getDynamicMetaId(final Type baseType, final Type compType, final int targetMetaType) {
 		final var searchType = compType == null ? Object.class : compType;
 		final var searchBase = baseType == null ? Object.class : baseType;
 
-		if (searchType == Object.class && (searchBase == Object.class || searchBase == Map.class || searchBase == Set.class || searchBase == Collection.class)) {
+		final Class<?> rawType = GernericsHandler.resolveClass(searchType);
+		final Class<?> rawBase = GernericsHandler.resolveClass(searchBase);
+
+		if (rawType == Object.class && (rawBase == Object.class || rawBase == Map.class || rawBase == Set.class || rawBase == Collection.class)) {
 			return switch (targetMetaType) {
 			case ObjectMeta.TYPE_COLLECTION -> ObjectMeta.IDX_COLLECTION;
 			case ObjectMeta.TYPE_OBJ_ARRAY  -> ObjectMeta.IDX_OBJ_ARRAY;
@@ -162,8 +164,9 @@ final class EngineImpl implements InternalEngine {
 			default                         -> ObjectMeta.IDX_GENERIC;
 			};
 		}
+
 		for (var i = 0; i < dynamicMetaCount; i++) {
-			if (dynamicMetaCache[i].metaType == targetMetaType && dynamicMetaCache[i].types[0] == searchType && dynamicMetaCache[i].baseType == searchBase)
+			if (dynamicMetaCache[i].metaType == targetMetaType && dynamicMetaCache[i].genericCompType.equals(searchType) && dynamicMetaCache[i].genericBaseType.equals(searchBase))
 				return dynamicMetaCache[i].cacheIndex;
 		}
 
@@ -174,14 +177,13 @@ final class EngineImpl implements InternalEngine {
 		metaCache[m.cacheIndex] = m;
 		if (dynamicMetaCount < dynamicMetaCache.length) dynamicMetaCache[dynamicMetaCount++] = m;
 		else if (dynamicMetaCount == dynamicMetaCache.length) {
-			// Trigger warning exactly once to avoid console flooding
 			System.err.println("JSON Engine Warning: dynamicMetaCache limit (" + dynamicMetaCache.length + ") reached. Please increase dynamicMetaCacheSize in MetaConfig to avoid performance degradation.");
 			dynamicMetaCount++;
 		}
 		return m.cacheIndex;
 	}
 
-	// 4. Das Herzstück: metaIdOf mit nativer GernericsHandler-Integration
+	// 4. The core: metaIdOf with native GenericsHandler integration
 	int metaIdOf(final Type type) {
 		if (type == null || type == Object.class) return ObjectMeta.IDX_MAP;
 		final var t = getTypeRecord(type);
@@ -203,10 +205,26 @@ final class EngineImpl implements InternalEngine {
 			t.building = true;
 
 			if (Collection.class.isAssignableFrom(clazz) || Map.class.isAssignableFrom(clazz)) {
-				final Class<?> valType = GernericsHandler.resolveClass(GernericsHandler.extractValueType(type, clazz));
+				final var valType = GernericsHandler.extractValueType(type, clazz);
 				final var targetMetaType = Map.class.isAssignableFrom(clazz) ? ObjectMeta.TYPE_MAP :
 					(Set.class.isAssignableFrom(clazz) ? ObjectMeta.TYPE_SET : ObjectMeta.TYPE_COLLECTION);
-				final var dynId = getDynamicMetaId(clazz, valType, targetMetaType);
+
+				// Wenn es eine Custom-Subklasse ist, registrieren wir ein dezidiertes ObjectMeta,
+				// das die konkrete Klasse als baseType mitschreibt!
+				if (!clazz.getName().startsWith("java.util.") && clazz != Map.class && clazz != Set.class && clazz != Collection.class) {
+					final var customId = registerMeta(null);
+					final var m = (targetMetaType == ObjectMeta.TYPE_MAP)
+							? new ObjectMeta(this, type, valType, customId)
+									: new ObjectMeta(this, type, valType, targetMetaType, customId);
+
+					t.cacheIndex = customId;
+					t.metaObject = m;
+					metaCache[customId] = m;
+					t.building = false;
+					return customId;
+				}
+
+				final var dynId = getDynamicMetaId(type, valType, targetMetaType);
 				t.cacheIndex = dynId;
 				t.metaObject = metaCache[dynId];
 				t.building = false;
@@ -260,7 +278,7 @@ final class EngineImpl implements InternalEngine {
 
 			if (isAutoPojo) rp = KeyValueObject.registerComplex(c, cfg);
 			else {
-				// OUPUT-FIX: Wenn die Klasse bereits durch den InputStream als POJO (TYPE_INSTANTIATOR) geparst wurde, generieren wir auch den Output!
+				// OUPUT-FIX: Wenn die Klasse bereits durch den InputStream als POJO (TYPE_INSTANTIATOR) geparst wurde, generieren wir auch den Output! $\rightarrow$ // OUTPUT-FIX: If the class was already parsed as a POJO (TYPE_INSTANTIATOR) by the InputStream, we also generate the output!
 				final var mId = metaIdOf(c);
 				if (mId >= 0 && metaCache[mId] != null && metaCache[mId].metaType == ObjectMeta.TYPE_INSTANTIATOR) {
 					rp = KeyValueObject.registerComplex(c, cfg);

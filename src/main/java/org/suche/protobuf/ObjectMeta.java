@@ -1,5 +1,6 @@
 package org.suche.protobuf;
 
+import java.lang.reflect.Type;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
@@ -36,7 +37,7 @@ public class ObjectMeta<T extends Record> {
 		return T_OBJECT;
 	}
 
-	private static final Map<Class<? extends Record>, ObjectMeta<?>> cache = new ConcurrentHashMap<>();
+	private static final Map<Type, ObjectMeta<?>> cache = new ConcurrentHashMap<>();
 	private final Map<Integer , FieldInfo > fieldMap = new HashMap<>();
 	private final ObjectArrayFactory factory;
 	private final Class<T> recordClass;
@@ -44,7 +45,7 @@ public class ObjectMeta<T extends Record> {
 	public record FieldInfo(int cpos, String keyName, boolean isRepeated, Class<?> effCls, int classIndex) {}
 
 	@SuppressWarnings("unchecked")
-	public static <T extends Record> ObjectMeta<T> of(final Class<T> c) {
+	public static <T extends Record> ObjectMeta<T> of(final Type c) {
 		return (ObjectMeta<T>)cache.computeIfAbsent(c, ObjectMeta::new);
 	}
 
@@ -66,8 +67,9 @@ public class ObjectMeta<T extends Record> {
 		throw new IllegalStateException("Invalid Protobuf Field-ID " + id + " for record component '" + o + "'");
 	}
 
-	private ObjectMeta(final Class<T> cls) {
-		this.recordClass = cls;
+	@SuppressWarnings("unchecked")
+	private ObjectMeta(final Type cls) {
+		this.recordClass = (Class<T>)GernericsHandler.resolveClass(cls);
 		var idx = 0;
 		for (final var component : recordClass.getRecordComponents()) {
 			final var cpos = idx;

@@ -44,7 +44,7 @@ public final class GernericsHandler {
 		return Object.class;
 	}
 
-	// Mappt TypeVariables über ihren Namen ("T"), um Identitäts-Verluste der JVM zu umgehen
+	// Maps TypeVariables by their name ("T") to prevent JVM identity loss
 	private static Map<String, Type> buildContextMap(final Type contextType) {
 		final var map = new HashMap<String, Type>();
 		if (contextType instanceof final ParameterizedType pt && pt.getRawType() instanceof final Class<?> raw) {

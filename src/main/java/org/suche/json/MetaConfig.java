@@ -33,7 +33,8 @@ public record MetaConfig(boolean emitClassName,
 		int                                maxCollectionSize,
 		boolean                            enableDeduplication,
 		int                                dynamicMetaCacheSize,
-		boolean                            enumObject
+		boolean                            enumObject ,
+		boolean                            setEmptyString
 		) {
 
 	public interface Filter { Object apply(Object v); }
@@ -48,5 +49,5 @@ public record MetaConfig(boolean emitClassName,
 			/*setNumeric0       */ false,
 			/*setEmpty          */ false, false
 			, null, null, null
-			, 128, 5 * 1024 * 1024, 100_000, true, 32, true);
+			, 128, 5 * 1024 * 1024, 100_000, true, 32, true, true);
 }
