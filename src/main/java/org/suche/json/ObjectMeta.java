@@ -98,9 +98,9 @@ final class ObjectMeta {
 	final ComponentMeta[] components;
 
 
-	private static final class DefectCollection extends RuntimeException implements Supplier<Object> {
+	private static final class Defect extends RuntimeException implements Supplier<Object> {
 		private static final long serialVersionUID = 1L;
-		DefectCollection(final String mesg) { super(mesg, null, false, false); }
+		Defect(final String mesg) { super(mesg, null, false, false); }
 		@Override public synchronized Throwable fillInStackTrace() { return super.fillInStackTrace(); }
 		@Override public void setStackTrace(final StackTraceElement[] stackTrace) { }
 		@Override public Object get() { throw this; }
@@ -134,7 +134,7 @@ final class ObjectMeta {
 	};
 
 	private static Supplier<Object> supplier(final Class<?> rawBase, final Class<?> standard, final D[] defaults) {
-		if(rawBase == null) return null;
+		if(rawBase == null || rawBase.isArray()) return null;
 		var ret = rawsupplier.get(rawBase);
 		if(ret == null) ret = rawsupplier.computeIfAbsent(rawBase, c->builder(c, standard, defaults));
 		if(ret instanceof final RuntimeException e) throw e;
@@ -154,9 +154,9 @@ final class ObjectMeta {
 			}
 		} catch (final Throwable _) {
 		}
-		if(Modifier.isFinal(rawBase.getModifiers())) return new DefectCollection("final class "+rawBase.getCanonicalName()+" not supported.");
+		if(Modifier.isFinal(rawBase.getModifiers())) return new Defect("final class "+rawBase.getCanonicalName()+" not supported.");
 		for(final var e : defaults) if(rawBase.isAssignableFrom(e.c)) return e.s;
-		return new DefectCollection("Class "+rawBase.getCanonicalName()+" not supported.");
+		return new Defect("Class "+rawBase.getCanonicalName()+" not supported.");
 	}
 
 	static int getPrimId(final Class<?> type) {
@@ -289,7 +289,7 @@ final class ObjectMeta {
 		} else {
 			this.isComplexComponent = false;
 		}
-		customCollectionStart = supplier(rawBase, CompactList.class, COLLECTIONS);
+		customCollectionStart = targetMetaType == TYPE_OBJ_ARRAY ? null : supplier(rawBase, CompactList.class, COLLECTIONS);
 		if (rawBase != null && !rawBase.isInterface() && !Modifier.isAbstract(rawBase.getModifiers())) {
 		}
 	}
@@ -643,7 +643,11 @@ final class ObjectMeta {
 	private Object endCollection(final MetaPool s, final Object context) {
 		final var ctx = (ParseContext) context;
 		final var cnt = ctx.cnt;
-		if (setEmpty && cnt == 0) { s.returnContext(ctx); return null; }
+		if (setEmpty && cnt == 0) {
+			s.returnContext(ctx);
+			if (customCollectionStart != null) return customCollectionStart.get();
+			return EmptyJSONArray.ONCE;
+		}
 		if (customCollectionStart != null) {
 			@SuppressWarnings("unchecked")
 			final var c = (Collection<Object>) customCollectionStart.get();
@@ -700,7 +704,11 @@ final class ObjectMeta {
 		}
 		case TYPE_MAP -> {
 			final var ctx = (ParseContext) context;
-			if (setEmpty && ctx.cnt == 0) { s.returnContext(ctx); yield null; }
+			if (setEmpty && ctx.cnt == 0) {
+				s.returnContext(ctx);
+				if (customCollectionStart != null) yield customCollectionStart.get();
+				yield new CompactMap(PRIMITIVE.T_EMPTY, null, null);
+			}
 			if (ctx.objs == null) yield null;
 			if (customCollectionStart != null) {
 				final var map = (Map<Object, Object>) customCollectionStart.get();
@@ -708,7 +716,7 @@ final class ObjectMeta {
 					for (var i = 0; i < ctx.cnt; i += 2) {
 						final var key = ctx.objs[i  ];
 						final var val = ctx.objs[i+1];
-						if (key != null) map.put(key, val);
+						if (key != null && val != null) map.put(key, val);
 					}
 					s.returnContext(ctx);
 					yield map;

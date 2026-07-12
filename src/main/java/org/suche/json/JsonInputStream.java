@@ -449,7 +449,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				b = buffer[pos++];
 			}
 
-			if (b != ':') unexpect(b, (byte)':');
+			if (b != ':') unexpect((byte)':', b);
 
 			// expect((byte) ':');
 			if (targetIdx < 0) { skipWhitespace(); skipValue(); consumeCommaIfPresent(); continue; }
