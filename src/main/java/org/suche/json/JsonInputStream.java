@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Type;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -395,7 +396,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 	}
 
 	@SuppressWarnings("unchecked")
-	public <T> List<T> readList(final Class<T> elementClass) throws IOException {
+	public <T> Collection<T> readCollection(final Class<T> elementClass) throws IOException {
 		skipWhitespace();
 		expect((byte) '[');
 		final var metaIdx = ((EngineImpl) engine).getDynamicMetaId(elementClass, elementClass, ObjectMeta.TYPE_COLLECTION);
@@ -412,21 +413,11 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 	}
 
 	@SuppressWarnings("unchecked")
-	public <T> Set<T> readSet(final Class<T> elementClass) throws IOException {
-		skipWhitespace();
-		expect((byte) '[');
-		final var metaIdx = ((EngineImpl) engine).getDynamicMetaId(elementClass, elementClass, ObjectMeta.TYPE_SET);
-		final var meta = metaCache[metaIdx];
-		final var typeDesc = EngineImpl.createTypeDesc(true, false, metaIdx);
-		try {
-			final var ret =  (Set<T>)  (this.maxRecursiveDepth <= 0 ?
-					runStateEngine(typeDesc, meta.start(this), meta, 0)
-					: parseArrayRecursive(meta, 0));
-			if(!engine.ignoreTrailing()) checkTrailing();
-			return ret;
-		} catch(final IOException | RuntimeException e) { throw e;
-		} catch(final Throwable e) { throw new RuntimeException(e); }
-	}
+	@Deprecated(forRemoval = true, since = "use readCollection")
+	public <T> List<T> readList(final Class<T> elementClass) throws IOException { return (List<T>)readCollection(elementClass); }
+	@SuppressWarnings("unchecked")
+	@Deprecated(forRemoval = true, since = "use readCollection")
+	public <T> Set<T>   readSet(final Class<T> elementClass) throws IOException { return (Set <T>)readCollection(elementClass); }
 
 	// ========================================================================
 	// RECURSIVE FAST-PATH ENGINE (Mit Hybrid-Fallback zur State-Machine)

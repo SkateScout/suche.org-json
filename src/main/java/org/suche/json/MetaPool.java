@@ -90,7 +90,7 @@ interface MetaPool {
 	void         returnArray    (Object[] arr, int used);
 	void         returnLongArray(long  [] arr);
 	void         returnContext  (ParseContext ctx);
-
+	long         offset();
 	int          depth();
 
 	Object deduplicate(final Object value);

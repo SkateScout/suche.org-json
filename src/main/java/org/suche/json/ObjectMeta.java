@@ -1,18 +1,27 @@
 package org.suche.json;
 
 import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodHandles.Lookup;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.Array;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Parameter;
 import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Set;
+import java.util.TreeMap;
+import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.LinkedBlockingDeque;
+import java.util.concurrent.LinkedTransferQueue;
 import java.util.function.IntFunction;
 import java.util.function.Supplier;
 
@@ -20,23 +29,31 @@ import org.suche.json.ConstructorGenerator.ObjectArrayFactory;
 import org.suche.json.MetaPool.ParseContext;
 
 final class ObjectMeta {
+	private static final MethodType MT_SUPPLIER = MethodType.methodType(Supplier.class);
+	private static final MethodType MT_OBJECT   = MethodType.methodType(Object.class);
+	private static final Map<Class<?>, Supplier<Object>> rawsupplier = new ConcurrentHashMap<>();
+	private static final long      [] NO_fieldDescriptors = { };
+	private static final ObjectMeta[] NO_childMetas       = { };
+	private static final Lookup LOOKUP = MethodHandles.lookup();
+	private static final ComponentMeta[]      ENUM_COMPS          = { new ComponentMeta(SealedUnionMapper.ENUM_KEY, String.class, Object.class), new ComponentMeta("value", String.class, Object.class) };
+	private static final FastKeyTable         ENUM_KEYS           = FastKeyTable.build(ENUM_COMPS);
+	private static final int                  MOD_FINAL_OR_STATIC = Modifier.STATIC | Modifier.FINAL;
+	private static final Supplier<Object>     NO_POJO_START       = null;
+	private static final Class<?>[]           ENUM_TYPES          = { String.class, String.class };
+
 	static         final int          IDX_GENERIC    = 0;	// Must be 0 for speedup with bit checks
 	static         final int          IDX_MAP        = 1;
 	static         final int          IDX_COLLECTION = 2;
-	static         final int          IDX_SET        = 3;
 	static         final int          IDX_OBJ_ARRAY  = 4;
-	private static final long      [] NO_fieldDescriptors = { };
-	private static final ObjectMeta[] NO_childMetas       = { };
 	static         final long DESC_COLLECTION = EngineImpl.createTypeDesc(true, false, IDX_COLLECTION);
 	static         final long DESC_OBJ_ARRAY  = EngineImpl.createTypeDesc(true, false, IDX_OBJ_ARRAY);
-	static         final int IDX_CUSTOM_START = 16;
-	static         final int TYPE_INSTANTIATOR = 1;
-	static         final int TYPE_MAP          = 2;
-	private static final int TYPE_DEFECT       = 3;
-	static         final int TYPE_SEALED       = 4;
-	static         final int TYPE_OBJ_ARRAY    = 6;
-	static         final int TYPE_COLLECTION   = 7;
-	static         final int TYPE_SET          = 8;
+	static         final int  IDX_CUSTOM_START = 16;
+	static         final int  TYPE_INSTANTIATOR = 1;
+	static         final int  TYPE_MAP          = 2;
+	private static final int  TYPE_DEFECT       = 3;
+	static         final int  TYPE_SEALED       = 4;
+	static         final int  TYPE_OBJ_ARRAY    = 6;
+	static         final int  TYPE_COLLECTION   = 7;
 
 	static         final int PRIM_INT          = 1;
 	static         final int PRIM_LONG         = 2;
@@ -44,12 +61,6 @@ final class ObjectMeta {
 	static         final int PRIM_FLOAT        = 4;
 	static         final int PRIM_BOOLEAN      = 5;
 	static         final int PRIM_OTHER        = 6;
-
-	private static final ComponentMeta[]      ENUM_COMPS          = { new ComponentMeta(SealedUnionMapper.ENUM_KEY, String.class, Object.class), new ComponentMeta("value", String.class, Object.class) };
-	private static final FastKeyTable         ENUM_KEYS           = FastKeyTable.build(ENUM_COMPS);
-	private static final int                  MOD_FINAL_OR_STATIC = Modifier.STATIC | Modifier.FINAL;
-	private static final Supplier<Object>     NO_POJO_START       = null;
-	private static final Class<?>[]           ENUM_TYPES          = { String.class, String.class };
 	static         final ObjectMeta           DEFECT_FIRST        = new ObjectMeta(-1);
 	static         final ObjectMeta           DEFECT              = new ObjectMeta(-1);
 	static         final RuntimeException     E_DEFEKT2           = new RuntimeException("DEFEKT.2", null, false, false) { };
@@ -78,7 +89,6 @@ final class ObjectMeta {
 	private final long[]              fieldDescriptors   ;
 	private final ObjectMeta[]        childMetas;
 	private final Supplier<Object>    customCollectionStart;
-	private final boolean             isCustomMapOrSet;
 	private final boolean             isComplexComponent;
 
 	// Types for dynamic generic resolution
@@ -86,6 +96,68 @@ final class ObjectMeta {
 	final Type genericCompType;
 
 	final ComponentMeta[] components;
+
+
+	private static final class DefectCollection extends RuntimeException implements Supplier<Object> {
+		private static final long serialVersionUID = 1L;
+		DefectCollection(final String mesg) { super(mesg, null, false, false); }
+		@Override public synchronized Throwable fillInStackTrace() { return super.fillInStackTrace(); }
+		@Override public void setStackTrace(final StackTraceElement[] stackTrace) { }
+		@Override public Object get() { throw this; }
+	}
+
+	static record D(Class<?> c, Supplier<Object> s) { static D $(final Class<?> c, final Supplier<Object> s) { return new D(c,s); } }
+
+	private static final D[] COLLECTIONS = {
+			D.$(HashSet            .class, HashSet            ::new),	// Set, AbstractSet
+			D.$(TreeSet            .class, TreeSet            ::new),	// Set, SortedSet, NavigableSet
+			D.$(ArrayDeque         .class, ArrayDeque         ::new),	// Deque, Queue
+			D.$(LinkedBlockingDeque.class, LinkedBlockingDeque::new),	// BlockingQueue, AbstractQueue
+			D.$(LinkedTransferQueue.class, LinkedTransferQueue::new),	// TransferQueue
+			// if(rawBase.isAssignableFrom(ArrayBlockingQueue .class)) return ArrayBlockingQueue ::new;	// BlockingQueue
+			// BlockingQueue<E>
+			// TransferQueue<E>
+			// AbstractSequentialList,
+			// ArrayBlockingQueue, ArrayDeque, ArrayList, AttributeList,
+			// BeanContextServicesSupport, BeanContextSupport, ConcurrentHashMap.KeySetView,
+			// ConcurrentLinkedDeque, ConcurrentLinkedQueue, ConcurrentSkipListSet,
+			// CopyOnWriteArrayList, CopyOnWriteArraySet, DelayQueue, EnumSet,
+			// JobStateReasons, , LinkedBlockingQueue,
+			// LinkedHashSet, LinkedList, , PriorityBlockingQueue,
+			// PriorityQueue, RoleList, RoleUnresolvedList, Stack, SynchronousQueue, Vector
+	};
+
+	private static final D[] MAPS = {
+			D.$(ConcurrentHashMap    .class, ConcurrentHashMap    ::new),	// ConcurrentMap, AbstractMap
+			D.$(TreeMap              .class, TreeMap              ::new),	// SortedMap, NavigableMap
+			D.$(ConcurrentSkipListMap.class, ConcurrentSkipListMap::new),	// ConcurrentNavigableMap, NavigableMap, SortedMap
+	};
+
+	private static Supplier<Object> supplier(final Class<?> rawBase, final Class<?> standard, final D[] defaults) {
+		if(rawBase == null) return null;
+		var ret = rawsupplier.get(rawBase);
+		if(ret == null) ret = rawsupplier.computeIfAbsent(rawBase, c->builder(c, standard, defaults));
+		if(ret instanceof final RuntimeException e) throw e;
+		return ret;
+	}
+
+	private static Supplier<Object> builder(final Class<?> rawBase, final Class<?> standard, final D[] defaults) {
+		if(rawBase == null || rawBase.isAssignableFrom(standard)) return null;		// Collection, List, JSONArray, AbstractList, AbstractCollection
+		try {
+			final var ctor = rawBase.getDeclaredConstructor();
+			if (!ctor.canAccess(null)) ctor.setAccessible(true);
+			// Einmaliger Testaufruf (Dummy-Objekt) zur Verifizierung vorab
+			final var mh = LOOKUP.unreflectConstructor(ctor);
+			if(null != mh.invoke()) {
+				final var callSite = java.lang.invoke.LambdaMetafactory.metafactory(LOOKUP, "get", MT_SUPPLIER, MT_OBJECT, mh, mh.type());
+				return (Supplier<Object>) callSite.getTarget().invokeExact();
+			}
+		} catch (final Throwable _) {
+		}
+		if(Modifier.isFinal(rawBase.getModifiers())) return new DefectCollection("final class "+rawBase.getCanonicalName()+" not supported.");
+		for(final var e : defaults) if(rawBase.isAssignableFrom(e.c)) return e.s;
+		return new DefectCollection("Class "+rawBase.getCanonicalName()+" not supported.");
+	}
 
 	static int getPrimId(final Class<?> type) {
 		if (type == int.class    ) return PRIM_INT;
@@ -105,8 +177,10 @@ final class ObjectMeta {
 
 	private void lastSize(final int depth, final int size) { if (depth >= 0 && depth < 64) lastSeenSizeByDepth[depth] = size; }
 
-	private static IllegalStateException illegalStateException(final String mesg) {
-		throw new IllegalStateException(mesg);
+	private static IllegalStateException illegalStateException(final MetaPool location, final String mesg) {
+		var m = mesg;
+		if(location != null) m = m.replace("{offset}", Long.toString(location.offset()));
+		throw new IllegalStateException(m);
 	}
 
 	private IllegalStateException invalidKeyException(final String mesg, final String key) {
@@ -117,8 +191,8 @@ final class ObjectMeta {
 
 	record ComponentMeta(String name, Class<?> type, Type valueType) {
 		ComponentMeta {
-			if (name == null) throw illegalStateException("Missing name");
-			if (type == null) throw illegalStateException("Missing type");
+			if (name == null) throw illegalStateException(null, "Missing name");
+			if (type == null) throw illegalStateException(null, "Missing type");
 			if (valueType == null) valueType = Object.class;
 		}
 	}
@@ -182,8 +256,7 @@ final class ObjectMeta {
 		this.genericCompType = compType;
 		final var rawBase = baseTyp != null ? GernericsHandler.resolveClass(baseTyp) : null;
 		final var rawComp = compType != null ? GernericsHandler.resolveClass(compType) : null;
-
-		this.className = targetMetaType == TYPE_OBJ_ARRAY ? "<ARRAY>" : (targetMetaType == TYPE_SET ? "<SET>" : "<COLLECTION>");
+		this.className = targetMetaType == TYPE_OBJ_ARRAY ? "<ARRAY>" : "<COLLECTION>";
 		this.metaType = targetMetaType;
 		this.failOnUnknown = true;
 		this.factory = null;
@@ -204,34 +277,20 @@ final class ObjectMeta {
 		this.componentDescriptor = resolveDescriptor(e, compType, Object.class);
 		this.fieldDescriptors = componentMetaToDescriptor(e, null                  );
 		this.childMetas       = componentMetaToObjectMeta(e, fieldDescriptors);
+
+		// FIX: Überprüfe den echten Meta-Typ des Kind-Objekts!
 		final var targetMetaId = (int) (this.componentDescriptor >>> 1);
-		this.isComplexComponent = (this.componentDescriptor >= 0L && targetMetaId >= IDX_CUSTOM_START);
-		// Pre-compile instance creator for custom collections/sets or default sets
-		if (targetMetaType == TYPE_SET) {
-			if (rawBase != null && rawBase != Set.class && !rawBase.isInterface() && !Modifier.isAbstract(rawBase.getModifiers())) {
-				Supplier<Object> sCtor = null;
-				try {
-					final var ctor = rawBase.getDeclaredConstructor();
-					if (!ctor.canAccess(null)) ctor.setAccessible(true);
-					sCtor = () -> { try { return ctor.newInstance(); } catch (final Exception ex) { return new HashSet<>(); } };
-				} catch (final Exception ex) { }
-				this.customCollectionStart = sCtor != null ? sCtor : HashSet::new;
-			} else {
-				this.customCollectionStart = HashSet::new;
-			}
-			this.isCustomMapOrSet = true;
-		} else if ((targetMetaType == TYPE_COLLECTION) && rawBase != null && !rawBase.isInterface() && !Modifier.isAbstract(rawBase.getModifiers())) {
-			Supplier<Object> sCtor = null;
-			try {
-				final var ctor = rawBase.getDeclaredConstructor();
-				if (!ctor.canAccess(null)) ctor.setAccessible(true);
-				sCtor = () -> { try { return ctor.newInstance(); } catch (final Exception ex) { return null; } };
-			} catch (final Exception ex) { }
-			this.customCollectionStart = sCtor;
-			this.isCustomMapOrSet = sCtor != null;
+		if (this.componentDescriptor >= 0L && targetMetaId >= IDX_CUSTOM_START) {
+			if(e == null) throw illegalStateException(null, "Missing engine");
+			final var childMeta = e.metaCache()[targetMetaId];
+			// Nur wenn das Kind-Element ein echtes POJO/Record (TYPE_INSTANTIATOR) oder Sealed-Interface ist,
+			// ist es eine komplexe Komponente, die im JSON ein '{' erzwingt!
+			this.isComplexComponent = (childMeta != null && (childMeta.metaType == TYPE_INSTANTIATOR || childMeta.metaType == TYPE_SEALED));
 		} else {
-			this.customCollectionStart = null;
-			this.isCustomMapOrSet = false;
+			this.isComplexComponent = false;
+		}
+		customCollectionStart = supplier(rawBase, CompactList.class, COLLECTIONS);
+		if (rawBase != null && !rawBase.isInterface() && !Modifier.isAbstract(rawBase.getModifiers())) {
 		}
 	}
 
@@ -257,8 +316,7 @@ final class ObjectMeta {
 		this.setEmpty              = false;
 		this.needsPrims            = false;
 		this.customCollectionStart = null ;
-		this.isCustomMapOrSet      = false;
-		isComplexComponent = false;
+		this.isComplexComponent = false;
 		this.componentDescriptor   = 0L;
 		this.fieldDescriptors      = componentMetaToDescriptor(null, null                  );
 		this.childMetas            = componentMetaToObjectMeta(null, fieldDescriptors);
@@ -281,8 +339,7 @@ final class ObjectMeta {
 		this.components            = pComponents;
 		this.enumConstants         = pEnums;
 		this.customCollectionStart = null ;
-		this.isCustomMapOrSet      = false;
-		isComplexComponent = false;
+		this.isComplexComponent    = false;
 		this.failOnUnknown = e.failOnUnknownProperties();
 		final var cfg = e.config();
 		this.skipDefaultValues = cfg == null ? false : cfg.skipDefaultValues();
@@ -297,51 +354,37 @@ final class ObjectMeta {
 		this.childMetas       = componentMetaToObjectMeta(e, fieldDescriptors);
 	}
 
-	// Updated to accept java.lang.reflect.Type for Map constructor
+	/** Map constructor */
 	ObjectMeta(final InternalEngine e, final Type baseTyp, final Type mapValueType, final int pCacheIndex) {
-		this.cacheIndex     = pCacheIndex;
-		this.genericBaseType = baseTyp;
-		this.genericCompType = mapValueType;
-		final var rawBase = baseTyp != null ? GernericsHandler.resolveClass(baseTyp) : null;
+		final var rawBase = baseTyp      != null ? GernericsHandler.resolveClass(baseTyp     ) : null;
 		final var rawVal  = mapValueType != null ? GernericsHandler.resolveClass(mapValueType) : null;
-
-		this.className      = "<MAP>";
-		this.metaType       = TYPE_MAP;
-
-		this.failOnUnknown  = false;
-		this.factory        = null;
-		this.arrayCreator   = null;
-		this.ctorParamCount = 0;
-		this.permitted      = null;
-		this.baseType       = rawBase;
-		this.keys           = new FastKeyTable(new byte[0][], new int[0], 0);
-		this.types          = new Class<?>[] { rawVal };
-		this.components     = new ComponentMeta[0];
-		this.enumConstants  = null;
-		final var cfg = e == null ? null : e.config();
-		this.skipDefaultValues = cfg == null ? false : cfg.skipDefaultValues();
-		this.setNumeric0       = cfg == null ? false : cfg.setNumeric0();
-		this.setEmpty          = cfg == null ? false : cfg.setEmpty   ();
-		this.setEmptyString    = cfg == null ? false : cfg.setEmptyString();
-		this.needsPrims = rawVal != null && rawVal.isPrimitive();
-		this.componentDescriptor = resolveDescriptor(e, mapValueType, Object.class);
-		this.fieldDescriptors = new long[] { this.componentDescriptor };
-		this.childMetas       = componentMetaToObjectMeta(e, fieldDescriptors);
-		this.isComplexComponent = false;
+		final var cfg     = e == null ? null : e.config();
+		this.cacheIndex            = pCacheIndex;
+		this.genericBaseType       = baseTyp;
+		this.genericCompType       = mapValueType;
+		this.className             = "<MAP>";
+		this.metaType              = TYPE_MAP;
+		this.failOnUnknown         = false;
+		this.factory               = null;
+		this.arrayCreator          = null;
+		this.ctorParamCount        = 0;
+		this.permitted             = null;
+		this.baseType              = rawBase;
+		this.keys                  = new FastKeyTable(new byte[0][], new int[0], 0);
+		this.types                 = new Class<?>[] { rawVal };
+		this.components            = new ComponentMeta[0];
+		this.enumConstants         = null;
+		this.skipDefaultValues     = cfg == null ? false : cfg.skipDefaultValues();
+		this.setNumeric0           = cfg == null ? false : cfg.setNumeric0();
+		this.setEmpty              = cfg == null ? false : cfg.setEmpty   ();
+		this.setEmptyString        = cfg == null ? false : cfg.setEmptyString();
+		this.needsPrims            = rawVal != null && rawVal.isPrimitive();
+		this.componentDescriptor   = resolveDescriptor(e, mapValueType, Object.class);
+		this.fieldDescriptors      = new long[] { this.componentDescriptor };
+		this.childMetas            = componentMetaToObjectMeta(e, fieldDescriptors);
+		this.isComplexComponent    = false;
 		// Pre-compile instance creator for custom maps
-		if (rawBase != null && rawBase != Map.class && rawBase != CompactMap.class && !rawBase.isInterface() && !Modifier.isAbstract(rawBase.getModifiers())) {
-			Supplier<Object> sCtor = null;
-			try {
-				final var ctor = rawBase.getDeclaredConstructor();
-				if (!ctor.canAccess(null)) ctor.setAccessible(true);
-				sCtor = () -> { try { return ctor.newInstance(); } catch (final Exception ex) { return null; } };
-			} catch (final Exception ex) { }
-			this.customCollectionStart = sCtor;
-			this.isCustomMapOrSet = sCtor != null;
-		} else {
-			this.customCollectionStart = null;
-			this.isCustomMapOrSet = false;
-		}
+		this.customCollectionStart = supplier(rawBase, CompactMap.class, MAPS);
 	}
 
 	Class<?> type(final int index) { return types[1==types.length?0:index]; }
@@ -351,13 +394,14 @@ final class ObjectMeta {
 	}
 
 	// Overloaded bridge constructors for backward compatibility
-	ObjectMeta(final InternalEngine e, final String pClassName, final Class<?>[] pSubclasses, final String[] pKeys, final Class<?>[] pTypes, final int pCacheIndex) {
-		this(e, null, pClassName, pSubclasses, pKeys, pTypes, null, pCacheIndex);
-	}
+	// ObjectMeta(final InternalEngine e, final String pClassName, final Class<?>[] pSubclasses, final String[] pKeys, final Class<?>[] pTypes, final int pCacheIndex) {
+	// 	this(e, null, pClassName, pSubclasses, pKeys, pTypes, null, pCacheIndex);
+	// }
 
-	ObjectMeta(final InternalEngine e, final Type baseTyp, final String pClassName, final Class<?>[] pSubclasses, final String[] pKeys, final Class<?>[] pTypes, final int pCacheIndex) {
-		this(e, baseTyp, pClassName, pSubclasses, pKeys, pTypes, null, pCacheIndex);
-	}
+	// @Deprecated(forRemoval = true, since = "use with pComponents=null")
+	// ObjectMeta(final InternalEngine e, final Type baseTyp, final String pClassName, final Class<?>[] pSubclasses, final String[] pKeys, final Class<?>[] pTypes, final int pCacheIndex) {
+	// 	this(e, baseTyp, pClassName, pSubclasses, pKeys, pTypes, null, pCacheIndex);
+	// }
 
 	// The unified main constructor for TYPE_SEALED
 	ObjectMeta(final InternalEngine e, final Type baseTyp, final String pClassName, final Class<?>[] pSubclasses, final String[] pKeys, final Class<?>[] pTypes, final ComponentMeta[] pComponents, final int pCacheIndex) {
@@ -380,7 +424,6 @@ final class ObjectMeta {
 		this.keys                  = FastKeyTable.build(possibleComponents);
 		this.types                 = pTypes;
 		this.customCollectionStart = null ;
-		this.isCustomMapOrSet      = false;
 		this.components     = possibleComponents;
 		this.enumConstants  = buildEnumConstants(pTypes);
 		final var cfg = e == null ? null : e.config();
@@ -407,7 +450,6 @@ final class ObjectMeta {
 		try {
 			for (var i = 0; i < comps.length; i++) {
 				final var comp = comps[i];
-				// IMPORTANT: types[i] MUST remain the exact raw JVM class for the bytecode generator...
 				types[i] = comp.getType();
 				var name = comp.getName();
 				if(comp.getAnnotation(org.suche.json.JsonProperty.class) instanceof final org.suche.json.JsonProperty p && !p.value().isEmpty()) name = p.value();
@@ -425,7 +467,7 @@ final class ObjectMeta {
 	}
 
 	static ObjectMeta ofPojo(final InternalEngine engine, final Type genericType, final Class<?> c, final int cacheIndex) {
-		if(c.getCanonicalName().startsWith("java.lang.String")) throw illegalStateException(c.getCanonicalName());
+		if(c.getCanonicalName().startsWith("java.lang.String")) throw illegalStateException(null, c.getCanonicalName());
 		try {
 			final var ctors = c.getDeclaredConstructors();
 			Constructor<?> bestCtor = null;
@@ -467,8 +509,8 @@ final class ObjectMeta {
 		}
 	}
 
-	private static LinkedHashMap<String, Prop> pojoProps(final Type genericContext, final Class<?> c, final Parameter[] params) throws IllegalAccessException {
-		if(c.getCanonicalName().startsWith("java.lang.")) throw illegalStateException(c.getCanonicalName());
+	private static LinkedHashMap<String, Prop> pojoProps(final Type genericContext, final Class<?> c, final Parameter[] params) {
+		if(c.getCanonicalName().startsWith("java.lang.")) throw illegalStateException(null, c.getCanonicalName());
 		final var props = new LinkedHashMap<String, Prop>();
 
 		for (var i = 0; i < params.length; i++) {
@@ -498,7 +540,7 @@ final class ObjectMeta {
 				jsonName = p.value();
 			}
 			if (!props.containsKey(jsonName)) {
-				try { e.setAccessible(true); } catch(final Throwable t) { }
+				try { e.setAccessible(true); } catch(final Throwable _) { }
 				final var resolvedVal = GernericsHandler.extractValueType(e.getGenericType(), genericContext);
 				props.put(jsonName, new Prop(javaName, true, e.getType(), resolvedVal, -1, null));
 			}
@@ -594,8 +636,7 @@ final class ObjectMeta {
 			ctx.cnt = len;
 			yield ctx;
 		}
-		case TYPE_SET                       -> s.takeContext(false);
-		default -> illegalStateException(Integer.toString(metaType));
+		default -> illegalStateException(s, Integer.toString(metaType));
 		};
 	}
 
@@ -603,14 +644,15 @@ final class ObjectMeta {
 		final var ctx = (ParseContext) context;
 		final var cnt = ctx.cnt;
 		if (setEmpty && cnt == 0) { s.returnContext(ctx); return null; }
-		if (isCustomMapOrSet) {
-			final var list = (Collection<Object>) customCollectionStart.get();
-			if (list != null) {
+		if (customCollectionStart != null) {
+			@SuppressWarnings("unchecked")
+			final var c = (Collection<Object>) customCollectionStart.get();
+			if (c != null) {
 				if (ctx.objs != null) {
-					for (var i = 0; i < cnt; i++) list.add(ctx.objs[i]);
+					for (var i = 0; i < cnt; i++) c.add(ctx.objs[i]);
 				}
 				s.returnContext(ctx);
-				return list;
+				return c;
 			}
 		}
 
@@ -660,7 +702,7 @@ final class ObjectMeta {
 			final var ctx = (ParseContext) context;
 			if (setEmpty && ctx.cnt == 0) { s.returnContext(ctx); yield null; }
 			if (ctx.objs == null) yield null;
-			if (isCustomMapOrSet) {
+			if (customCollectionStart != null) {
 				final var map = (Map<Object, Object>) customCollectionStart.get();
 				if (map != null) {
 					for (var i = 0; i < ctx.cnt; i += 2) {
@@ -676,18 +718,6 @@ final class ObjectMeta {
 			final var prims = ctx.prims == null ? null : Arrays.copyOf(ctx.prims, ctx.cnt >> 1);
 			s.returnContext(ctx);
 			yield new CompactMap(ctx.singleType, data, prims);
-		}
-		case TYPE_SET -> {
-			final var ctx = (ParseContext) context;
-			if (setEmpty && ctx.cnt == 0) { s.returnContext(ctx); yield null; }
-			final var set = (Set<Object>) customCollectionStart.get();
-			if (ctx.objs != null) {
-				for (var i = 0; i < ctx.cnt; i++) {
-					if (ctx.objs[i] != null) set.add(ctx.objs[i]);
-				}
-			}
-			s.returnContext(ctx);
-			yield set;
 		}
 		case TYPE_OBJ_ARRAY -> {
 			final var ctx = (ParseContext) context;
@@ -705,19 +735,19 @@ final class ObjectMeta {
 		}
 		case TYPE_COLLECTION -> endCollection(s, context);
 		case TYPE_SEALED     -> SealedUnionMapper.end(s, context, baseType, permitted, keys, types);
-		default -> throw illegalStateException(Integer.toString(metaType));
+		default -> throw illegalStateException(s, Integer.toString(metaType));
 		};
 	}
 
-	private void checkComplexTypeConstraint() {
+	private void checkComplexTypeConstraint(final MetaPool location) {
 		if (isComplexComponent) {
-			throw illegalStateException("Type mismatch: Expected JSON Object for complex type, but got a primitive value");
+			throw illegalStateException(location, "At offset {offset} type mismatch: Expected JSON Object for complex type, but got a primitive value");
 		}
 	}
 
-	private void checkComplexTypeConstraint(final Object value) {
+	private void checkComplexTypeConstraint(final MetaPool location, final Object value) {
 		if (isComplexComponent && (value instanceof String || value instanceof Number || value instanceof Boolean)) {
-			throw illegalStateException("Type mismatch: Expected JSON Object for complex type, but got a primitive value or String");
+			throw illegalStateException(location, "At offset {offset} type mismatch: Expected JSON Object for complex type, but got a primitive value or String");
 		}
 	}
 
@@ -727,8 +757,7 @@ final class ObjectMeta {
 		switch (metaType) {
 		case TYPE_INSTANTIATOR, TYPE_SEALED  -> ((ParseContext)context).prims[index] = v;
 		case TYPE_MAP                        -> ((ParseContext)context).primKeyValue(s, PRIMITIVE.LONG, v);
-		case TYPE_OBJ_ARRAY, TYPE_COLLECTION -> { checkComplexTypeConstraint(); ((ParseContext)context).primIdxValue(s, PRIMITIVE.LONG, v, index); }
-		case TYPE_SET                        -> { checkComplexTypeConstraint(); ((Collection<Object>) context).add(v);                             }
+		case TYPE_OBJ_ARRAY, TYPE_COLLECTION -> { checkComplexTypeConstraint(s); ((ParseContext)context).primIdxValue(s, PRIMITIVE.LONG, v, index); }
 		default -> set(s, context, index, v);
 		}
 	}
@@ -740,8 +769,7 @@ final class ObjectMeta {
 		switch (metaType) {
 		case TYPE_INSTANTIATOR, TYPE_SEALED  -> ((ParseContext)context).prims[index] = bits;
 		case TYPE_MAP                        -> ((ParseContext)context).primKeyValue(s, PRIMITIVE.DOUBLE, bits);
-		case TYPE_OBJ_ARRAY, TYPE_COLLECTION -> { checkComplexTypeConstraint(); ((ParseContext)context).primIdxValue(s, PRIMITIVE.DOUBLE, bits, index); }
-		case TYPE_SET                        -> { checkComplexTypeConstraint(); ((Collection<Object>) context).add(v);                                  }
+		case TYPE_OBJ_ARRAY, TYPE_COLLECTION -> { checkComplexTypeConstraint(s); ((ParseContext)context).primIdxValue(s, PRIMITIVE.DOUBLE, bits, index); }
 		default                              -> set(s, context, index, v);
 		}
 	}
@@ -775,19 +803,14 @@ final class ObjectMeta {
 			ctx.currentKey = null;
 		}
 		case TYPE_OBJ_ARRAY, TYPE_COLLECTION -> {
-			checkComplexTypeConstraint(value);
+			checkComplexTypeConstraint(s, value);
 			final var ctx = (ParseContext) context;
 			ctx.upgradeToMixed(s, index + 1);
 			if (ctx.objs == null || index >= ctx.objs.length) ctx.ensureObjs(s, index + 1);
 			ctx.objs[index] = value;
 			if (index >= ctx.cnt) ctx.cnt = index + 1;
 		}
-		case TYPE_SET -> {
-			checkComplexTypeConstraint(value);
-			((Collection<Object>) context).add(value);
-		}
 		default -> invalidType();
 		}
 	}
-
 }

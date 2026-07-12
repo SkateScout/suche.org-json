@@ -73,7 +73,9 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 
 	private static final String ESCAPE_END = "Unexpected end of stream after escape";
 
-	final void throwInvalid(final String mesg) { throw new IllegalStateException("OFF: "+(readDone+pos)+" "+mesg); }
+	@Override public long offset() { return readDone+pos; }
+
+	final void throwInvalid(final String mesg) { throw new IllegalStateException("OFF: "+(offset())+" "+mesg); }
 
 	final void init(final InputStream i, final InternalEngine c) {
 		final var cfg          = c.config();

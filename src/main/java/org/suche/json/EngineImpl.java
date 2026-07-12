@@ -67,7 +67,6 @@ final class EngineImpl implements InternalEngine {
 	private final ObjectMeta defaultMapMeta       ; // -> ObjectMeta.IDX_MAP
 	private final ObjectMeta genericCollectionMeta;
 	private final ObjectMeta genericArrayMeta;
-	private final ObjectMeta genericSetMeta;
 	private int maxRecursiveDepth = 128;
 	private boolean ignoreTrailing = false;
 	final MetaConfig cfg;
@@ -105,15 +104,13 @@ final class EngineImpl implements InternalEngine {
 	EngineImpl(final MetaConfig config) {
 		this.cfg = config;
 		this.dynamicMetaCache = new ObjectMeta[config.dynamicMetaCacheSize()];
-		this.defaultMapMeta        = new ObjectMeta(this, null, Map.class, ObjectMeta.IDX_MAP);
+		this.defaultMapMeta        = new ObjectMeta(this, null, Map   .class, ObjectMeta.IDX_MAP);
 		this.genericCollectionMeta = new ObjectMeta(this, null, Object.class, ObjectMeta.TYPE_COLLECTION, ObjectMeta.IDX_COLLECTION);
 		this.genericArrayMeta      = new ObjectMeta(this, null, Object.class, ObjectMeta.TYPE_OBJ_ARRAY, ObjectMeta.IDX_OBJ_ARRAY);
-		this.genericSetMeta        = new ObjectMeta(this, null, Object.class, ObjectMeta.TYPE_SET, ObjectMeta.IDX_SET);
 
 		metaCache[ObjectMeta.IDX_MAP       ] = defaultMapMeta;
 		metaCache[ObjectMeta.IDX_COLLECTION] = genericCollectionMeta;
 		metaCache[ObjectMeta.IDX_OBJ_ARRAY ] = genericArrayMeta;
-		metaCache[ObjectMeta.IDX_SET       ] = genericSetMeta;
 		var f = 0;
 		if(config.skipDefaultNulls ()) f |= JsonOutputStream.SKIP_NULL;
 		if(config.skipDefaultValues()) f |= JsonOutputStream.SKIP_FALSE;
@@ -140,7 +137,6 @@ final class EngineImpl implements InternalEngine {
 			final var compType = (rawVal != null && rawVal != Object.class) ? rawVal : rawType.componentType();
 			return this.getDynamicMetaId(rawType, compType, ObjectMeta.TYPE_OBJ_ARRAY);
 		}
-		if (Set       .class.isAssignableFrom(rawType)) return this.getDynamicMetaId(type, valueType, ObjectMeta.TYPE_SET       );
 		if (Collection.class.isAssignableFrom(rawType)) return this.getDynamicMetaId(type, valueType, ObjectMeta.TYPE_COLLECTION);
 		if (Map       .class.isAssignableFrom(rawType)) return this.getDynamicMetaId(type, valueType, ObjectMeta.TYPE_MAP       );
 
@@ -159,7 +155,6 @@ final class EngineImpl implements InternalEngine {
 			return switch (targetMetaType) {
 			case ObjectMeta.TYPE_COLLECTION -> ObjectMeta.IDX_COLLECTION;
 			case ObjectMeta.TYPE_OBJ_ARRAY  -> ObjectMeta.IDX_OBJ_ARRAY;
-			case ObjectMeta.TYPE_SET        -> ObjectMeta.IDX_SET;
 			case ObjectMeta.TYPE_MAP        -> ObjectMeta.IDX_MAP;
 			default                         -> ObjectMeta.IDX_GENERIC;
 			};
@@ -206,9 +201,7 @@ final class EngineImpl implements InternalEngine {
 
 			if (Collection.class.isAssignableFrom(clazz) || Map.class.isAssignableFrom(clazz)) {
 				final var valType = GernericsHandler.extractValueType(type, clazz);
-				final var targetMetaType = Map.class.isAssignableFrom(clazz) ? ObjectMeta.TYPE_MAP :
-					(Set.class.isAssignableFrom(clazz) ? ObjectMeta.TYPE_SET : ObjectMeta.TYPE_COLLECTION);
-
+				final var targetMetaType = Map.class.isAssignableFrom(clazz) ? ObjectMeta.TYPE_MAP : ObjectMeta.TYPE_COLLECTION;
 				// Wenn es eine Custom-Subklasse ist, registrieren wir ein dezidiertes ObjectMeta,
 				// das die konkrete Klasse als baseType mitschreibt!
 				if (!clazz.getName().startsWith("java.util.") && clazz != Map.class && clazz != Set.class && clazz != Collection.class) {
