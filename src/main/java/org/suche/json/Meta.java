@@ -68,6 +68,7 @@ final class Meta {
 	}
 
 	static KeyValueObject createFastFieldIntGetter(final byte[] key, final MethodHandle handle) throws Throwable {
+		// TODO optimize via MethodHandles.filterReturnValue(MethodHandle target, MethodHandle filter)
 		return new KeyValueObject(key, 1, null, obj -> { try { return (int) handle.asType(MT_S_APPLY_INT).invokeExact(obj); } catch (final Throwable x) { throw illegalStateException(x); } }, null, null, null);
 	}
 

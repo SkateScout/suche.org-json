@@ -132,8 +132,61 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		case ObjectMeta.PRIM_LONG    -> parseLongArray(new long[size]);
 		case ObjectMeta.PRIM_INT     -> parseIntArray(new int[size]);
 		case ObjectMeta.PRIM_BOOLEAN -> parseBooleanArray(new boolean[size]);
-		default -> null; // Fallback für char/byte/short
+		case ObjectMeta.PRIM_BYTE    -> parseByteArray(new byte[size]);
+		case ObjectMeta.PRIM_SHORT   -> parseShortArray(new short[size]);
+		case ObjectMeta.PRIM_FLOAT   -> parseFloatArray(new float[size]);
+		case ObjectMeta.PRIM_CHAR    -> parseCharArray(new char[size]);
+		default -> null;
 		};
+	}
+
+	private byte[] parseByteArray(byte[] b) throws IOException {
+		var idx = 0;
+		while (true) {
+			skipWhitespace();
+			if (pos < limit && buffer[pos] == ']') { pos++; lastArraySize = idx; return Arrays.copyOf(b, idx); }
+			if (idx == b.length) b = Arrays.copyOf(b, b.length << 1);
+			b[idx++] = (byte) parseLongPrimitive();
+			consumeCommaIfPresent();
+		}
+	}
+
+	private short[] parseShortArray(short[] b) throws IOException {
+		var idx = 0;
+		while (true) {
+			skipWhitespace();
+			if (pos < limit && buffer[pos] == ']') { pos++; lastArraySize = idx; return Arrays.copyOf(b, idx); }
+			if (idx == b.length) b = Arrays.copyOf(b, b.length << 1);
+			b[idx++] = (short) parseLongPrimitive();
+			consumeCommaIfPresent();
+		}
+	}
+
+	private float[] parseFloatArray(float[] b) throws IOException {
+		var idx = 0;
+		while (true) {
+			skipWhitespace();
+			if (pos < limit && buffer[pos] == ']') { pos++; lastArraySize = idx; return Arrays.copyOf(b, idx); }
+			if (idx == b.length) b = Arrays.copyOf(b, b.length << 1);
+			b[idx++] = (float) parseDoublePrimitive();
+			consumeCommaIfPresent();
+		}
+	}
+
+	private char[] parseCharArray(char[] b) throws IOException {
+		var idx = 0;
+		while (true) {
+			skipWhitespace();
+			if (pos < limit && buffer[pos] == ']') { pos++; lastArraySize = idx; return Arrays.copyOf(b, idx); }
+			if (idx == b.length) b = Arrays.copyOf(b, b.length << 1);
+			if (buffer[pos] == '"') {
+				final var s = parseStringValue();
+				b[idx++] = s.isEmpty() ? '\0' : s.charAt(0);
+			} else {
+				b[idx++] = (char) parseLongPrimitive();
+			}
+			consumeCommaIfPresent();
+		}
 	}
 
 	private double[] parseDoubleArray(double[] b) throws IOException {
@@ -315,7 +368,10 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 	@SuppressWarnings("unchecked")
 	public <T> T readObject(final Type targetType) throws Throwable {
 		skipWhitespace();
-		if (pos >= limit) throwInvalid("Empty JSON document");
+		if (pos >= limit) {
+			if(offset()==0) return null;
+			throwInvalid("Empty JSON document");
+		}
 
 		final var b = buffer[pos];
 		var targetMeta = engine.metaOf(targetType);

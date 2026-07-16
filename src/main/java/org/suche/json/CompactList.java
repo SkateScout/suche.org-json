@@ -135,11 +135,10 @@ public final class CompactList extends AbstractList<Object> implements ContextBa
 		case PRIMITIVE.T_LONG   -> index>=prims.length?fallback:Long  .toString(                        prims[index] );
 		case PRIMITIVE.T_DOUBLE -> index>=prims.length?fallback:Double.toString(Double.longBitsToDouble(prims[index]));
 		default                -> {
-			if(index>=prims.length) yield fallback;
 			final var val = data[index];
 			if(val == null) yield fallback;
-			if(val == PRIMITIVE.LONG)   yield Long  .toString(                        prims[index] );
-			if(val == PRIMITIVE.DOUBLE) yield Double.toString(Double.longBitsToDouble(prims[index]));
+			if(val == PRIMITIVE.LONG)   yield (index>=prims.length ? fallback : Long  .toString(                        prims[index] ));
+			if(val == PRIMITIVE.DOUBLE) yield (index>=prims.length ? fallback : Double.toString(Double.longBitsToDouble(prims[index])));
 			yield data[index].toString();
 		}
 		};

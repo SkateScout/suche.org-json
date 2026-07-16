@@ -34,10 +34,10 @@ final class EngineImpl implements InternalEngine {
 		final Type type;
 		final Class<?> rawClass;
 		final Object   mutex = new Object();
-		ObjectMeta metaObject;
-		KeyValueObject[] kv;
-		UnaryOperator<Object> transformer;
-		int cacheIndex = -1;
+		volatile ObjectMeta            metaObject;
+		volatile KeyValueObject[]      kv;
+		volatile UnaryOperator<Object> transformer;
+		volatile int                   cacheIndex = -1;
 		boolean building = false; // Prevents circular dependency infinite loops
 
 		public TypeRecord(final Type t) {
@@ -178,6 +178,25 @@ final class EngineImpl implements InternalEngine {
 		return m.cacheIndex;
 	}
 
+	static boolean isJDKClass(final Class<?> clazz) {
+		if (clazz == null) return false;
+		final var name = clazz.getName();
+
+		// Wenn es keine offizielle Java/JDK-Klasse ist, direkt erlauben
+		if (!name.startsWith("java.") && !name.startsWith("javax.") &&
+				!name.startsWith("sun.") && !name.startsWith("com.sun.")) {
+			return false;
+		}
+
+		// WICHTIG: Standard-Collections und Maps MÜSSEN erlaubt bleiben!
+		if (Collection.class.isAssignableFrom(clazz) || Map.class.isAssignableFrom(clazz)) {
+			return false;
+		}
+
+		// Alles andere aus dem JDK (wie GregorianCalendar, Date, Thread etc.) ist KEIN Pojo!
+		return true;
+	}
+
 	// 4. The core: metaIdOf with native GenericsHandler integration
 	int metaIdOf(final Type type) {
 		if (type == null || type == Object.class) return ObjectMeta.IDX_MAP;
@@ -226,7 +245,7 @@ final class EngineImpl implements InternalEngine {
 
 			final ObjectMeta r;
 			if (clazz.isSealed()) r = SealedUnionMapper.build(this, clazz, t.cacheIndex);
-			else if ((clazz.isPrimitive() || clazz.isArray() || 0 != (clazz.getModifiers() & MOG_IGNORE)) || clazz.getCanonicalName().startsWith("java.lang.")) r = ObjectMeta.NULL;
+			else if ((clazz.isPrimitive() || clazz.isArray() || 0 != (clazz.getModifiers() & MOG_IGNORE)) || isJDKClass(clazz)) r = ObjectMeta.NULL;
 			else if (clazz.isRecord()) r = ObjectMeta.ofRecord(this, type, clazz.asSubclass(Record.class), t.cacheIndex);
 			else if (clazz.isEnum  ()) r = ObjectMeta.ofEnum(this, clazz.asSubclass(Enum.class), t.cacheIndex);
 			else r = ObjectMeta.ofPojo(this, type, clazz, t.cacheIndex);

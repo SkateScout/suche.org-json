@@ -53,7 +53,10 @@ record KeyValueObject(
 	static int addComponent(final KeyValueObject[] result, int cnt, final RecordComponent comp, final BiFunction<String, RecordComponent, Object> mapComponent) {
 		Filter filter = null;
 		var name = comp.getName();
-		if(comp.getAnnotation(org.suche.json.JsonProperty.class) instanceof final org.suche.json.JsonProperty p && !p.value().isEmpty()) name = p.value();
+		if(comp.getAnnotation(org.suche.json.JsonProperty.class) instanceof final org.suche.json.JsonProperty p) {
+			if(p.skip()) return cnt;
+			if(!p.value().isEmpty()) name = p.value();
+		}
 		if(mapComponent != null)
 			try {
 				switch(mapComponent.apply(name,comp)) {
@@ -69,10 +72,9 @@ record KeyValueObject(
 				throw new IllegalStateException(t);
 			}
 		try {
-			result[cnt++] = Meta.createFastGetter(JSONString.buildJsonKey(name, true), comp.getAccessor(), filter);
-		} catch (final Throwable e) {
-			LOG.log(Level.SEVERE, e, ()->"Failed to access record component: " + comp.getDeclaringRecord().getCanonicalName() + "." + comp.getName() + "=> " + e.getMessage());
-		}
+			result[cnt] = Meta.createFastGetter(JSONString.buildJsonKey(name, true), comp.getAccessor(), filter);
+			cnt++;
+		} catch (final Throwable e) { LOG.log(Level.SEVERE, e, ()->"Failed to access record component: " + comp.getDeclaringRecord().getCanonicalName() + "." + comp.getName() + "=> " + e.getMessage()); }
 		return cnt;
 	}
 
@@ -105,10 +107,9 @@ record KeyValueObject(
 
 		if (seenKeys.add(name))
 			try {
-				result[cnt++] = Meta.createFastGetter(JSONString.buildJsonKey(name, true), m, filter);
-			} catch (final Throwable e) {
-				LOG.log(Level.WARNING, e, ()->"Failed to build fast getter for: " + m.getDeclaringClass()+"." +m.getName());
-			}
+				result[cnt] = Meta.createFastGetter(JSONString.buildJsonKey(name, true), m, filter);
+				cnt++;
+			} catch (final Throwable e) { LOG.log(Level.WARNING, e, ()->"Failed to build fast getter for: " + m.getDeclaringClass()+"." +m.getName()); }
 		return cnt;
 	}
 
@@ -119,10 +120,15 @@ record KeyValueObject(
 					&& !Modifier.isStatic(m.getModifiers())) {
 				final var methodName = m.getName();
 				var name = methodName;
+
 				if      (name.startsWith("get") && name.length() > 3 &&  m.getReturnType() != void.class)                                           name = Character.toLowerCase(name.charAt(3)) + name.substring(4);
 				else if (name.startsWith("is")  && name.length() > 2 && (m.getReturnType() == boolean.class || m.getReturnType() == Boolean.class)) name = Character.toLowerCase(name.charAt(2)) + name.substring(3);
 				else continue;
-				cnt += registerComplexMethod(result, cnt, m, name, seenKeys, mapMethod);
+				if(m.getAnnotation(JsonProperty.class) instanceof final JsonProperty a) {
+					if(a.skip()) continue;
+					if(!a.value().isEmpty()) name = a.value();
+				}
+				cnt = registerComplexMethod(result, cnt, m, name, seenKeys, mapMethod);
 			}
 		}
 		return cnt;
@@ -147,10 +153,9 @@ record KeyValueObject(
 			}
 		if(seenKeys.add(name)) // Prefer getter
 			try {
-				result[cnt++] = Meta.createFastFieldGetter(JSONString.buildJsonKey(name, true), f, filter);
-			} catch (final Throwable e) {
-				LOG.log(Level.WARNING, e, () -> "Failed to build fast field getter for: {}" + f.getDeclaringClass().getCanonicalName() + "." + f.getName());
-			}
+				result[cnt] = Meta.createFastFieldGetter(JSONString.buildJsonKey(name, true), f, filter);
+				cnt++;
+			} catch (final Throwable e) { LOG.log(Level.WARNING, e, () -> "Failed to build fast field getter for: {}" + f.getDeclaringClass().getCanonicalName() + "." + f.getName()); }
 		return cnt;
 	}
 

@@ -60,7 +60,10 @@ final class ObjectMeta {
 	static         final int PRIM_DOUBLE       = 3;
 	static         final int PRIM_FLOAT        = 4;
 	static         final int PRIM_BOOLEAN      = 5;
-	static         final int PRIM_OTHER        = 6;
+	static         final int PRIM_BYTE         = 6; // NEU
+	static         final int PRIM_SHORT        = 7; // NEU
+	static         final int PRIM_CHAR         = 8; // NEU
+	static         final int PRIM_OTHER        = 9;
 	static         final ObjectMeta           DEFECT_FIRST        = new ObjectMeta(-1);
 	static         final ObjectMeta           DEFECT              = new ObjectMeta(-1);
 	static         final RuntimeException     E_DEFEKT2           = new RuntimeException("DEFEKT.2", null, false, false) { };
@@ -165,6 +168,9 @@ final class ObjectMeta {
 		if (type == double.class ) return PRIM_DOUBLE;
 		if (type == float.class  ) return PRIM_FLOAT;
 		if (type == boolean.class) return PRIM_BOOLEAN;
+		if (type == byte.class   ) return PRIM_BYTE;
+		if (type == short.class  ) return PRIM_SHORT;
+		if (type == char.class   ) return PRIM_CHAR;
 		return PRIM_OTHER;
 	}
 
