@@ -863,14 +863,17 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 				final var hasQuote  = (quoteX  - JSONString.SWARN) & ~quoteX;
 				final var has = (hasStruct | hasQuote) & JSONString.NON_ASCII_PATTERN;
 				final var bitOffset = Long.numberOfTrailingZeros(has);
-				pos += (bitOffset >>> 3);
-				if (has != 0) {
-					final var c = (byte) (word >>> bitOffset);
-					pos++;
-					if (c == '"') { skipString(); continue; }
-					curDepth += (c & 2) - 1;
-				}
-				if (curDepth == 0) return;
+
+				final var offset = bitOffset >>> 3;
+			pos += offset;
+			if (has != 0) {
+				// Korrekter Shift um Vielfache von 8 Bits
+				final var c = (byte) (word >>> (offset << 3));
+				pos++;
+				if (c == '"') { skipString(); continue; }
+				curDepth += (c & 2) - 1;
+			}
+			if (curDepth == 0) return;
 			}
 			pos = limit;
 			ensure(16);

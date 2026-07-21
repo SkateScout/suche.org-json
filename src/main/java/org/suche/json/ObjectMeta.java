@@ -189,6 +189,21 @@ final class ObjectMeta {
 		throw new IllegalStateException(m);
 	}
 
+	static class JsonException extends RuntimeException {
+		private static final long serialVersionUID = 1L;
+		private final StackTraceElement[] trace;
+		JsonException(final String mesg, final StackTraceElement[] ste) { super(mesg, null, false, false); this.trace = ste; }
+		@Override public StackTraceElement[] getStackTrace() { return trace; }
+		@Override public void setStackTrace(final StackTraceElement[] stackTrace) { }
+		@Override public synchronized Throwable fillInStackTrace() { return this; }
+	}
+
+	private IllegalStateException invalidKeyException(final MetaPool location, final String mesg, final String key, final StackTraceElement[] trace) {
+		var m = mesg;
+		if(location != null) m = m.replace("{offset}", Long.toString(location.offset()));
+		throw new JsonException(m.replace("{classsName}", className).replace("{key}",key), trace);
+	}
+
 	private IllegalStateException invalidKeyException(final String mesg, final String key) {
 		throw new IllegalStateException(mesg.replace("{classsName}", className).replace("{key}",key));
 	}
@@ -765,7 +780,7 @@ final class ObjectMeta {
 		}
 	}
 
-	@SuppressWarnings("unchecked")
+	// @SuppressWarnings("unchecked")
 	void setLong(final MetaPool s, final Object context, final int index, final long v) {
 		if (setNumeric0 && v == 0L) return;
 		switch (metaType) {
@@ -776,7 +791,7 @@ final class ObjectMeta {
 		}
 	}
 
-	@SuppressWarnings("unchecked")
+	// @SuppressWarnings("unchecked")
 	void setDouble(final MetaPool s, final Object context, final int index, final double v) {
 		if (setNumeric0 && v == 0.0) return;
 		final var bits = Double.doubleToRawLongBits(v);
@@ -788,28 +803,59 @@ final class ObjectMeta {
 		}
 	}
 
-	@SuppressWarnings("unchecked")
-	void set(final MetaPool s, final Object context, final int index, Object value) {
-		if (value == null && setEmpty && metaType != TYPE_OBJ_ARRAY && metaType != TYPE_COLLECTION) return;
-		if (value instanceof final String t && t.isEmpty() && !setEmptyString) return;
-
-		switch (metaType) {
-		case TYPE_INSTANTIATOR, TYPE_SEALED -> {
-			if (value == null) {
-				final var targetType = components[index].type();
-				if (targetType.isPrimitive()) value = (targetType == boolean.class ? Boolean.FALSE : 0);
-			} else {
-				if (components[index].type() == boolean.class) {
-					((ParseContext)context).prims[index] = ((Boolean) value) ? 1 : 0;
+	void primitiveCoercion(final MetaPool s, final ParseContext pc, final int index, final Class<?> targetType, final Object value) {
+		if (value == null) {
+			if (targetType.isPrimitive()) {
+				if(targetType == boolean.class) {
+					pc.prims[index] = 0;
+					pc.objs[index] = Boolean.FALSE;
 					return;
 				}
-				if (this.enumConstants != null && this.enumConstants[index] != null) {
-					value = Meta.resolveEnum(this.enumConstants[index], value);
-				}
+				pc.prims[index] = 0;
 			}
-			((ParseContext) context).objs[index] = value;
+			return;
+		}
+		if (targetType == boolean.class) {
+			switch(value) {
+			case final Boolean t -> pc.prims[index] = t ? 1 : 0;
+			case final String  t -> {
+				if     ("true" .equalsIgnoreCase(t) || "1".equalsIgnoreCase(t)) pc.prims[index] = 1;
+				else if("false".equalsIgnoreCase(t) || "0".equalsIgnoreCase(t)) pc.prims[index] = 0;
+				else throw illegalStateException(s, "Invalid boolean");
+			}
+			default        -> throw illegalStateException(s, "Invalid boolean");
+			}
+			return;
+		}
+		if (value instanceof final String str) {
+			if(str.isEmpty()) { pc.prims[index] = 0; return; }
+			try {
+				if (targetType == double.class || targetType == float.class) pc.prims[index] = Double.doubleToRawLongBits(Double.parseDouble(str));
+				else                                                         pc.prims[index] = Long.parseLong(str);
+			} catch (final NumberFormatException e) {
+				throw invalidKeyException(s, "Invalid primitive {key}", str, e.getStackTrace());
+			}
+		}
+	}
+
+	// @SuppressWarnings("unchecked")
+	void set(final MetaPool s, final Object context, final int index, Object value) {
+		switch (metaType) {
+		case TYPE_INSTANTIATOR, TYPE_SEALED -> {
+			final var targetType = components[index].type();
+			final var pc = (ParseContext)context;
+			if(targetType.isPrimitive()) { primitiveCoercion(s, pc, index, targetType, value); return; }
+			if (value == null) {
+				pc.objs [index] = null;
+				pc.prims[index] = 0;
+				return;
+			}
+			if (this.enumConstants != null && this.enumConstants[index] != null) value = Meta.resolveEnum(this.enumConstants[index], value);
+			pc.objs[index] = value;
 		}
 		case TYPE_MAP -> {
+			if (value == null && setEmpty && metaType != TYPE_OBJ_ARRAY && metaType != TYPE_COLLECTION) return;
+			if (value instanceof final String t && t.isEmpty() && !setEmptyString) return;
 			final var ctx = (ParseContext) context;
 			ctx.upgradeToMixed(s, ctx.cnt + 2);
 			ctx.objs[ctx.cnt++] = ctx.currentKey;
@@ -817,6 +863,8 @@ final class ObjectMeta {
 			ctx.currentKey = null;
 		}
 		case TYPE_OBJ_ARRAY, TYPE_COLLECTION -> {
+			if (value == null && setEmpty && metaType != TYPE_OBJ_ARRAY && metaType != TYPE_COLLECTION) return;
+			if (value instanceof final String t && t.isEmpty() && !setEmptyString) return;
 			checkComplexTypeConstraint(s, value);
 			final var ctx = (ParseContext) context;
 			ctx.upgradeToMixed(s, index + 1);
