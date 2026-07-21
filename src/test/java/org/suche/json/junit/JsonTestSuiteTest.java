@@ -6,23 +6,53 @@ import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 import org.junit.jupiter.api.Test;
+import org.suche.json.JSONObject;
 import org.suche.json.JsonEngine;
 import org.suche.json.MetaConfig;
 
 public class JsonTestSuiteTest {
-
-
 	public sealed interface SealedInterface permits ClassA, ClassB {}
 	public record ClassA(String name, int power) implements SealedInterface {}
 	public record ClassB(String name, int count, int power) implements SealedInterface {}
 	public record ContainerObject(java.util.List<SealedInterface> units) {}
 
+	public record DataEntry(String data) { }
+
+	private static final String FIXED_JSON= """
+			{"l":{"A":[{"data":"127.001"}],"AAAA":[{"data":"::1"}]}}
+			""";
+
+	public static final class MyCacheMax extends ConcurrentHashMap<String, ConcurrentHashMap<String, CopyOnWriteArrayList<DataEntry>>> {
+		private static final long serialVersionUID = 1L;
+
+	}
+
+	public static void main(final String[] argc) {
+		// final var ls = JsonEngine.of(Path.of("/FOE-Proxy/logSetup.json"), LogConfig.class);
+
+		final var c  = JsonEngine.of(FIXED_JSON, JSONObject.class);
+		System.out.println("C "+c);
+		final var ca  = JsonEngine.of(FIXED_JSON, MyCacheMax.class);
+		System.out.println("Ca "+ca);
+	}
+
 	@Test
 	public void testSealedInterfacePolymorphism() {
+
+
+
+		final var c0 = JsonEngine.of(FIXED_JSON, MyCacheMax.class);
+		final var c1 = c0.get("l");
+		final var c2 = c1.get("A");
+		final var c3 = c2.get(0);
+
+
 		final var json = """
 				{
 				  "units": [
