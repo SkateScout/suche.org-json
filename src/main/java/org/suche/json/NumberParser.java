@@ -93,11 +93,18 @@ final class NumberParser {
 				final var non_digits = (val | (val + 0x0606060606060606L)) & 0xF0F0F0F0F0F0F0F0L;
 				final var len = Long.numberOfTrailingZeros(non_digits) >>> 3;
 
-				if (sigDigits + len > 18) {
-					// --- DEIN REGISTER DRAIN ---
-					final var fill = 18 - sigDigits;
-					for (var i = 0; i < fill; i++) lNumberVal = lNumberVal * 10L + ((val >>> (i << 3)) & 0xFF);
-					sigDigits = 18;
+
+
+				if (sigDigits + len > 19) {
+					// --- DEIN REGISTER DRAIN (Erst ab der 20. Ziffer!) ---
+					final var fill = 19 - sigDigits;
+					for (var i = 0; i < fill; i++) {
+						final var digit = (val >>> (i << 3)) & 0xFF;
+						// Schutz vor echtem Long.MAX_VALUE Überlauf im 19. Byte
+						if (sigDigits + i == 18 && lNumberVal > 922337203685477580L) break;
+						lNumberVal = lNumberVal * 10L + digit;
+					}
+					sigDigits = 19;
 
 					final var overflow = len - fill;
 					lVirtualExp += overflow;
@@ -121,8 +128,20 @@ final class NumberParser {
 					break;
 				}
 
-				// Es passt doch noch genau rein (z.B. sigDigits war 12, len ist 4 -> 16 <= 18)
+				// Es sind <= 19 Ziffern: Perfekt für nativer Long-Math!
 				if (len > 0) {
+					// Sicherheits-Check für die exakt 19. Ziffer bei extrem großen Zahlen > 9.22 Trillionen
+					if (sigDigits + len == 19 && lNumberVal > 922337203685477580L) {
+						// Fallback in den Drain für die extrem seltenen > Long.MAX_VALUE Integers
+						final var fill = 18 - sigDigits;
+						for (var i = 0; i < fill; i++) lNumberVal = lNumberVal * 10L + ((val >>> (i << 3)) & 0xFF);
+						sigDigits = 18;
+						lVirtualExp += (len - fill);
+						pos += len;
+						if (len < 8) { stopCharFound = (byte) (word >>> (len << 3)); break; }
+						continue;
+					}
+
 					var chunk = val << (64 - (len << 3));
 					chunk = (chunk & 0x00FF00FF00FF00FFL) * 10 + ((chunk >>> 8) & 0x00FF00FF00FF00FFL);
 					chunk = (chunk & 0x0000FFFF0000FFFFL) * 100 + ((chunk >>> 16) & 0x0000FFFF0000FFFFL);

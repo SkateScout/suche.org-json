@@ -40,13 +40,37 @@ final class ObjectMeta {
 	private static final int                  MOD_FINAL_OR_STATIC = Modifier.STATIC | Modifier.FINAL;
 	private static final Supplier<Object>     NO_POJO_START       = null;
 	private static final Class<?>[]           ENUM_TYPES          = { String.class, String.class };
-
+	static         final int PRIM_INT          = 1;
+	static         final int PRIM_LONG         = 2;
+	static         final int PRIM_DOUBLE       = 3;
+	static         final int PRIM_FLOAT        = 4;
+	static         final int PRIM_BOOLEAN      = 5;
+	static         final int PRIM_BYTE         = 6;
+	static         final int PRIM_SHORT        = 7;
+	static         final int PRIM_CHAR         = 8;
+	static         final int PRIM_OTHER        = 9;
 	static         final int          IDX_GENERIC    = 0;	// Must be 0 for speedup with bit checks
 	static         final int          IDX_MAP        = 1;
 	static         final int          IDX_COLLECTION = 2;
 	static         final int          IDX_OBJ_ARRAY  = 4;
-	static         final long DESC_COLLECTION = EngineImpl.createTypeDesc(true, false, IDX_COLLECTION);
-	static         final long DESC_OBJ_ARRAY  = EngineImpl.createTypeDesc(true, false, IDX_OBJ_ARRAY);
+	// Bestehende 64-Bit Deskriptoren für die Engine-Logik:
+	static final long DESC_COLLECTION   = (((long) IDX_COLLECTION) << 1) | 0x8000000000000000L;
+	static final long DESC_OBJ_ARRAY    = (((long) IDX_OBJ_ARRAY)  << 1) | 0x8000000000000000L;
+	static final long DESC_BYTE_ARRAY   = (((long) PRIM_BYTE)      << 1) | 0x8000000000000001L;
+	static final long DESC_PRIM_INT     = (((long) PRIM_INT)       << 1) | 1L;
+	static final long DESC_PRIM_LONG    = (((long) PRIM_LONG)      << 1) | 1L;
+	static final long DESC_PRIM_DOUBLE  = (((long) PRIM_DOUBLE)    << 1) | 1L;
+	static final long DESC_PRIM_FLOAT   = (((long) PRIM_FLOAT)     << 1) | 1L;
+	static final long DESC_PRIM_BOOLEAN = (((long) PRIM_BOOLEAN)   << 1) | 1L;
+
+	// NEU: Exakte 32-Bit int-Konstanten für den Switch (schneidet Bit 63 zur Compile-Zeit ab):
+	static final int SW_BYTE_ARRAY   = (int) DESC_BYTE_ARRAY;   // 13
+	static final int SW_PRIM_INT     = (int) DESC_PRIM_INT;     // 3
+	static final int SW_PRIM_LONG    = (int) DESC_PRIM_LONG;    // 5
+	static final int SW_PRIM_DOUBLE  = (int) DESC_PRIM_DOUBLE;  // 7
+	static final int SW_PRIM_FLOAT   = (int) DESC_PRIM_FLOAT;   // 9
+	static final int SW_PRIM_BOOLEAN = (int) DESC_PRIM_BOOLEAN; // 11
+
 	static         final int  IDX_CUSTOM_START = 16;
 	static         final int  TYPE_INSTANTIATOR = 1;
 	static         final int  TYPE_MAP          = 2;
@@ -55,15 +79,6 @@ final class ObjectMeta {
 	static         final int  TYPE_OBJ_ARRAY    = 6;
 	static         final int  TYPE_COLLECTION   = 7;
 
-	static         final int PRIM_INT          = 1;
-	static         final int PRIM_LONG         = 2;
-	static         final int PRIM_DOUBLE       = 3;
-	static         final int PRIM_FLOAT        = 4;
-	static         final int PRIM_BOOLEAN      = 5;
-	static         final int PRIM_BYTE         = 6; // NEU
-	static         final int PRIM_SHORT        = 7; // NEU
-	static         final int PRIM_CHAR         = 8; // NEU
-	static         final int PRIM_OTHER        = 9;
 	static         final ObjectMeta           DEFECT_FIRST        = new ObjectMeta(-1);
 	static         final ObjectMeta           DEFECT              = new ObjectMeta(-1);
 	static         final RuntimeException     E_DEFEKT2           = new RuntimeException("DEFEKT.2", null, false, false) { };
@@ -99,7 +114,6 @@ final class ObjectMeta {
 	final Type genericCompType;
 
 	final ComponentMeta[] components;
-
 
 	private static final class Defect extends RuntimeException implements Supplier<Object> {
 		private static final long serialVersionUID = 1L;
@@ -144,6 +158,7 @@ final class ObjectMeta {
 		return ret;
 	}
 
+	@SuppressWarnings("unchecked")
 	private static Supplier<Object> builder(final Class<?> rawBase, final Class<?> standard, final D[] defaults) {
 		if(rawBase == null || rawBase.isAssignableFrom(standard)) return null;		// Collection, List, JSONArray, AbstractList, AbstractCollection
 		try {
@@ -623,6 +638,7 @@ final class ObjectMeta {
 	}
 
 	ComponentMeta[] components() { return components; }
+	public Class<?> typeOf(final int index) { return (components==null||index<0||index>=components.length ? Object.class : this.components[index].type()); }
 
 	int prepareKey(final int hash, final byte[] buffer, final int off, final int len) {
 		if (metaType == TYPE_MAP) return -1;
@@ -803,53 +819,12 @@ final class ObjectMeta {
 		}
 	}
 
-	void primitiveCoercion(final MetaPool s, final ParseContext pc, final int index, final Class<?> targetType, final Object value) {
-		if (value == null) {
-			if (targetType.isPrimitive()) {
-				if(targetType == boolean.class) {
-					pc.prims[index] = 0;
-					pc.objs[index] = Boolean.FALSE;
-					return;
-				}
-				pc.prims[index] = 0;
-			}
-			return;
-		}
-		if (targetType == boolean.class) {
-			switch(value) {
-			case final Boolean t -> pc.prims[index] = t ? 1 : 0;
-			case final String  t -> {
-				if     ("true" .equalsIgnoreCase(t) || "1".equalsIgnoreCase(t)) pc.prims[index] = 1;
-				else if("false".equalsIgnoreCase(t) || "0".equalsIgnoreCase(t)) pc.prims[index] = 0;
-				else throw illegalStateException(s, "Invalid boolean");
-			}
-			default        -> throw illegalStateException(s, "Invalid boolean");
-			}
-			return;
-		}
-		if (value instanceof final String str) {
-			if(str.isEmpty()) { pc.prims[index] = 0; return; }
-			try {
-				if (targetType == double.class || targetType == float.class) pc.prims[index] = Double.doubleToRawLongBits(Double.parseDouble(str));
-				else                                                         pc.prims[index] = Long.parseLong(str);
-			} catch (final NumberFormatException e) {
-				throw invalidKeyException(s, "Invalid primitive {key}", str, e.getStackTrace());
-			}
-		}
-	}
-
 	// @SuppressWarnings("unchecked")
 	void set(final MetaPool s, final Object context, final int index, Object value) {
 		switch (metaType) {
 		case TYPE_INSTANTIATOR, TYPE_SEALED -> {
-			final var targetType = components[index].type();
 			final var pc = (ParseContext)context;
-			if(targetType.isPrimitive()) { primitiveCoercion(s, pc, index, targetType, value); return; }
-			if (value == null) {
-				pc.objs [index] = null;
-				pc.prims[index] = 0;
-				return;
-			}
+			if (value == null) { pc.objs [index] = null; pc.prims[index] = 0; return; }
 			if (this.enumConstants != null && this.enumConstants[index] != null) value = Meta.resolveEnum(this.enumConstants[index], value);
 			pc.objs[index] = value;
 		}

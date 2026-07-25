@@ -43,7 +43,10 @@ public class JsonSerializationBenchmark {
 	private ByteArrayOutputStream myOs;
 	private ByteArrayOutputStream jacksonOs;
 
-	@Param({"canada.json", "citm_catalog.json", "twitter.json"})
+	@Param({
+		// "canada.json", "citm_catalog.json",
+		"twitter.json"
+	})
 	public String fileName;
 
 	@Setup(Level.Trial)
@@ -61,7 +64,7 @@ public class JsonSerializationBenchmark {
 		testData = jacksonMapper.readValue(jsonData, Object.class);
 	}
 
-	@Benchmark
+	// @Benchmark
 	public void benchmarkJackson(final Blackhole bh) throws Exception {
 		jacksonOs.reset();
 		jacksonMapper.writeValue(jacksonOs, testData);
@@ -82,8 +85,7 @@ public class JsonSerializationBenchmark {
 		bh.consume(myOs.size());
 	}
 
-	@Benchmark
-	@Fork(value = 1)
+	// @Benchmark @Fork(value = 1)
 	public void benchmarkMyEngineAddOpens(final Blackhole bh) throws Exception {
 		myOs.reset();
 		try (var s = myEngine.jsonOutputStream(myOs)) { s.writeObject(testData); }

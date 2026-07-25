@@ -1,11 +1,16 @@
 package org.suche.json.junit;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.Base64;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.zip.ZipEntry;
@@ -24,6 +29,9 @@ public class JsonTestSuiteTest {
 
 	public record DataEntry(String data) { }
 
+	public record Base64Payload(byte[] data, String Type, int id) { }
+	public record Base64Container(byte[] data) { }
+
 	private static final String FIXED_JSON= """
 			{"l":{"A":[{"data":"127.001"}],"AAAA":[{"data":"::1"}]}}
 			""";
@@ -34,8 +42,6 @@ public class JsonTestSuiteTest {
 	}
 
 	public static void main(final String[] argc) {
-		// final var ls = JsonEngine.of(Path.of("/FOE-Proxy/logSetup.json"), LogConfig.class);
-
 		final var c  = JsonEngine.of(FIXED_JSON, JSONObject.class);
 		System.out.println("C "+c);
 		final var ca  = JsonEngine.of(FIXED_JSON, MyCacheMax.class);
@@ -43,10 +49,48 @@ public class JsonTestSuiteTest {
 	}
 
 	@Test
+	public void testBase64EdgeCases() {
+		final var expectedBytes = "Hallo Base64 World!".getBytes(StandardCharsets.UTF_8);
+		final var base64Standard = Base64.getEncoder().encodeToString(expectedBytes);
+
+		// 1. Standard-Base64 mit direkt folgendem Key, der mit 'T' beginnt (Pointer-Overshoot Test)
+		final var jsonStandard = """
+				{
+				  "data": "%s",
+				  "Type": "TestType",
+				  "id": 42
+				}
+				""".formatted(base64Standard);
+
+		final var res1 = JsonEngine.of(jsonStandard, Base64Payload.class);
+		assertNotNull(res1);
+		assertArrayEquals(expectedBytes, res1.data());
+		assertEquals("TestType", res1.Type());
+		assertEquals(42, res1.id());
+
+		// 3. Leeres Base64-Feld ("")
+		final var jsonEmpty = """
+				{
+				  "data": ""
+				}
+				""";
+
+		final var res3 = JsonEngine.of(jsonEmpty, Base64Container.class);
+		assertNotNull(res3);
+		assertArrayEquals(new byte[0], res3.data());
+
+		// 4. Invalides Base64-Zeichen oder unvollständiger Payload
+		final var jsonInvalid = """
+				{
+				  "data": "A===InvalidBase64==="
+				}
+				""";
+
+		assertThrows(Throwable.class, () -> JsonEngine.of(jsonInvalid, Base64Container.class));
+	}
+
+	@Test
 	public void testSealedInterfacePolymorphism() {
-
-
-
 		final var c0 = JsonEngine.of(FIXED_JSON, MyCacheMax.class);
 		final var c1 = c0.get("l");
 		final var c2 = c1.get("A");

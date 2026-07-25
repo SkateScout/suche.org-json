@@ -11,59 +11,60 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.temporal.Temporal;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Date;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BiConsumer;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 public final class JsonOutputStream implements AutoCloseable {
+	public enum Flags { printNull, printFalse, printEmpty, printOneFractional, printThreeFractional, enumObject }
 	private static final Supplier<Object> ERROR = () -> { throw new IllegalStateException("Cyclic reference"); };
 	private static final java.lang.invoke.VarHandle SHORT_VIEW = JSONStringAddOpens.SHORT_VIEW;
 	private static final java.lang.invoke.VarHandle INT_VIEW = JSONStringAddOpens.INT_VIEW;
 	private static final short[] DIGITS_S = new short[100];
-	static {
-		for (var i = 0; i < 100; i++) {
-			final var tens = (i / 10) + '0';
-			final var ones = (i % 10) + '0';
-			DIGITS_S[i] = (short) ((ones << 8) | tens);
-		}
-	}
-	private static final int    BUFFER_SIZE = 128 * 1024;
+	static {  for (var i = 0; i < 100; i++) { final var tens = (i / 10) + '0'; final var ones = (i % 10) + '0'; DIGITS_S[i] = (short) ((ones << 8) | tens); } }
+	private static final int        BUFFER_SIZE = 128 * 1024;
 	private static final ObjectPool<JsonOutputStream> STREAM_POOL = new ObjectPool<>(64, JsonOutputStream::new);
-
-	private static final short COMMA_QUOTE = 0x222C;
-	private static final short QUOTE_COLON = 0x3A22;
-	private static final short EMPTY_ARRAY = 0x5D5B;
-	private static final int   TRUE_MAGIC  = 0x65757274;
-	private static final int   FALSE_MAGIC = 0x736C6166;
-	private static final int   NULL_MAGIC  = 0x6C6C756E;
-
-	private static final byte[] MIN_LONG    = "-9223372036854775808".getBytes();
-	private static final long[] POW10_L = {
-			1L, 10L, 100L, 1000L, 10000L, 100000L, 1000000L, 10000000L, 100000000L,
-			1000000000L, 10000000000L, 100000000000L, 1000000000000L, 10000000000000L,
-			100000000000000L, 1000000000000000L, 10000000000000000L, 100000000000000000L, 1000000000000000000L
-	};
-	private static final Object EXHAUSTED   = new Object();
-	private static final byte   TYPE_COL           = 2;
-	private static final byte   TYPE_RECORD        = 3;
-	private static final byte   TYPE_ARRAY         = 4;
-	private static final byte   TYPE_LIST          = 5;
-	private static final byte   TYPE_COMPACT_MAP   = 6;
-	private static final byte   TYPE_OBJ_ARRAY     = 7;
-	private static final byte   TYPE_POOLED_MAP    = 8;
-	public  static final int    SKIP_NULL          = 1 << Flags.printNull         .ordinal();
-	public  static final int    SKIP_FALSE         = 1 << Flags.printFalse        .ordinal();
-	public  static final int    SKIP_EMPTY         = 1 << Flags.printEmpty        .ordinal();
-	public  static final int    ENUM_OBJECT        = 1 << Flags.enumObject        .ordinal();
-	public  static final int    PRINT_1_FRACTIONAL = 1 << Flags.printOneFractional.ordinal();
-	public  static final int    PRINT_3_FRACTIONAL = 1 << Flags.printOneFractional.ordinal();
-
-	private InternalEngine engine;
+	private static final short      COMMA_QUOTE        = 0x222C;
+	private static final short      QUOTE_COLON        = 0x3A22;
+	private static final short      EMPTY_ARRAY        = 0x5D5B;
+	private static final int        TRUE_MAGIC         = 0x65757274;
+	private static final int        FALSE_MAGIC        = 0x736C6166;
+	private static final int        NULL_MAGIC         = 0x6C6C756E;
+	private static final byte[]     MIN_INT            = "-2147483648".getBytes();
+	private static final byte[]     MIN_LONG           = "-9223372036854775808".getBytes();
+	private static final long[]     POW10_L            = { 1L, 10L, 100L, 1000L, 10000L, 100000L, 1000000L, 10000000L, 100000000L, 1000000000L, 10000000000L,
+			100000000000L, 1000000000000L, 10000000000000L, 100000000000000L, 1000000000000000L, 10000000000000000L, 100000000000000000L, 1000000000000000000L };
+	private static final Object     EXHAUSTED   = new Object();
+	private static final byte       TYPE_COL           = 2;
+	private static final byte       TYPE_RECORD        = 3;
+	private static final byte       TYPE_ARRAY         = 4;
+	private static final byte       TYPE_LIST          = 5;
+	private static final byte       TYPE_COMPACT_MAP   = 6;
+	private static final byte       TYPE_OBJ_ARRAY     = 7;
+	private static final byte       TYPE_POOLED_MAP    = 8;
+	public  static final int        SKIP_NULL          = 1 << Flags.printNull         .ordinal();
+	public  static final int        SKIP_FALSE         = 1 << Flags.printFalse        .ordinal();
+	public  static final int        SKIP_EMPTY         = 1 << Flags.printEmpty        .ordinal();
+	public  static final int        ENUM_OBJECT        = 1 << Flags.enumObject        .ordinal();
+	public  static final int        PRINT_1_FRACTIONAL = 1 << Flags.printOneFractional.ordinal();
+	public  static final int        PRINT_3_FRACTIONAL = 1 << Flags.printOneFractional.ordinal();
+	private static final byte[]     ZEROS = {'0','0','0','0','0','0','0','0','0'};
+	private static final int[]      POW10 = { 1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000 };
+	private static final byte[]     ENUM_OBJECT_A = "{\"__enum__\":".getBytes();
+	private static final byte[]     ENUM_OBJECT_B = ",\"value\":".getBytes();
+	private static final int        KEY_CACHE_SIZE = 1<<12;
+	private static final int        KEY_CACHE_MASK = KEY_CACHE_SIZE - 1;
+	private static final StringHash INTERNING  = System::identityHashCode;
+	private static final StringHash EXTSTRING  = String::hashCode;
+	private static final Object     DEFAULTOBJ = new Object();
 
 	static final class CTX {
 		byte   type;
@@ -108,31 +109,30 @@ public final class JsonOutputStream implements AutoCloseable {
 	private static final class MapDumper implements BiConsumer<Object, Object> {
 		Object[] target;
 		int      idx;
-		@Override public void accept(final Object k, final Object v) {
-			target[idx++] = k;
-			target[idx++] = v;
-		}
+		@Override public void accept(final Object k, final Object v) { target[idx++] = k; target[idx++] = v; }
 	}
 
-	private final byte[] buffer = new byte[BUFFER_SIZE];
-	private boolean      hasCoreTransformer;
-	private final MapDumper mapDumper = new MapDumper();
-	private int          pos = 0;
-	private OutputStream out;
-	private final CtxStack  stack = new CtxStack();
-	private TimeFormat   timeFormat;
-	private boolean skipNull;
-	private boolean skipFalse;
-	private boolean skipEmpty;
-	private boolean skip0;
-	private boolean enumObject;
-	private boolean commaNeeded;
-	private int          fractionalLimit;
-	Supplier<Object> cycleMarker = ERROR;
-	Object queuedComplex;
+	private              InternalEngine   engine;				// Engine
+	private              boolean          hasCoreTransformer;	// Engine
+	private              TimeFormat       timeFormat;			// Engine
+	private              boolean          skipNull  ;			// Engine
+	private              boolean          skipFalse ;			// Engine
+	private              boolean          skipEmpty ;			// Engine
+	private              boolean          skip0     ;			// Engine
+	private              boolean          enumObject;			// Engine
+	private              int              fractionalLimit;		// Engine
 
-	private final Object[][]     arrayPool       = new Object[32][];
-	private int                  arrayPoolSize   = 0;
+	private        final byte[]           buffer         = new byte[BUFFER_SIZE];
+	private        final MapDumper        mapDumper      = new MapDumper();
+	private        final CtxStack         stack          = new CtxStack();
+	private        final Supplier<Object> cycleMarker    = ERROR;
+	private        final Object[][]       arrayPool      = new Object[32][];
+	private        final String[]         keyCacheKeys   = new String[KEY_CACHE_SIZE];
+	private        final byte[][]         keyCacheVals   = new byte[KEY_CACHE_SIZE][];
+	private              int              pos       = 0;
+	private              OutputStream     out       ;
+	private              boolean          commaNeeded;
+	private              int              arrayPoolSize   = 0;
 
 	Object[] takeArray(final int minCapacity) {
 		if (arrayPoolSize > 0) {
@@ -147,10 +147,6 @@ public final class JsonOutputStream implements AutoCloseable {
 		if (arrayPoolSize < arrayPool.length) { Arrays.fill(arr, null); arrayPool[arrayPoolSize++] = arr; }
 	}
 
-	public enum Flags { printNull, printFalse, printEmpty, printOneFractional, printThreeFractional, enumObject }
-
-	private final Object DEFAULTOBJ   = new Object();
-
 	private void init0(final InternalEngine pEngine, final OutputStream pOut, final TimeFormat pTimeFormat) {
 		this.engine             = pEngine;
 		this.out                = pOut;
@@ -159,15 +155,6 @@ public final class JsonOutputStream implements AutoCloseable {
 		this.timeFormat         = pTimeFormat==null ? TimeFormatDefault.EPOCH_MILLIS : pTimeFormat;
 		this.stack.depth        = -1;
 		this.hasCoreTransformer = pEngine.hasCoreTransformer();
-	}
-
-	@Override public void close() throws IOException {
-		stack.clear();
-		try { flushBuffer(); }
-		finally {
-			this.out = null;
-			STREAM_POOL.release(this);
-		}
 	}
 
 	void init(final InternalEngine pEngine, final OutputStream pOut, final TimeFormat pTimeFormat, final Flags... flags) {
@@ -216,197 +203,6 @@ public final class JsonOutputStream implements AutoCloseable {
 		return s;
 	}
 
-	private void push(final byte start, final byte type, final Object obj, final Object meta, final int len) throws IOException {
-		if (pos >= buffer.length - 1) flushBuffer();
-		buffer[pos++] = start;
-		commaNeeded = false;
-		stack.push(type, obj, meta, len);
-	}
-
-	private Object transform(final Object val) {
-		if (val == null || !hasCoreTransformer) return val;
-		final Class<?> c = val.getClass();
-		if (c == String.class || c == Integer.class || c == Long.class || c == Boolean.class || c == Double.class) return val;
-		final var f = engine.transformer(c);
-		return f != null ? f.apply(val) : val;
-	}
-
-	public void writeObject( final Object root) throws IOException {
-		final var transformed = transform(root);
-		try {
-			handleValue(transformed);
-			while (stack.depth >= 0) {
-				final var c = stack.stack[stack.depth];
-				final var type = c.type;
-				var nextVal = EXHAUSTED;
-				switch (type) {
-				case TYPE_RECORD      -> {
-					final var comps = (KeyValueObject[]) c.meta;
-					while (c.idx < c.len) {
-						final var comp = comps[c.idx++];
-						switch (comp.type()) {
-						case 1 -> {
-							final var v = comp.intGetter().applyAsInt(c.obj);
-							// if(v != 0 || !skip0)
-							{ write(comp.jsonKeyBytes(commaNeeded)); writeNumber((char)0, v); }
-						}
-						case 2 -> {
-							final var v = comp.longGetter  ().applyAsLong  (c.obj);
-							// if(v != 0 || !skip0)
-							{ write(comp.jsonKeyBytes(commaNeeded)); writeNumber((char)0, v); }
-						}
-						case 3 -> { write(comp.jsonKeyBytes(commaNeeded)); writeDouble((char)0, comp.doubleGetter().applyAsDouble(c.obj)); }
-						case 4 -> {
-							final var bVal = comp.boolGetter().test(c.obj);
-							if (skipFalse && !bVal) continue;
-							write(comp.jsonKeyBytes(commaNeeded)); writeBoolean(bVal);
-						}
-						default -> {
-							final var val = transform(comp.objGetter().apply(c.obj));
-							if (!isSkipped(val)) {
-								write(comp.jsonKeyBytes(commaNeeded));
-								nextVal = val;
-							}
-						}
-						}
-						if (nextVal != EXHAUSTED) break;
-					}
-				}
-				case TYPE_POOLED_MAP -> {
-					final var array = (Object[]) c.obj;
-					final var length = c.len;
-					var index = c.idx;
-					while (index < length) {
-						final var key =           array[index++];
-						final var val = transform(array[index++]);
-						if (isSkipped(val)) continue;
-						writeMapKey(key);
-						if (!writePrimitiveInline((char)0, val)) { nextVal = val; c.idx = index; break; }
-					}
-				}
-				case TYPE_COMPACT_MAP -> {
-					final var cMap  = (CompactMap) c.obj;
-					final var data  = cMap.getRawData();
-					final var prims = cMap.prims();
-					final var sType = cMap.singleType();
-					while (c.idx < c.len) {
-						final var entryIdx = c.idx++;
-						final var key      = data[entryIdx << 1];
-						if (key == null) continue;
-						if (sType == PRIMITIVE.T_LONG) {
-							final var v = prims[entryIdx];
-							if (v != 0 || !skip0) { writeMapKey(key); writeNumber((char)0, v); }
-							continue;
-						}
-						if (sType == PRIMITIVE.T_DOUBLE) {
-							writeMapKey(key);
-							writeDouble((char)0, Double.longBitsToDouble(prims[entryIdx]));
-							continue;
-						}
-						final var val = data[(entryIdx << 1) + 1];
-						if (val == PRIMITIVE.LONG) {
-							final var v = prims[entryIdx];
-							if (v != 0 || !skip0) { writeMapKey(key); writeNumber((char)0, v); }
-							continue;
-						}
-						if (val == PRIMITIVE.DOUBLE) {
-							writeMapKey(key);
-							writeDouble((char)0, Double.longBitsToDouble(prims[entryIdx]));
-							continue;
-						}
-						final var tVal = transform(val);
-						if (isSkipped(tVal)) continue;
-						writeMapKey(key);
-						if (!writePrimitiveInline((char)0, tVal)) {
-							nextVal = tVal;
-							break;
-						}
-					}
-				}
-				case TYPE_OBJ_ARRAY -> {
-					if (c.obj instanceof final CompactList cList) {
-						final var data  = cList.getRawData();
-						final var prims = cList.prims();
-						final var sType = cList.singleType();
-						listLoop: while (c.idx < c.len) {
-							final var i = c.idx++;
-							if (sType == PRIMITIVE.T_LONG) {
-								writeNumber(commaNeeded ? ',' : 0, prims[i]);
-								continue listLoop;
-							}
-							if (sType == PRIMITIVE.T_DOUBLE) {
-								writeDouble(commaNeeded ? ',' : 0, Double.longBitsToDouble(prims[i]));
-								continue listLoop;
-							}
-							var val = data[i];
-							if (val == PRIMITIVE.LONG) {
-								writeNumber(commaNeeded ? ',' : 0, prims[i]);
-								continue listLoop;
-							}
-							if (val == PRIMITIVE.DOUBLE) {
-								writeDouble(commaNeeded ? ',' : 0, Double.longBitsToDouble(prims[i]));
-								continue listLoop;
-							}
-							val = transform(val);
-							if (isSkipped(val)) continue listLoop;
-							if (!writePrimitiveInline(commaNeeded ? ',' : 0, val)) {
-								nextVal = val;
-								break listLoop;
-							}
-						}
-					} else {
-						final var array = (Object[]) c.obj;
-						while (c.idx < c.len) {
-							final var val = transform(array[c.idx++]);
-							if (isSkipped(val)) continue;
-							if (!writePrimitiveInline(commaNeeded ? ',' : 0, val)) { nextVal = val; break; }
-						}
-					}
-				}
-				case TYPE_LIST        -> {
-					@SuppressWarnings("unchecked")
-					final var list = (java.util.List<Object>) c.obj;
-					while (c.idx < c.len) {
-						final var val = transform(list.get(c.idx++));
-						if (isSkipped(val)) continue;
-						if (!writePrimitiveInline(commaNeeded ? ',' : 0, val)) { nextVal = val; break; }
-					}
-				}
-				case TYPE_COL         -> {
-					final Iterator<?> it = (Iterator<?>) c.meta;
-					while (it.hasNext()) {
-						c.idx++;
-						final Object val = it.next();
-						if (isSkipped(val)) continue;
-						if (!writePrimitiveInline(commaNeeded ? ',' : 0, val)) { nextVal = val; break; }
-					}
-				}
-				case TYPE_ARRAY       -> {
-					while (c.idx < c.len) {
-						final var val = transform(Array.get(c.obj, c.idx++));
-						if (isSkipped(val)) continue;
-						if (!writePrimitiveInline(commaNeeded ? ',' : 0, val)) { nextVal = val; break; }
-					}
-				}
-				default               -> { }
-				}
-				if (nextVal == EXHAUSTED) {
-					write(isContainerType(type) ? (byte)']' : (byte)'}');
-					commaNeeded = true;
-					if (type == TYPE_POOLED_MAP) returnArray((Object[]) c.obj);
-					c.clear();
-					stack.depth--;
-				} else handleValue(nextVal);
-			}
-		} catch (final RuntimeException t) { throw t;
-		} catch (final Exception        t) {
-			if (t instanceof final IOException e) throw e;
-			final var x = new RuntimeException(t);
-			x.setStackTrace(t.getStackTrace());
-			throw x;
-		}
-	}
-
 	static boolean isContainerType(final byte type) {
 		return type == TYPE_COL || type == TYPE_LIST || type == TYPE_ARRAY || type == TYPE_OBJ_ARRAY;
 	}
@@ -437,7 +233,7 @@ public final class JsonOutputStream implements AutoCloseable {
 		@Override public void writeTemp(final JsonOutputStream s, final Temporal v) throws IOException { writeTemp.accept(s, v); }
 	}
 
-	void write(final byte[] bytes) throws IOException {
+	private void write(final byte[] bytes) throws IOException {
 		final var len   = bytes.length;
 		final var space = buffer.length - pos;
 		if (len <= space) {
@@ -456,15 +252,13 @@ public final class JsonOutputStream implements AutoCloseable {
 		}
 	}
 
-	void write(final byte   b) throws IOException {
+	private void write(final byte   b) throws IOException {
 		if (pos == buffer.length) flushBuffer();
 		buffer[pos++] = b;
 	}
 
 	private void mayFlush(final int require) throws IOException { if (pos > 0 && pos + require > buffer.length) flushBuffer(); }
-
 	private void flushBuffer       () throws IOException { if (pos > 0) { out.write(buffer, 0, pos); pos = 0; } }
-
 	private void writeBaseAscii    (final String s, final int start, final int end) throws IOException { commaNeeded = true; for (var i = start; i < end; i++) write((byte) s.charAt(i)); }
 	private void writeBaseAscii    (final char[] c, final int start, final int end) throws IOException { commaNeeded = true; for (var i = start; i < end; i++) write((byte) c[i]       ); }
 
@@ -480,7 +274,7 @@ public final class JsonOutputStream implements AutoCloseable {
 		}
 	}
 
-	void safeBoolean(final boolean b) {
+	private void safeBoolean(final boolean b) {
 		commaNeeded = true;
 		if (b) {
 			INT_VIEW.set(buffer, pos, TRUE_MAGIC);
@@ -492,12 +286,12 @@ public final class JsonOutputStream implements AutoCloseable {
 		}
 	}
 
-	void writeBoolean(final boolean b) throws IOException {
+	private void writeBoolean(final boolean b) throws IOException {
 		if (pos + 5 > buffer.length) flushBuffer();
 		safeBoolean(b);
 	}
 
-	void writeEscapedString(final String s) throws IOException {
+	private void writeEscapedString(final String s) throws IOException {
 		commaNeeded = true;
 		final var sLen = s.length();
 		mayFlush(sLen+2);
@@ -550,9 +344,6 @@ public final class JsonOutputStream implements AutoCloseable {
 		return len;
 	}
 
-	private static final byte[] ZEROS = {'0','0','0','0','0','0','0','0','0'};
-	private static final int[] POW10 = { 1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000 };
-
 	private static int getDigits(final int v) {
 		final var bitLength = 32 - Integer.numberOfLeadingZeros(v);
 		final var guess = (bitLength * 1233) >>> 12;
@@ -565,9 +356,7 @@ public final class JsonOutputStream implements AutoCloseable {
 		return (v >= POW10_L[guess] ? guess+1 : guess);
 	}
 
-	private static final byte[] MIN_INT = "-2147483648".getBytes();
-
-	void writeNumber(final char prefix, int val) throws IOException {
+	private void writeNumber(final char prefix, int val) throws IOException {
 		commaNeeded = true;
 		if (pos + 14 > buffer.length) flushBuffer();
 		if (prefix != 0) buffer[pos++] = (byte) prefix;
@@ -593,6 +382,7 @@ public final class JsonOutputStream implements AutoCloseable {
 		else SHORT_VIEW.set(buffer, i -= 2, DIGITS_S[val]);
 	}
 
+	/** Called from JsonDateTime.java */
 	void writeNumber(final char prefix, long val) throws IOException {
 		if (val >= Integer.MIN_VALUE && val <= Integer.MAX_VALUE) { writeNumber(prefix, (int) val); return; }
 		commaNeeded = true;
@@ -653,6 +443,7 @@ public final class JsonOutputStream implements AutoCloseable {
 		writeNumber((char)0, fracPart);
 	}
 
+	/** Called from JsonDateTime.java */
 	void writeTimestampasText(final Temporal t) throws IOException {
 		commaNeeded = true;
 		mayFlush(26);
@@ -702,9 +493,7 @@ public final class JsonOutputStream implements AutoCloseable {
 		SHORT_VIEW.set(buffer,pos, DIGITS_S[q]); pos+=2;
 	}
 
-	void writeCommaIfNeeded() throws IOException { if (commaNeeded) write((byte)','); }
-
-	boolean isSkipped(final Object v) {
+	private boolean isSkipped(final Object v) {
 		return switch(v) {
 		case null                  -> skipNull;
 		case final String        t -> skipEmpty && t.isEmpty();
@@ -744,49 +533,23 @@ public final class JsonOutputStream implements AutoCloseable {
 		commaNeeded = true;
 	}
 
-	private void handleMap(final Map<?,?> t) throws IOException {
-		final var size = t.size();
-		if (size == 0) { safeEmptyArray(); return; }
-		final var flat = takeArray(size * 2);
-		mapDumper.target = flat;
-		mapDumper.idx    = 0;
-		t.forEach(mapDumper);
-		mapDumper.target = null;
-		push((byte)'{', TYPE_POOLED_MAP, flat, null, size * 2);
-	}
-
 	private void safeNull() {
 		commaNeeded = true;
 		INT_VIEW.set(buffer, pos, NULL_MAGIC);
 		pos += 4;
 	}
 
+	/** Called from JsonDateTime.java */
 	void writeNull() throws IOException {
 		if (pos + 4 > buffer.length) flushBuffer();
 		safeNull();
 	}
 
-	private boolean handleCycle(final Object obj) throws IOException {
-		for (var i = 0; i <= stack.depth; i++) {
-			if (stack.stack[i].obj == obj) {
-				final var replacement = cycleMarker.get();
-				if (replacement == null) safeNull();
-				else if (replacement instanceof final String s) writeEscapedString(s);
-				else writeObject(replacement);
-				return true;
-			}
-		}
-		return false;
-	}
-
-	void closeArray() throws IOException {
+	private void closeArray() throws IOException {
 		if (pos == buffer.length) flushBuffer();
 		buffer[pos++] = ']';
 		commaNeeded = true;
 	}
-
-	private static final byte[] ENUM_OBJECT_A = "{\"__enum__\":".getBytes();
-	private static final byte[] ENUM_OBJECT_B = ",\"value\":".getBytes();
 
 	private void writeEnum(final Enum<?> v) throws IOException {
 		if(enumObject) {
@@ -800,54 +563,7 @@ public final class JsonOutputStream implements AutoCloseable {
 		}
 	}
 
-	private boolean handleSimple(final Object val) throws IOException {
-		if (pos + 32 > buffer.length) flushBuffer();
-		if (handleCycle(val)) return true;
-		switch(val) {
-		case null                  -> safeNull();
-		case final String        t -> writeEscapedString(t);
-		case final Long          t -> writeNumber((char)0, t);
-		case final Double        t -> writeDouble((char)0, t);
-		case final CompactList   t -> push((byte)'[', TYPE_OBJ_ARRAY  , t, null, t.size());
-		case final CompactMap    t -> push((byte)'{', TYPE_COMPACT_MAP, t, null, t.size());
-		case final String[]      t -> { if(t.length>0) { write((byte)'['); writeEscapedString(t[0]); for(var i=1; i<t.length; i++) { write((byte)','); writeEscapedString(t[i]); } closeArray(); } else safeEmptyArray(); }
-		case final Object[]      t -> push((byte)'[', TYPE_OBJ_ARRAY  , t, null, t.length);
-		case final Record        t -> { final var parts = engine.ofComplex(t.getClass()); push((byte)'{', TYPE_RECORD, t, parts, parts.length); }
-		case final List<?>       t when t instanceof java.util.RandomAccess -> push((byte)'[', TYPE_LIST, t, null, t.size());
-		case final Collection<?> t -> push((byte)'[', TYPE_COL   , t, t.iterator(),  t.size());
-		case final Map<?,?>      t -> handleMap(t);
-		case final Integer       t -> writeNumber((char)0, t);
-		case final Boolean       t -> safeBoolean(t);
-		case final Short         t -> writeNumber((char)0, t.longValue());
-		case final Float         t -> writeDouble((char)0, t.doubleValue());
-		case final BigInteger    t -> writeBaseAscii(t.toString());
-		case final Number        t -> writeFractionalLimited(t.toString());
-		case final Enum<?>       t -> writeEnum(t);
-		case final Date          t -> timeFormat.writeDate(this, t);
-		case final Temporal      t -> timeFormat.writeTemp(this, t);
-		case final double []     t -> { if(t.length>0) { writeDouble('[', t[0]); for(var i=1; i<t.length; i++) { writeDouble(',',t[i]); } closeArray(); } else safeEmptyArray(); }
-		case final long   []     t -> { if(t.length>0) { writeNumber('[', t[0]); for(var i=1; i<t.length; i++) { writeNumber(',',t[i]); } closeArray(); } else safeEmptyArray(); }
-		case final int    []     t -> { if(t.length>0) { writeNumber('[', t[0]); for(var i=1; i<t.length; i++) { writeNumber(',',t[i]); } closeArray(); } else safeEmptyArray(); }
-		case final short  []     t -> { if(t.length>0) { writeNumber('[', t[0]); for(var i=1; i<t.length; i++) { writeNumber(',',t[i]); } closeArray(); } else safeEmptyArray(); }
-		case final float  []     t -> { if(t.length>0) { writeDouble('[', t[0]); for(var i=1; i<t.length; i++) { writeDouble(',',t[i]); } closeArray(); } else safeEmptyArray(); }
-		case final boolean[]     t -> { if(t.length>0) { write((byte)'['); safeBoolean(t[0]); for(var i=1; i<t.length; i++) { write((byte)','); writeBoolean(t[i]); } closeArray(); } else safeEmptyArray(); }
-		default                    -> { if(val.getClass().isArray()) { push((byte)'[', TYPE_ARRAY, val, null, Array.getLength(val)); return true; } return false; } }
-		return true;
-	}
-
-	private void handleValue(final Object val) throws IOException {
-		if(handleSimple(val)) return;
-		final var h = (engine.ofComplex(val.getClass()) instanceof final KeyValueObject[] kv ? kv : DEFAULTOBJ);
-		if (h instanceof final KeyValueObject[] parts) push((byte)'{', TYPE_RECORD, val, parts, parts.length);
-		else  									       writeEscapedString(val.toString());
-	}
-
-	private static final int      KEY_CACHE_SIZE = 1<<12;
-	private static final int      EY_CACHE_MASK  = KEY_CACHE_SIZE-1;
-	private        final Object[] keyCacheKeys   = new Object[KEY_CACHE_SIZE];
-	private        final byte[][] keyCacheVals   = new byte[KEY_CACHE_SIZE][];
-
-	void writeEscapedStringKey(final String s, final boolean comma) throws IOException {
+	private void writeEscapedStringKey(final String s, final boolean comma) throws IOException {
 		final var sLen = s.length();
 		mayFlush(sLen + 5);
 		if (comma) {
@@ -872,48 +588,314 @@ public final class JsonOutputStream implements AutoCloseable {
 		throw JsonEngine.illegalStateException("Key must be STRING not "+(key == null ? "(null)" : key.getClass().getCanonicalName()));
 	}
 
-	private void writeMapKey(final Object key) throws IOException {
-		if(!(key instanceof final String str)) throw wrongKeyType(key);
-		final var comma = this.commaNeeded;
-		final var sLen = str.length();
-		if(sLen <= 40) {
-			mayFlush(sLen * 6 + 5);
-			final var first = str.charAt(0);
-			// Skip UUIDs and numeric IDs,to avoid Cache-Thrashing
-			final var skipCache = (first >= '0' && first <= '9') || sLen == 32 || (sLen == 36 && str.charAt(8) == '-');
-			final var offset = comma ? 0 : 1;
-			var idx = 0;
-			if (!skipCache) {
-				idx = System.identityHashCode(key) & EY_CACHE_MASK;
-				if (keyCacheKeys[idx] == key) {
-					final var cached = keyCacheVals[idx];
-					final var len   = cached.length - offset;
-					System.arraycopy(cached, offset, buffer, pos, len);
-					pos += len;
-					return;
-				}
-			}
-			final var startPos = pos;
-			if (comma) {
-				SHORT_VIEW.set(buffer, pos, COMMA_QUOTE);
-				pos += 2;
-			} else {
-				buffer[pos++] = '"';
-			}
-			pos += (int) JSONString.encodeChunk(str, 0, sLen, buffer, pos, buffer.length);
-			SHORT_VIEW.set(buffer, pos, QUOTE_COLON);
-			pos += 2;
-			if(!skipCache) {
-				final var encodedLen = pos - startPos;
-				final var cached = new byte[encodedLen + offset];
-				if (!comma) cached[0] = ',';
-				System.arraycopy(buffer, startPos, cached, offset, encodedLen);
-				keyCacheKeys[idx] = key;
-				keyCacheVals[idx] = cached;
-			}
-			return;
-		}
+	interface StringHash { int apply(String v); }
 
-		writeEscapedStringKey(str, comma);
+	private void writeCachedMapKey(final int offset, final int idx) {
+		final var cached = keyCacheVals[idx];
+		final var encodedLen = cached.length - offset;
+		System.arraycopy(cached, offset, buffer, pos, encodedLen);
+		pos += encodedLen;
 	}
+
+	private void writeUncachedMapKey(final String str, final int sLen) {
+		if (commaNeeded) { SHORT_VIEW.set(buffer, pos, COMMA_QUOTE); pos += 2; }
+		else { buffer[pos++] = '"'; }
+		pos += (int) JSONString.encodeChunk(str, 0, sLen, buffer, pos, buffer.length);
+		SHORT_VIEW.set(buffer, pos, QUOTE_COLON); pos += 2;
+	}
+
+	private void writeMapKey(final Object key, final StringHash h) throws IOException {
+		if (!(key instanceof final String str)) throw wrongKeyType(key);
+		final var sLen = str.length();
+		if (sLen > 40) { writeEscapedStringKey(str, commaNeeded); return; }
+		mayFlush(sLen * 3 + 5);
+		final var first = str.charAt(0);
+		// Skip UUIDs and numeric IDs to avoid cache thrashing
+		final var skipCache = (first >= '0' && first <= '9') || sLen == 32 || (sLen == 36 && str.charAt(8) == '-');
+		if (skipCache) { writeUncachedMapKey(str, sLen); return; }
+		final var offset = commaNeeded ? 0 : 1;
+		var idx = h.apply(str) & KEY_CACHE_MASK;
+		var k = keyCacheKeys[idx];
+		if (k == key || key.equals(k)) { writeCachedMapKey(offset, idx); return; }
+		if(null != k) {
+			idx = (idx + 1) & KEY_CACHE_MASK;
+			k = keyCacheKeys[idx];
+			if (k == key || key.equals(k)) { writeCachedMapKey(offset, idx); return; }
+		}
+		final var startPos = pos;
+		writeUncachedMapKey(str, sLen);
+		if(k != null) return;
+		final var encodedLen = pos - startPos;
+		final var cached     = new byte[encodedLen + offset];
+		if (!commaNeeded) cached[0] = ',';
+		System.arraycopy(buffer, startPos, cached, offset, encodedLen);
+		// Insert or evict to prevent dead caches
+		keyCacheKeys[idx] = str;
+		keyCacheVals[idx] = cached;
+	}
+
+	private boolean push(final byte start, final byte type, final Object obj, final Object meta, final int len) throws IOException {
+		if (handleCycle(obj)) return false;
+		if (pos >= buffer.length - 1) flushBuffer();
+		buffer[pos++] = start;
+		commaNeeded = false;
+		stack.push(type, obj, meta, len);
+		return true;
+	}
+
+	private void handleMap(final Map<?,?> t) throws IOException {
+		// JsonSerializationBenchmark.benchmarkFastjson2        twitter.json  thrpt    5  1354,511 ± 57,029  ops/s
+		// JsonSerializationBenchmark.benchmarkMyEngineVanilla  twitter.json  thrpt    5  1167,807 ± 26,044  ops/s
+		// vs using keySet.iterator
+		// JsonSerializationBenchmark.benchmarkFastjson2        twitter.json  thrpt    5  1353,228 ± 63,739  ops/s
+		// JsonSerializationBenchmark.benchmarkMyEngineVanilla  twitter.json  thrpt    5  1144,699 ± 32,531  ops/s
+		final var size = t.size();
+		if (size == 0) { safeEmptyArray(); return; }
+		final var flat = takeArray(size * 2);
+		mapDumper.target = flat;
+		mapDumper.idx    = 0;
+		t.forEach(mapDumper);
+		mapDumper.target = null;
+		if (!push((byte)'{', TYPE_POOLED_MAP, t, flat, size * 2)) returnArray(flat);
+	}
+
+	private void handleValue(final Object val) throws IOException {
+		if(handleSimple(val)) return;
+		final var h = (engine.ofComplex(val.getClass()) instanceof final KeyValueObject[] kv ? kv : DEFAULTOBJ);
+		if (h instanceof final KeyValueObject[] parts) push((byte)'{', TYPE_RECORD, val, parts, parts.length);
+		else  									       writeEscapedString(val.toString());
+	}
+
+	private boolean handleCycle(final Object obj) throws IOException {
+		for (var i = 0; i <= stack.depth; i++) {
+			if (stack.stack[i].obj == obj) {
+				final var replacement = cycleMarker.get();
+				if (replacement == null) safeNull();
+				else if (replacement instanceof final String s) writeEscapedString(s);
+				else writeObject(replacement);
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private boolean handleSimple(final Object val) throws IOException {
+		if (pos + 32 > buffer.length) flushBuffer();
+		switch(val) {
+		case null                       -> safeNull();
+		case final String             t -> writeEscapedString(t);
+		case final Long               t -> writeNumber((char)0, t);
+		case final Double             t -> writeDouble((char)0, t);
+		case final CompactList        t -> push((byte)'[', TYPE_OBJ_ARRAY  , t, null, t.size()); // Iterator is slower
+		case final ArrayList<?>       t -> push((byte)'[', TYPE_LIST       , t, null, t.size());
+		case final CompactMap         t -> push((byte)'{', TYPE_COMPACT_MAP, t, null, t.size());
+		case final LinkedHashMap<?,?> t -> handleMap(t);
+		case final String[]           t -> { if(t.length>0) { write((byte)'['); writeEscapedString(t[0]); for(var i=1; i<t.length; i++) { write((byte)','); writeEscapedString(t[i]); } closeArray(); } else safeEmptyArray(); }
+		case final Object[]           t -> push((byte)'[', TYPE_OBJ_ARRAY  , t, null, t.length);
+		case final Record             t -> { final var parts = engine.ofComplex(t.getClass()); push((byte)'{', TYPE_RECORD, t, parts, parts.length); }
+		case final List<?>            t when t instanceof java.util.RandomAccess -> push((byte)'[', TYPE_LIST, t, null, t.size());	// AttributeList, CopyOnWriteArrayList, RoleList, RoleUnresolvedList, Stack, Vector
+		case final Collection<?>      t -> push((byte)'[', TYPE_COL        , t, t.iterator(),  t.size());
+		case final Map<?,?>           t -> handleMap(t);
+		case final Integer            t -> writeNumber((char)0, t);
+		case final Boolean            t -> safeBoolean(t);
+		case final Short              t -> writeNumber((char)0, t.longValue());
+		case final Float              t -> writeDouble((char)0, t.doubleValue());
+		case final BigInteger         t -> writeBaseAscii(t.toString());
+		case final Number             t -> writeFractionalLimited(t.toString());
+		case final Enum<?>            t -> writeEnum(t);
+		case final Date               t -> timeFormat.writeDate(this, t);
+		case final Temporal           t -> timeFormat.writeTemp(this, t);
+		case final double []          t -> { if(t.length>0) { writeDouble('[', t[0]); for(var i=1; i<t.length; i++) { writeDouble(',',t[i]); } closeArray(); } else safeEmptyArray(); }
+		case final long   []          t -> { if(t.length>0) { writeNumber('[', t[0]); for(var i=1; i<t.length; i++) { writeNumber(',',t[i]); } closeArray(); } else safeEmptyArray(); }
+		case final int    []          t -> { if(t.length>0) { writeNumber('[', t[0]); for(var i=1; i<t.length; i++) { writeNumber(',',t[i]); } closeArray(); } else safeEmptyArray(); }
+		case final short  []          t -> { if(t.length>0) { writeNumber('[', t[0]); for(var i=1; i<t.length; i++) { writeNumber(',',t[i]); } closeArray(); } else safeEmptyArray(); }
+		case final float  []          t -> { if(t.length>0) { writeDouble('[', t[0]); for(var i=1; i<t.length; i++) { writeDouble(',',t[i]); } closeArray(); } else safeEmptyArray(); }
+		case final boolean[]          t -> { if(t.length>0) { write((byte)'['); safeBoolean(t[0]); for(var i=1; i<t.length; i++) { write((byte)','); writeBoolean(t[i]); } closeArray(); } else safeEmptyArray(); }
+		default                         -> { if(val.getClass().isArray()) { push((byte)'[', TYPE_ARRAY, val, null, Array.getLength(val)); return true; } return false; } }
+		return true;
+	}
+
+	@Override public void close() throws IOException {
+		stack.clear();
+		try { flushBuffer(); }
+		finally {
+			this.out = null;
+			STREAM_POOL.release(this);
+		}
+	}
+
+	private Object transform(final Object val) {
+		if (val == null || !hasCoreTransformer) return val;
+		final Class<?> c = val.getClass();
+		if (c == String.class || c == Integer.class || c == Long.class || c == Boolean.class || c == Double.class) return val;
+		final var f = engine.transformer(c);
+		return f != null ? f.apply(val) : val;
+	}
+
+	private final Function<Object,Object> TRANS = (Function<Object,Object>)this::transform;
+	private final Function<Object,Object> PLAIN = (Function<Object,Object>)t->t;
+
+	public void writeObject( final Object root) throws IOException {
+		final var transform   = hasCoreTransformer ? TRANS : PLAIN;
+		final var transformed = transform.apply(root);
+		try {
+			handleValue(transformed);
+			while (stack.depth >= 0) {
+				final var c = stack.stack[stack.depth];
+				final var type = c.type;
+				var nextVal = EXHAUSTED;
+				switch (type) {
+				case TYPE_RECORD      -> {
+					final var comps = (KeyValueObject[]) c.meta;
+					while (c.idx < c.len) {
+						final var comp = comps[c.idx++];
+						switch (comp.type()) {
+						case 1 -> {
+							final var v = comp.intGetter().applyAsInt(c.obj);
+							// if(v != 0 || !skip0)
+							{ write(comp.jsonKeyBytes(commaNeeded)); writeNumber((char)0, v); }
+						}
+						case 2 -> {
+							final var v = comp.longGetter  ().applyAsLong  (c.obj);
+							// if(v != 0 || !skip0)
+							{ write(comp.jsonKeyBytes(commaNeeded)); writeNumber((char)0, v); }
+						}
+						case 3 -> { write(comp.jsonKeyBytes(commaNeeded)); writeDouble((char)0, comp.doubleGetter().applyAsDouble(c.obj)); }
+						case 4 -> {
+							final var bVal = comp.boolGetter().test(c.obj);
+							if (skipFalse && !bVal) continue;
+							write(comp.jsonKeyBytes(commaNeeded)); writeBoolean(bVal);
+						}
+						default -> {
+							final var val = transform.apply(comp.objGetter().apply(c.obj));
+							if (!isSkipped(val)) {
+								write(comp.jsonKeyBytes(commaNeeded));
+								nextVal = val;
+							}
+						}
+						}
+						if (nextVal != EXHAUSTED) break;
+					}
+				}
+				case TYPE_POOLED_MAP  -> {
+					final var array = (Object[]) c.meta;
+					final var length = c.len;
+					var index = c.idx;
+					while (index < length) {
+						final var key =           array[index++];
+						final var val = transform.apply(array[index++]);
+						if (isSkipped(val)) continue;
+						writeMapKey(key, EXTSTRING);
+						if (!writePrimitiveInline((char)0, val)) { nextVal = val; c.idx = index; break; }
+					}
+				}
+				case TYPE_COMPACT_MAP -> {
+					final var cMap  = (CompactMap) c.obj;
+					final var data  = cMap.getRawData();
+					final var prims = cMap.prims();
+					final var sType = cMap.singleType();
+					while (c.idx < c.len) {
+						final var entryIdx = c.idx++;
+						final var key      = data[entryIdx << 1];
+						if (key == null) continue;
+						if (sType == PRIMITIVE.T_LONG) {
+							final var v = prims[entryIdx];
+							if (v != 0 || !skip0) { writeMapKey(key, INTERNING); writeNumber((char)0, v); }
+							continue;
+						}
+						if (sType == PRIMITIVE.T_DOUBLE) {
+							writeMapKey(key, INTERNING);
+							writeDouble((char)0, Double.longBitsToDouble(prims[entryIdx]));
+							continue;
+						}
+						final var val = data[(entryIdx << 1) + 1];
+						if (val == PRIMITIVE.LONG) {
+							final var v = prims[entryIdx];
+							if (v != 0 || !skip0) { writeMapKey(key, INTERNING); writeNumber((char)0, v); }
+							continue;
+						}
+						if (val == PRIMITIVE.DOUBLE) {
+							writeMapKey(key, INTERNING);
+							writeDouble((char)0, Double.longBitsToDouble(prims[entryIdx]));
+							continue;
+						}
+						final var tVal = transform.apply(val);
+						if (isSkipped(tVal)) continue;
+						writeMapKey(key, INTERNING);
+						if (!writePrimitiveInline((char)0, tVal)) { nextVal = tVal; break; }
+					}
+				}
+				case TYPE_OBJ_ARRAY   -> {
+					if (c.obj instanceof final CompactList cList) {
+						final var data  = cList.getRawData();
+						final var prims = cList.prims();
+						final var sType = cList.singleType();
+						listLoop: while (c.idx < c.len) {
+							final var i = c.idx++;
+							if (sType == PRIMITIVE.T_LONG  ) { writeNumber(commaNeeded ? ',' : 0,                         prims[i] ); continue listLoop; }
+							if (sType == PRIMITIVE.T_DOUBLE) { writeDouble(commaNeeded ? ',' : 0, Double.longBitsToDouble(prims[i])); continue listLoop; }
+							var val = data[i];
+							if (val   == PRIMITIVE.LONG    ) { writeNumber(commaNeeded ? ',' : 0,                         prims[i] ); continue listLoop; }
+							if (val   == PRIMITIVE.DOUBLE  ) { writeDouble(commaNeeded ? ',' : 0, Double.longBitsToDouble(prims[i])); continue listLoop; }
+							val = transform.apply(val);
+							if (isSkipped(val)) continue listLoop;
+							if (!writePrimitiveInline(commaNeeded ? ',' : 0, val)) { nextVal = val; break listLoop; }
+						}
+					} else {
+						final var array = (Object[]) c.obj;
+						while (c.idx < c.len) {
+							final var val = transform.apply(array[c.idx++]);
+							if (!isSkipped(val) && !writePrimitiveInline(commaNeeded ? ',' : 0, val)) { nextVal = val; break; }
+						}
+					}
+				}
+				case TYPE_LIST        -> {
+					@SuppressWarnings("unchecked")
+					final var list = (java.util.List<Object>) c.obj;
+					while (c.idx < c.len) {
+						final var val = transform.apply(list.get(c.idx++));
+						if (!isSkipped(val) && !writePrimitiveInline(commaNeeded ? ',' : 0, val)) { nextVal = val; break; }
+					}
+				}
+				case TYPE_COL         -> {
+					final Iterator<?> it = (Iterator<?>) c.meta;
+					while (it.hasNext()) {
+						c.idx++;
+						final Object val = it.next();
+						if (!isSkipped(val) && !writePrimitiveInline(commaNeeded ? ',' : 0, val)) { nextVal = val; break; }
+					}
+				}
+				case TYPE_ARRAY       -> {
+					while (c.idx < c.len) {
+						final var val = transform.apply(Array.get(c.obj, c.idx++));
+						if (!isSkipped(val) && !writePrimitiveInline(commaNeeded ? ',' : 0, val)) { nextVal = val; break; }
+					}
+				}
+				default               -> { }
+				}
+				if (nextVal == EXHAUSTED) {
+					write(isContainerType(type) ? (byte)']' : (byte)'}');
+					commaNeeded = true;
+					if (type == TYPE_POOLED_MAP) returnArray((Object[]) c.meta);
+					c.clear();
+					stack.depth--;
+				} else handleValue(nextVal);
+			}
+		} catch (final Exception t) { throw MyRuntimeException.of(t); }
+	}
+
+	private static class MyRuntimeException extends RuntimeException {
+		private static final long serialVersionUID = 1L;
+		private StackTraceElement[] ste;
+		MyRuntimeException(final Throwable t) { super(t.getMessage(), null, false, false); this.ste = t.getStackTrace(); }
+		static MyRuntimeException of(final Throwable t) throws IOException {
+			if(t instanceof final RuntimeException e) throw e;
+			if(t instanceof final IOException e) throw e;
+			return new MyRuntimeException(t);
+		}
+		@Override public synchronized Throwable fillInStackTrace() { return this; }
+		@Override public StackTraceElement[] getStackTrace() { return ste; }
+		@Override public void setStackTrace(final StackTraceElement[] v) { this.ste = v; }
+	}
+
 }

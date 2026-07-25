@@ -276,7 +276,7 @@ final class JSONStringAddOpens implements JSONStringProvider {
 						acc |= utf8 << (accLen << 3);
 						accLen += 4;
 						sOff += 2;
-						charsInWord = 0; // Force a new 8-byte load in the next iteration
+						charsInWord = 0; // Force a next 8-byte load in the next iteration
 					} else {
 						acc |= ((long) '?') << (accLen << 3);
 						accLen++;

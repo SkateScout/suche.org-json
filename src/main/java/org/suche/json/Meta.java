@@ -121,6 +121,7 @@ final class Meta {
 		}
 	}
 
+	@SuppressWarnings("unchecked")
 	static KeyValueObject createFastLongGetter(final byte[] key, final Class<?> c, final MethodHandle handle) throws Throwable {
 		try {
 			final var site = LambdaMetafactory.metafactory(lookup, "applyAsLong", MT_FUNC_LONG, MT_S_APPLY_LONG, handle, MethodType.methodType(long.class, c));
@@ -131,6 +132,7 @@ final class Meta {
 		}
 	}
 
+	@SuppressWarnings("unchecked")
 	static KeyValueObject createFastDoubleGetter(final byte[] key, final Class<?> c, final MethodHandle handle, final Class<?> ret) throws Throwable {
 		try {
 			final var site = LambdaMetafactory.metafactory(lookup, "applyAsDouble", MT_FUNC_DOUBLE, MT_S_APPLY_DOUBLE, handle, MethodType.methodType(ret, c));

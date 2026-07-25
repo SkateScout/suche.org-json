@@ -31,7 +31,7 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 	private int[]                stringPoolHashes;
 	private int                  stringPoolSize;
 	final byte[]                 buffer          = new byte[BUFFER_SIZE];
-	private boolean useFastString = true;
+	private boolean useFastString = Boolean.parseBoolean(System.getProperty("useFastString", "true"));
 
 	// --- NEU: DIE 4 SLAB BUCKETS (0: <=16, 1: <=128, 2: <=512, 3: <=2048) ---
 	private final Object[][][] arraySlabs    = new Object[4][32][];
@@ -459,27 +459,32 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 
 	private static final String UNESCAPE_CONTRL = "Unescaped control character in string";
 
-	private int parseHex4() throws IOException {
-		if (limit - pos < 4) ensure(4);
-		if (limit - pos < 4) throwInvalid("Unexpected end in HEX Escape");
-		final var word = (int) JSONStringAddOpens.INT_VIEW.get(buffer, pos);
-		pos += 4;
-		// Vorab-Check: Wenn irgendein Byte > 127 ist, ist es kein gültiges ASCII-Hex.
-		if ((word & 0x80808080) != 0) throwInvalid("Invalid HEX escape sequence: " + java.util.HexFormat.of().formatHex(buffer, pos - 4, pos));
-		// check '0'-'9' (0x30 bis 0x39)
+	private int parseHexAt(final int index) {
+		final var word = (int) JSONStringAddOpens.INT_VIEW.get(buffer, index);
+		// Pre-check: If any byte is > 127, it is not valid ASCII hex
+		if ((word & 0x80808080) != 0) throwInvalid("Invalid HEX escape sequence: " + java.util.HexFormat.of().formatHex(buffer, index, index + 4));
+		// Check '0'-'9' (0x30 to 0x39)
 		final var is_num   = (word + 0x50505050) & ~(word + 0x46464646);
-		// check 'A'-'F' (0x41 bis 0x46)
+		// Check 'A'-'F' (0x41 to 0x46)
 		final var is_upper = (word + 0x3F3F3F3F) & ~(word + 0x39393939);
-		// check 'a'-'f' (0x61 bis 0x66)
+		// Check 'a'-'f' (0x61 to 0x66)
 		final var is_lower = (word + 0x1F1F1F1F) & ~(word + 0x19191919);
-		// Jedes der 4 Bytes MUSS in genau einer der drei Gruppen das 0x80-Bit gesetzt haben.
-		if (((is_num | is_upper | is_lower) & 0x80808080) != 0x80808080) throwInvalid("Invalid HEX escape sequence: " + java.util.HexFormat.of().formatHex(buffer, pos - 4, pos));
+		// Each of the 4 bytes MUST have the 0x80 bit set in exactly one of the three groups
+		if (((is_num | is_upper | is_lower) & 0x80808080) != 0x80808080) throwInvalid("Invalid HEX escape sequence: " + java.util.HexFormat.of().formatHex(buffer, index, index + 4));
 		final var letterMask = word & 0x40404040;
 		final var add9 = (letterMask >>> 6) * 9;
 		final var val0 = (word & 0x0F0F0F0F) + add9;
 		final var val1 = Integer.reverseBytes(val0);
 		final var val2 = (val1 | (val1 >>> 4)) & 0x00FF00FF;
 		return (val2 | (val2 >>> 8)) & 0xFFFF;
+	}
+
+	private int parseHex4() throws IOException {
+		if (limit - pos < 4) ensure(4);
+		if (limit - pos < 4) throwInvalid("Unexpected end in HEX Escape");
+		final var val = parseHexAt(pos);
+		pos += 4;
+		return val;
 	}
 
 	void parseU(int dstLen) throws IOException {
@@ -544,44 +549,6 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 
 		// 64-Bit Hash auf 32-Bit Integer falten
 		return finalizeHash(hash64);
-	}
-
-	// SWAR Optimized
-	final String parseStringValue() throws IOException {
-		pos++; // Skip the opening '"'
-		final var start     = pos;
-		final var safeLimit = limit - 8;
-		final var buf = buffer;
-		while (pos <= safeLimit) { // SWAR fast scan
-			// Load 8 bytes at once
-			final var word = (long) JSONString.LONG_VIEW.get(buf, pos);
-			if ((word & JSONString.NON_ASCII_PATTERN) != 0) break; // If byte with bit 7 set, switch to slow scanning
-			final var quoteXor     = word          ^ JSONString.QUOTE_PATTERN;
-			final var backslashXor = word          ^ JSONString.BACKSLASH_PATTERN;
-			final var hasQuote     = (quoteXor     - JSONString.SWARN) & ~quoteXor;
-			final var hasBackslash = (backslashXor - JSONString.SWARN) & ~backslashXor;
-			final var hasCtrl      = (word - 0x2020202020202020L) & ~word;
-			final var has          = (hasQuote | hasBackslash | hasCtrl) & JSONString.NON_ASCII_PATTERN;
-			if (has != 0) {
-				// A match exists! Find out which character came first.
-				final var match = Long.lowestOneBit(has);
-				if ((hasCtrl & match) != 0) throwInvalid(UNESCAPE_CONTRL);
-				// Determine the exact byte offset (0 to 7)
-				final var offset = (Long.numberOfTrailingZeros(match) >>> 3);
-				pos += offset;
-				if ((hasQuote & match) != 0) {
-					final var len = pos - start;
-					pos++; // Skip the closing '"'
-					// Only ISO-8859-1 is used to avoid JDK UTF-8 conversion.
-					return newString(buffer, start, len, true);
-				}
-				break; // A backslash was found, jump to slow path
-			}
-			pos += 8;	// No " or \ found, 8 bytes can be used
-		}
-		// --- SLOW-PATH FALLBACK ---
-		// Takes effect when we get close to the buffer end, UTF-8 appears, or escapes need to be resolved.
-		return parseStringSlow(start, pos, true, false);
 	}
 
 	final int parseStringKeyAsIndex(final Object context, final ObjectMeta meta) throws IOException {
@@ -681,13 +648,27 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 		return meta.prepareKey(context, key);
 	}
 
+
 	// SWAR Optimized
-	private String parseStringSlow(final int start, final int lPos, boolean isAscii, final boolean asKey) throws IOException {
-		var parsedLen = lPos - start;
+	// 1. Der klassische Einstieg (z. B. wenn SWAR direkt am Anfang ein UTF-8 Byte sieht)
+	private String parseStringSlow(final int start, final int lPos, final boolean isAscii, final boolean asKey) throws IOException {
+		final var parsedLen = lPos - start;
 		if (parsedLen > strBuf.length) expandStrBuf(parsedLen);
 		if (parsedLen > 0) System.arraycopy(buffer, start, strBuf, 0, parsedLen);
 		this.pos = lPos;
+		return parseStringSlowCore(parsedLen, isAscii, asKey);
+	}
 
+	private String parseStringSlowFromCompacted(final int start, final int dst, final int bailoutPos, final boolean isAscii, final boolean asKey) throws IOException {
+		final var parsedLen = dst - start;
+		if (parsedLen > strBuf.length) expandStrBuf(parsedLen);
+		if (parsedLen > 0) System.arraycopy(buffer, start, strBuf, 0, parsedLen);
+		this.pos = bailoutPos;
+		return parseStringSlowCore(parsedLen, isAscii, asKey);
+	}
+
+	// 3. Deine unveränderte Hauptlogik (ab "Outer: while (true) {")
+	private String parseStringSlowCore(int parsedLen, boolean isAscii, final boolean asKey) throws IOException {
 		Outer: while (true) {
 			final var safeLimit = limit - 8;
 			var isEscape = false;
@@ -719,9 +700,6 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 				if ((hasCtrl & match) != 0) throwInvalid(UNESCAPE_CONTRL);
 				final var offset = (Long.numberOfTrailingZeros(match) >>> 3);
 
-				// --- FIX: Immer für 8 Bytes Platz schaffen ---
-				// Da LONG_VIEW.set unweigerlich 8 Bytes schreibt, auch wenn wir
-				// durch 'offset' nur z. B. 2 Bytes davon als echten String werten.
 				if (parsedLen + 8 > strBuf.length) expandStrBuf(parsedLen + 8);
 
 				JSONString.LONG_VIEW.set(strBuf, parsedLen, word);
@@ -736,7 +714,6 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 				isEscape = true;
 				// --- REGISTER-LOOKAHEAD ---
 				if (offset < 7) {
-					// The escape character is still in the register!
 					escChar = (int) ((word >>> ((offset + 1) << 3)) & 0xFFL);
 					pos++;
 				}
@@ -758,17 +735,13 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 
 			// --- 3. REFILL OR ESCAPE HANDLING ---
 			if (!isEscape) {
-				// At end of buffer, no escape -> Refill
 				ensure(1);
 				if (pos >= limit) throwInvalid("Unexpected end of stream inside string");
 				continue Outer;
 			}
 
-			// Resolve escape
 			var esc = escChar;
 			if (esc == -1) {
-				// Boundary-Case: The backslash was exactly the 8th byte in the word.
-				// The next character must be loaded classically from the buffer.
 				if (pos >= limit) { ensure(1); if (pos >= limit) throwInvalid(ESCAPE_END); }
 				esc = buffer[pos++];
 			}
@@ -784,7 +757,7 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 				parseU(parsedLen);
 				parsedLen  = escapedParsedLen;
 				isAscii   &= escapedIsAscii;
-				continue Outer; // parseU has written the buffer itself
+				continue Outer;
 			}
 			default -> throwInvalid("Invalid escape sequence");
 			}
@@ -794,8 +767,109 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 			if (esc < 0) isAscii = false;
 		}
 		if (!asKey) return newString(strBuf, 0, parsedLen, isAscii);
-		// Consistent FNV-1a Hash for the pool!
 		return internBytes(strBuf, 0, parsedLen, computeHash(strBuf, 0, parsedLen), isAscii);
+	}
+
+
+	final String parseStringValue() throws IOException {
+		pos++; // Skip opening '"'
+		final var start     = pos;
+		final var safeLimit = limit - 8;
+		final var buf       = buffer;
+		var nonAsciiAcc     = 0L;
+
+		while (pos <= safeLimit) {
+			final var word = (long) JSONString.LONG_VIEW.get(buf, pos);
+			// We no longer break on NON_ASCII_PATTERN! UTF-8 bytes pass safely through SWAR math.
+			final var quoteXor     = word          ^ JSONString.QUOTE_PATTERN;
+			final var backslashXor = word          ^ JSONString.BACKSLASH_PATTERN;
+			final var hasQuote     = (quoteXor     - JSONString.SWARN) & ~quoteXor;
+			final var hasBackslash = (backslashXor - JSONString.SWARN) & ~backslashXor;
+			final var hasCtrl      = (word - 0x2020202020202020L) & ~word;
+			final var has          = (hasQuote | hasBackslash | hasCtrl) & JSONString.NON_ASCII_PATTERN;
+			if (has != 0) {
+				final var match = Long.lowestOneBit(has);
+				if ((hasCtrl & match) != 0) throwInvalid(UNESCAPE_CONTRL);
+				final var offset = (Long.numberOfTrailingZeros(match) >>> 3);
+				pos += offset;
+				// Mask out bytes after the match to accurately evaluate isAscii without branching
+				nonAsciiAcc |= (word & ((1L << (offset << 3)) - 1L));
+				final var isAscii = (nonAsciiAcc & JSONString.NON_ASCII_PATTERN) == 0;
+
+				if ((hasQuote & match) != 0) {
+					final var len = pos - start;
+					pos++;
+					return newString(buffer, start, len, isAscii);
+				}
+				// --- IN-PLACE COMPACTION FAST-PATH (Escapes & UTF-8) ---
+				var dst       = pos;
+				var src       = pos;
+				var loopAscii = isAscii;
+				while (src < limit) {
+					var b = buf[src++];
+					if (b == '"') {
+						pos = src;
+						return newString(buffer, start, dst - start, loopAscii);
+					}
+					if (b == '\\') {
+						if (src >= limit) return parseStringSlowFromCompacted(start, dst, src - 1, loopAscii, false);
+						b = buf[src++];
+						switch (b) {
+						case '/', '"', '\\' -> { }
+						case 'b' -> b = '\b';
+						case 'f' -> b = '\f';
+						case 'n' -> b = '\n';
+						case 'r' -> b = '\r';
+						case 't' -> b = '\t';
+						case 'u' -> {
+							// Safe in-place Unicode decoding without ensure() or buffer copying
+							if (limit - src < 4) return parseStringSlowFromCompacted(start, dst, src - 2, loopAscii, false);
+							var cp = parseHexAt(src);
+							src += 4;
+							if (cp >= 0xD800 && cp <= 0xDBFF) {
+								if (limit - src < 6) return parseStringSlowFromCompacted(start, dst, src - 6, loopAscii, false);
+								if (buf[src] == '\\' && buf[src + 1] == 'u') {
+									src += 2;
+									cp = Character.toCodePoint((char) cp, (char) parseHexAt(src));
+									src += 4;
+								}
+							}
+							if (cp < 0x80) {
+								buf[dst++] = (byte) cp;
+							} else {
+								loopAscii = false;
+								if (cp < 0x800) {
+									buf[dst++] = (byte) (0xC0 | (cp >> 6));
+								} else {
+									if (cp < 0x10000) {
+										buf[dst++] = (byte) (0xE0 | (cp >> 12));
+									} else {
+										buf[dst++] = (byte) (0xF0 | (cp >> 18));
+										buf[dst++] = (byte) (0x80 | ((cp >> 12) & 0x3F));
+									}
+									buf[dst++] = (byte) (0x80 | ((cp >> 6) & 0x3F));
+								}
+								buf[dst++] = (byte) (0x80 | (cp & 0x3F));
+							}
+							continue;
+						}
+						default -> {
+							return parseStringSlowFromCompacted(start, dst, src - 2, loopAscii, false);
+						}
+						}
+					} else if (b < 0) {
+						loopAscii = false; // Valid UTF-8 byte, copy directly
+					} else if (b < 32) {
+						return parseStringSlowFromCompacted(start, dst, src - 1, loopAscii, false);
+					}
+					buf[dst++] = b;
+				}
+				return parseStringSlowFromCompacted(start, dst, src, loopAscii, false);
+			}
+			nonAsciiAcc |= word;
+			pos += 8;
+		}
+		return parseStringSlow(start, pos, (nonAsciiAcc & JSONString.NON_ASCII_PATTERN) == 0, false);
 	}
 
 	// ######################################################################################
@@ -959,5 +1033,76 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 	byte read() throws IOException {
 		if (pos >= limit) ensure(1);
 		return buffer[pos++];
+	}
+
+	private static final java.lang.invoke.VarHandle LONG_VIEW_BE = java.lang.invoke.MethodHandles.byteArrayViewVarHandle(long[].class, java.nio.ByteOrder.BIG_ENDIAN);
+	private static final java.lang.invoke.VarHandle INT_VIEW_BE  = java.lang.invoke.MethodHandles.byteArrayViewVarHandle(int[].class,  java.nio.ByteOrder.BIG_ENDIAN);
+
+	private static final byte[] B64_DEC = new byte[256];
+	static {
+		Arrays.fill(B64_DEC, (byte) -3);
+		for (var i = 0; i < 26; i++) { B64_DEC['A' + i] = (byte) i; B64_DEC['a' + i] = (byte) (26 + i); }
+		for (var i = 0; i < 10; i++) B64_DEC['0' + i] = (byte) (52 + i);
+		B64_DEC['+'] = 62;
+		B64_DEC['/'] = 63;
+		B64_DEC['='] = -1;
+		B64_DEC['"'] = -2;
+	}
+
+	byte[] parse64() throws IOException {
+		pos++;
+		final var start = pos;
+		var outIdx = start;
+		var acc = 0L;
+		var hasAcc = false;
+		var dest = buffer;
+		byte b0,b1,b2,b3;
+		main: while (true) {
+			final var safeLimit = limit - 4;
+			while (pos <= safeLimit) {
+				b0 = B64_DEC[buffer[pos++] & 0xFF];
+				b1 = B64_DEC[buffer[pos++] & 0xFF];
+				b2 = B64_DEC[buffer[pos++] & 0xFF];
+				b3 = B64_DEC[buffer[pos++] & 0xFF];
+				final var trip = (b0 << 18) | (b1 << 12) | (b2 << 6) | b3;
+				if (trip < 0) break main;
+				if (!hasAcc) {
+					acc = ((long) trip) << 40;
+					hasAcc = true;
+				} else {
+					LONG_VIEW_BE.set(dest, outIdx, acc | (((long) trip) << 16));
+					outIdx += 6;
+					hasAcc = false;
+				}
+			}
+			if (dest == buffer) {
+				final var decodedLen = outIdx - start;
+				dest = new byte[Math.max(decodedLen + (limit - pos) + 128, 256)];
+				if (decodedLen > 0) System.arraycopy(buffer, start, dest, 0, decodedLen);
+				outIdx = decodedLen;
+			}
+			ensure(5);
+			if (pos >= limit) throwInvalid("Unexpected end of stream in Base64");
+			final var maxPossibleWrite = (limit - pos) + 8;
+			if (dest.length - outIdx < maxPossibleWrite) dest = Arrays.copyOf(dest, Math.max(dest.length << 1, outIdx + maxPossibleWrite));
+		}
+		if (b0 == -2) {
+			if (hasAcc) { INT_VIEW_BE.set(dest, outIdx, (int) (acc >> 32)); outIdx += 3; }
+			pos -= 3;
+		} else {
+			final var validBytes = (b2 < 0) ? 1 : 2;
+			final var b2Val      = (validBytes == 2) ? b2 : 0;
+			final var trip       = (b0 << 18) | (b1 << 12) | (b2Val << 6);
+			if (trip < 0) throwInvalid("Invalid Base64 character");
+			if (hasAcc) { INT_VIEW_BE.set(dest, outIdx, (int) (acc >> 32)); outIdx += 3; }
+			dest[outIdx++] = (byte) (trip >> 16);
+			if (validBytes == 2) dest[outIdx++] = (byte) (trip >> 8);
+			if (b2 == -2) pos -= 1;
+			else if (b3 != -2) {
+				skipWhitespace();
+				expect((byte) '"');
+			}
+		}
+		return dest == buffer ? Arrays.copyOfRange(buffer, start, outIdx) : Arrays.copyOf(dest, outIdx);
 	}
 }

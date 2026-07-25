@@ -62,27 +62,21 @@ final class EngineImpl implements InternalEngine {
 	}
 
 	private final ObjectMeta[] metaCache = new ObjectMeta[32768];
-	private int metaCacheSize = ObjectMeta.IDX_CUSTOM_START;
-
+	private       int        metaCacheSize = ObjectMeta.IDX_CUSTOM_START;
 	private final ObjectMeta defaultMapMeta       ; // -> ObjectMeta.IDX_MAP
 	private final ObjectMeta genericCollectionMeta;
 	private final ObjectMeta genericArrayMeta;
-	private int maxRecursiveDepth = 128;
-	private boolean ignoreTrailing = false;
+	private       int        maxRecursiveDepth = 128;
+	private       boolean    ignoreTrailing = false;
 	final MetaConfig cfg;
 	private final ObjectMeta[] dynamicMetaCache;
 	private int dynamicMetaCount = 0;
 	private final int flags;
 
-	@Override public void ignoreTrailing(final boolean v) { ignoreTrailing = v; }
+	@Override public void    ignoreTrailing(final boolean v) { ignoreTrailing = v; }
 	@Override public boolean ignoreTrailing() { return ignoreTrailing; }
-
-
-	@Override public void maxRecursiveDepth(final int v) {
-		if(v <= 128) this.maxRecursiveDepth = v;
-	}
-	@Override public int maxRecursiveDepth() { return maxRecursiveDepth; }
-
+	@Override public void    maxRecursiveDepth(final int v) { if(v <= 128) this.maxRecursiveDepth = v; }
+	@Override public int     maxRecursiveDepth() { return maxRecursiveDepth; }
 	@Override public ObjectMeta[] metaCache() { return metaCache; }
 	@Override public void    skipInvalid(final boolean v) { this.skipInvalid = v; }
 	@Override public boolean skipInvalid() { return skipInvalid; }

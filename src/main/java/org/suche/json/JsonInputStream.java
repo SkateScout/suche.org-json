@@ -108,6 +108,24 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		return consumeCommaSlow();
 	}
 
+	private void parseQuotedIntLong(final ObjectMeta meta, final Object context, final int targetIdx) throws IOException {
+		final var val = parseLongPrimitive();
+		if (pos >= limit || buffer[pos++] != '"') throwInvalid("Expected closing quote after numeric value");
+		meta.setLong(this, context, targetIdx, val);
+	}
+
+	private void parseQuotedDoubleFloat(final ObjectMeta meta, final Object context, final int targetIdx) throws IOException {
+		final var val = parseDoublePrimitive();
+		if (pos >= limit || buffer[pos++] != '"') throwInvalid("Expected closing quote after float value");
+		meta.setDouble(this, context, targetIdx, val);
+	}
+
+	private void parseQuotedBoolean(final ObjectMeta meta, final Object context, final int targetIdx) throws IOException {
+		final var val = parseBooleanPrimitive();
+		if (pos >= limit || buffer[pos++] != '"') throwInvalid("Expected closing quote after float value");
+		meta.set(this, context, targetIdx, val);
+	}
+
 	private boolean consumeCommaSlow() throws IOException {
 		var p = pos;
 		final var l = limit;
@@ -128,14 +146,14 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		final var primId = (int)(typeDesc>>1);
 		final var size = (lastArraySize > 0 && lastArraySize < 1024) ? lastArraySize : 16;
 		return switch (primId) {
-		case ObjectMeta.PRIM_DOUBLE  -> parseDoubleArray(new double[size]);
-		case ObjectMeta.PRIM_LONG    -> parseLongArray(new long[size]);
-		case ObjectMeta.PRIM_INT     -> parseIntArray(new int[size]);
+		case ObjectMeta.PRIM_DOUBLE  -> parseDoubleArray (new double [size]);
+		case ObjectMeta.PRIM_LONG    -> parseLongArray   (new long   [size]);
+		case ObjectMeta.PRIM_INT     -> parseIntArray    (new int    [size]);
 		case ObjectMeta.PRIM_BOOLEAN -> parseBooleanArray(new boolean[size]);
-		case ObjectMeta.PRIM_BYTE    -> parseByteArray(new byte[size]);
-		case ObjectMeta.PRIM_SHORT   -> parseShortArray(new short[size]);
-		case ObjectMeta.PRIM_FLOAT   -> parseFloatArray(new float[size]);
-		case ObjectMeta.PRIM_CHAR    -> parseCharArray(new char[size]);
+		case ObjectMeta.PRIM_BYTE    -> parseByteArray   (new byte   [size]);
+		case ObjectMeta.PRIM_SHORT   -> parseShortArray  (new short  [size]);
+		case ObjectMeta.PRIM_FLOAT   -> parseFloatArray  (new float  [size]);
+		case ObjectMeta.PRIM_CHAR    -> parseCharArray   (new char   [size]);
 		default -> null;
 		};
 	}
@@ -244,25 +262,27 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		engineStack.clear();
 		var needsComma = false;
 		var trailingComma = false;
-
 		while (true) {
 			if (pos >= limit) { ensure(1); if (pos >= limit) throwInvalid("Unexpected end.5"); }
 			final var b = buffer[pos];
 			switch (b) {
-			case '\t', '\n', '\r', ' ' -> {
-				pos++;
-				skipWhitespace();
-			}
+			case '\t', '\n', '\r', ' ' -> { pos++; skipWhitespace(); }
 			case '"' -> {
 				if (needsComma) throwInvalid("Expected comma bevore STRING");
 				if (curTypeDesc >= 0L && curIdx < 0) {
 					curIdx = parseStringKeyAsIndex(curObj, curMeta);
 					expect((byte) ':');
-					// We successfully parsed the key and colon, next up is the value.
 					needsComma = false;
 					trailingComma = false;
 				} else {
-					curMeta.set(this, curObj, curIdx, parseStringValue());
+					final var targetTD = curIdx >= 0 ? curMeta.fieldDescriptor(curIdx) : 0L;
+					switch ((int) targetTD) {
+					case ObjectMeta.SW_BYTE_ARRAY -> curMeta.set(this, curObj, curIdx, parse64());
+					case ObjectMeta.SW_PRIM_INT   , ObjectMeta.SW_PRIM_LONG -> parseQuotedIntLong(curMeta, curObj, curIdx);
+					case ObjectMeta.SW_PRIM_DOUBLE, ObjectMeta.SW_PRIM_FLOAT -> parseQuotedDoubleFloat(curMeta, curObj, curIdx);
+					case ObjectMeta.SW_PRIM_BOOLEAN -> parseQuotedBoolean(curMeta, curObj, curIdx);
+					default                         -> curMeta.set(this, curObj, curIdx, parseStringValue());
+					}
 					curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
 					final var hasComma = consumeCommaIfPresent();
 					needsComma = !hasComma;
@@ -326,7 +346,6 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				curIdx      = parent.targetIdx;
 				curMeta.set(this, curObj, curIdx, finishedObj);
 				curIdx      = curTypeDesc < 0L ? curIdx + 1 : -1;
-				// Act as if we just finished parsing a value in the parent context
 				final var hasComma = consumeCommaIfPresent();
 				needsComma = !hasComma;
 				trailingComma = hasComma;
@@ -360,7 +379,6 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			}
 		}
 	}
-
 	// ############################### Public Part #############################################
 
 	public <T> T readObject(final Class<T> targetType) throws Throwable { return readObject((Type)targetType); }
@@ -400,7 +418,6 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		if (!engine.ignoreTrailing()) checkTrailing();
 		return result;
 	}
-
 
 	private  void checkTrailing() throws IOException {
 		skipWhitespace();
@@ -483,10 +500,12 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 	private Object parseRecordRecursive(final ObjectMeta meta, final int recursionDeep) throws Throwable {
 		final var context = meta.start(this);
 		final var limitDepth = this.maxDepth;
+		// Pre-resolve loop-invariant descriptors for Maps to eliminate rel32 CALL overhead in the hot loop
+		final var isMap   = (meta.metaType == ObjectMeta.TYPE_MAP);
+		final var mapDesc = isMap ? meta.getComponentDescriptor() : 0L;
 		var expectKey = false;
 		while (true) {
 			if (pos >= limit) { ensure(1); if (pos >= limit) throwInvalid("Unexpedted END.2"); }
-			int targetIdx;
 			var b = buffer[pos];
 			if ((b & 0xC0) == 0 && ((1L << b) & WHITESPACE_MASK) != 0) skipWhitespace();
 			if (pos < limit && buffer[pos] == (byte) '}') {
@@ -495,7 +514,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				return meta.end(this, context);
 			}
 			if (buffer[pos] != '"') throwInvalid("Expected '\"' for object key but got: " + (char) buffer[pos]);
-			targetIdx = parseStringKeyAsIndex(context, meta);
+			final var targetIdx = parseStringKeyAsIndex(context, meta);
 			ensure(3); // Minimum :1}
 
 			b = buffer[pos++];
@@ -506,23 +525,28 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			}
 
 			if (b != ':') unexpect((byte)':', b);
-
-			// expect((byte) ':');
 			if (targetIdx < 0) { skipWhitespace(); skipValue(); consumeCommaIfPresent(); continue; }
+			// Use register-based conditional move for Maps instead of executing a rel32 CALL per entry
+			final var targetTD  = isMap ? mapDesc : meta.fieldDescriptor(targetIdx);
 			if (pos >= limit) { ensure(1); if (pos >= limit) throwInvalid("Unexpedted END.1"); }
 			b = buffer[pos];
-			if ((b & 0xC0) == 0 && ((1L << b) & WHITESPACE_MASK) != 0) {
-				skipWhitespace();
-				b = buffer[pos];
-			}
+			if ((b & 0xC0) == 0 && ((1L << b) & WHITESPACE_MASK) != 0) { skipWhitespace(); b = buffer[pos]; }
 			switch (b) {
-			case '-','0','1','2','3','4','5','6','7','8','9' -> parseNumericPrimitive(meta, context, targetIdx, meta.fieldDescriptor(targetIdx));
-			case 'n' -> fillNullValue(meta.fieldDescriptor(targetIdx), context, targetIdx, meta);
+			case '-','0','1','2','3','4','5','6','7','8','9' -> parseNumericPrimitive(meta, context, targetIdx, targetTD);
+			case 'n' -> fillNullValue(targetTD, context, targetIdx, meta);
 			case 't' -> meta.set(this, context, targetIdx, parseTrue());
 			case 'f' -> meta.set(this, context, targetIdx, parseFalse());
-			case '"' -> meta.set(this, context, targetIdx, parseStringValue());
+			case '"' -> {
+				switch ((int)targetTD) {
+				case ObjectMeta.SW_BYTE_ARRAY -> meta.set(this, context, targetIdx, parse64());
+				case ObjectMeta.SW_PRIM_INT   , ObjectMeta.SW_PRIM_LONG -> parseQuotedIntLong(meta, context, targetIdx);
+				case ObjectMeta.SW_PRIM_DOUBLE, ObjectMeta.SW_PRIM_FLOAT -> parseQuotedDoubleFloat(meta, context, targetIdx);
+				case ObjectMeta.SW_PRIM_BOOLEAN -> parseQuotedBoolean(meta, context, targetIdx);
+				default                         ->  meta.set(this, context, targetIdx, parseStringValue());
+				}
+			}
 			case '{' -> {
-				final var fieldDesc = meta.fieldDescriptor(targetIdx);
+				final var fieldDesc = targetTD;
 				if (fieldDesc < 0L || (fieldDesc & 1L) != 0L) throwInvalid("Expected array, got '{'");
 				final var childMeta = meta.childMeta(targetIdx);
 				final var fallbackMeta = childMeta != null ? childMeta : metaCache[ObjectMeta.IDX_MAP];
@@ -535,7 +559,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				}
 			}
 			case '[' -> {
-				final var fieldDesc = meta.fieldDescriptor(targetIdx);
+				final var fieldDesc = targetTD;
 				final var metaIdx = (int) (fieldDesc >>> 1);
 				if (fieldDesc >= 0L && metaIdx != ObjectMeta.IDX_GENERIC && metaIdx != ObjectMeta.IDX_MAP) throwInvalid(OBJECT_INSTEAD_OF_ARRAY);
 				if ((fieldDesc & 1L) != 0L) {
@@ -572,7 +596,6 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		final var childDesc  = meta.fieldDescriptor(0);
 		var idx = 0;
 		byte state = 0;
-		// LAZY EVALUATION VARIABLES (Calculated only when strictly necessary)
 		var objPassDesc = 0L;
 		var arrPassDesc = 0L;
 		ObjectMeta objFallbackMeta = null;
@@ -582,11 +605,11 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		while (true) {
 			if (pos >= limit) { ensure(1); if (pos >= limit) throwInvalid("Unexpected end"); }
 			switch (buffer[pos]) {
-			case '\t','\n','\r',' ' -> { pos++; }							// SKIP   Whitespace
+			case '\t','\n','\r',' ' -> { pos++; }
 			case ']' -> {
 				if (state == 0 && idx > 0) throwInvalid("Trailing comma in array");
 				pos++; return meta.end(this, context);
-			}	// ALWAYS Possible
+			}
 			case '-','0','1','2','3','4','5','6','7','8','9' -> {
 				if(state==1) throwInvalid("Komma or Closeing breaket instead of NUMERIC expected");
 				state = 1;
@@ -616,12 +639,18 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			case '"' -> {
 				if(state==1) throwInvalid("Komma or Closeing breaket instead of STRING expected");
 				state = 1;
-				meta.set(this, context, idx, parseStringValue());
+				switch ((int) childDesc) {
+				case ObjectMeta.SW_BYTE_ARRAY -> meta.set(this, context, idx, parse64());
+				case ObjectMeta.SW_PRIM_INT   , ObjectMeta.SW_PRIM_LONG -> parseQuotedIntLong(meta, context, idx);
+				case ObjectMeta.SW_PRIM_DOUBLE, ObjectMeta.SW_PRIM_FLOAT -> parseQuotedDoubleFloat(meta, context, idx);
+				case ObjectMeta.SW_PRIM_BOOLEAN -> parseQuotedBoolean(meta, context, idx);
+				default                         -> meta.set(this, context, idx, parseStringValue());
+				}
 			}
 			case '{' -> {
 				if(state==1) throwInvalid("Komma or Closeing breaket instead of OBJECT expected");
 				state = 1;
-				if (objFallbackMeta == null) {	// LAZY INIT
+				if (objFallbackMeta == null) {
 					isPrimitive = (childDesc & 1L) != 0L;
 					metaIdx = (int) (childDesc >>> 1);
 					final var childMeta = metaIdx == ObjectMeta.IDX_GENERIC ? null : metaCache[metaIdx];
@@ -643,7 +672,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			case '[' -> {
 				if(state==1) throwInvalid("Komma or Closeing breaket instead of ARRAY expected");
 				state = 1;
-				if (arrFallbackMeta == null) {	// LAZY INIT
+				if (arrFallbackMeta == null) {
 					isPrimitive = (childDesc & 1L) != 0L;
 					metaIdx = (int) (childDesc >>> 1);
 					final var childMeta = metaIdx == ObjectMeta.IDX_GENERIC ? null : metaCache[metaIdx];
@@ -669,5 +698,4 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			}
 		}
 	}
-
 }
