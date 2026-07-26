@@ -165,7 +165,7 @@ final class SealedUnionMapper {
 			final var uType = unionTypes[unionIdx];
 			if (uType.isPrimitive()) {
 				var primVal = (unionPrim != null) ? unionPrim[unionIdx] : 0L;
-				if (primVal == 0L && unionObj != null && unionObj[unionIdx] instanceof final Number n) {
+				if (primVal == 0L && unionObj[unionIdx] instanceof final Number n) {
 					if      (uType == double.class) primVal = Double.doubleToRawLongBits(n.doubleValue());
 					else if (uType == float .class) primVal = Float.floatToRawIntBits(n.floatValue());
 					else                            primVal = n.longValue();

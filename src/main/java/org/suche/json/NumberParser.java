@@ -87,69 +87,59 @@ final class NumberParser {
 			// STAGE 2: THE OVERFLOW LOOP (Deine Logik, komplett isoliert!)
 			// Wird NUR betreten, wenn die Zahl gigantisch ist (> 10 Ziffern)
 			// ====================================================================
-			while (stopCharFound == -1) {
-				final var word = (long) JSONString.LONG_VIEW.get(buffer, pos);
-				final var val  = word - 0x3030303030303030L;
-				final var non_digits = (val | (val + 0x0606060606060606L)) & 0xF0F0F0F0F0F0F0F0L;
-				final var len = Long.numberOfTrailingZeros(non_digits) >>> 3;
-
-				if (sigDigits + len > 19) {
-					// --- DEIN REGISTER DRAIN (Erst ab der 20. Ziffer!) ---
-					final var fill = 19 - sigDigits;
-					for (var i = 0; i < fill; i++) {
-						final var digit = (val >>> (i << 3)) & 0xFF;
-						// Schutz vor echtem Long.MAX_VALUE Überlauf im 19. Byte
-						if (sigDigits + i == 18 && lNumberVal > 922337203685477580L) break;
-						lNumberVal = lNumberVal * 10L + digit;
-					}
-					sigDigits = 19;
-
-					final var overflow = len - fill;
-					lVirtualExp += overflow;
-					pos += len;
-					if (len < 8) { stopCharFound = (byte) (word >>> (len << 3)); break; }
-
-					// Memory-Scalar Fallback, falls die Zahl absurderweise > 26 Ziffern hat
-					while (true) {
-						final var d = buffer[pos];
-						if (d < '0' || d > '9') {
-							stopCharFound = d;
-							break;
+			if(stopCharFound == -1)
+				while (true) {
+					final var word = (long) JSONString.LONG_VIEW.get(buffer, pos);
+					final var val  = word - 0x3030303030303030L;
+					final var non_digits = (val | (val + 0x0606060606060606L)) & 0xF0F0F0F0F0F0F0F0L;
+					final var len = (Long.numberOfTrailingZeros(non_digits) >>> 3);
+					if (sigDigits + len > 19) {
+						// --- DEIN REGISTER DRAIN (Erst ab der 20. Ziffer!) ---
+						final var fill = 19 - sigDigits;
+						for (var i = 0; i < fill; i++) {
+							final var digit = (val >>> (i << 3)) & 0xFF;
+							// protection for Long.MAX_VALUE overflow at 19. Byte
+							if (sigDigits + i == 18 && lNumberVal > 922337203685477580L) break;
+							lNumberVal = lNumberVal * 10L + digit;
 						}
-						lVirtualExp++;
-						pos++;
-					}
-					break;
-				}
-
-				// Es sind <= 19 Ziffern: Perfekt für nativer Long-Math!
-				if (len > 0) {
-					// Sicherheits-Check für die exakt 19. Ziffer bei extrem großen Zahlen > 9.22 Trillionen
-					if (sigDigits + len == 19 && lNumberVal > 922337203685477580L) {
-						// Fallback in den Drain für die extrem seltenen > Long.MAX_VALUE Integers
-						final var fill = 18 - sigDigits;
-						for (var i = 0; i < fill; i++) lNumberVal = lNumberVal * 10L + ((val >>> (i << 3)) & 0xFF);
-						sigDigits = 18;
-						lVirtualExp += (len - fill);
+						sigDigits = 19;
+						final var overflow = len - fill;
+						lVirtualExp += overflow;
 						pos += len;
 						if (len < 8) { stopCharFound = (byte) (word >>> (len << 3)); break; }
-						continue;
+						// Memory-Scalar Fallback, if number > 26 digits
+						while (true) {
+							final var d = buffer[pos];
+							if (d < '0' || d > '9') { stopCharFound = d; break; }
+							lVirtualExp++;
+							pos++;
+						}
+						break;
 					}
+					// there are <= 19 digits: use long math
+					if (len > 0) {
+						// safety check for 19. digit number > 9.22 Trillionen
+						if (sigDigits + len == 19 && lNumberVal > 922337203685477580L) {
+							// Fallback in den Drain für die extrem seltenen > Long.MAX_VALUE Integers
+							final var fill = 18 - sigDigits;
+							for (var i = 0; i < fill; i++) lNumberVal = lNumberVal * 10L + ((val >>> (i << 3)) & 0xFF);
+							sigDigits = 18;
+							lVirtualExp += (len - fill);
+							pos += len;
+							if (len < 8) { stopCharFound = (byte) (word >>> (len << 3)); break; }
+							continue;
+						}
 
-					var chunk = val << (64 - (len << 3));
-					chunk = (chunk & 0x00FF00FF00FF00FFL) * 10 + ((chunk >>> 8) & 0x00FF00FF00FF00FFL);
-					chunk = (chunk & 0x0000FFFF0000FFFFL) * 100 + ((chunk >>> 16) & 0x0000FFFF0000FFFFL);
-					chunk = (chunk & 0x00000000FFFFFFFFL) * 10000 + (chunk >>> 32);
-					lNumberVal = lNumberVal * POW10_L[len] + chunk;
-					sigDigits += len;
-					pos += len;
+						var chunk = val << (64 - (len << 3));
+						chunk = (chunk & 0x00FF00FF00FF00FFL) * 10 + ((chunk >>> 8) & 0x00FF00FF00FF00FFL);
+						chunk = (chunk & 0x0000FFFF0000FFFFL) * 100 + ((chunk >>> 16) & 0x0000FFFF0000FFFFL);
+						chunk = (chunk & 0x00000000FFFFFFFFL) * 10000 + (chunk >>> 32);
+						lNumberVal = lNumberVal * POW10_L[len] + chunk;
+						sigDigits += len;
+						pos += len;
+					}
+					if (len < 8) { stopCharFound = (byte) (word >>> (len << 3)); break; }
 				}
-
-				if (len < 8) {
-					stopCharFound = (byte) (word >>> (len << 3));
-					break;
-				}
-			}
 
 			// ====================================================================
 			// PHASE TRANSITION LOGIC

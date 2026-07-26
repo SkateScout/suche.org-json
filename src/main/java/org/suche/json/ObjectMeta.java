@@ -469,9 +469,7 @@ final class ObjectMeta {
 		this.setEmpty          = cfg == null ? false : cfg.setEmpty   ();
 		this.setEmptyString    = cfg == null ? false : cfg.setEmptyString();
 		var primFound = false;
-		if (pTypes != null) {
-			for (final var t : pTypes) if (t != null && t.isPrimitive()) { primFound = true; break; }
-		}
+		for (final var t : pTypes) if (t != null && t.isPrimitive()) { primFound = true; break; }
 		this.needsPrims          = primFound;
 		this.componentDescriptor = 0L;
 		this.fieldDescriptors    = componentMetaToDescriptor(e, possibleComponents);
