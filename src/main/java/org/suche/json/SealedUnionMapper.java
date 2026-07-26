@@ -139,6 +139,7 @@ final class SealedUnionMapper {
 		final var unionCtx  = (MetaPool.ParseContext) context;
 		final var unionObj  = unionCtx.objs;
 		final var unionPrim = unionCtx.prims;
+		if(unionObj == null) throw new IllegalStateException("Missing unionObj");
 		var className = (String) unionObj[0];
 		if (className == null) {
 			for (final String alias : new String[]{"type", "__type__", "@type", ENUM_KEY}) {

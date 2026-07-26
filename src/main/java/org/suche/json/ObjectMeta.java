@@ -441,6 +441,7 @@ final class ObjectMeta {
 
 	// The unified main constructor for TYPE_SEALED
 	ObjectMeta(final InternalEngine e, final Type baseTyp, final String pClassName, final Class<?>[] pSubclasses, final String[] pKeys, final Class<?>[] pTypes, final ComponentMeta[] pComponents, final int pCacheIndex) {
+		if(pTypes == null) throw illegalStateException(null, "Missing pTyps");
 		this.cacheIndex     = pCacheIndex;
 		this.genericBaseType = baseTyp;
 		this.genericCompType = null;
@@ -829,7 +830,7 @@ final class ObjectMeta {
 			pc.objs[index] = value;
 		}
 		case TYPE_MAP -> {
-			if (value == null && setEmpty && metaType != TYPE_OBJ_ARRAY && metaType != TYPE_COLLECTION) return;
+			if (value == null && setEmpty) return;
 			if (value instanceof final String t && t.isEmpty() && !setEmptyString) return;
 			final var ctx = (ParseContext) context;
 			ctx.upgradeToMixed(s, ctx.cnt + 2);

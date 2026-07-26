@@ -93,8 +93,6 @@ final class NumberParser {
 				final var non_digits = (val | (val + 0x0606060606060606L)) & 0xF0F0F0F0F0F0F0F0L;
 				final var len = Long.numberOfTrailingZeros(non_digits) >>> 3;
 
-
-
 				if (sigDigits + len > 19) {
 					// --- DEIN REGISTER DRAIN (Erst ab der 20. Ziffer!) ---
 					final var fill = 19 - sigDigits;
@@ -109,11 +107,7 @@ final class NumberParser {
 					final var overflow = len - fill;
 					lVirtualExp += overflow;
 					pos += len;
-
-					if (len < 8) {
-						stopCharFound = (byte) (word >>> (len << 3));
-						break;
-					}
+					if (len < 8) { stopCharFound = (byte) (word >>> (len << 3)); break; }
 
 					// Memory-Scalar Fallback, falls die Zahl absurderweise > 26 Ziffern hat
 					while (true) {
