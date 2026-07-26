@@ -551,17 +551,40 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 		return finalizeHash(hash64);
 	}
 
+
+	private int finishKey(final int idx) throws IOException {
+		if (pos < limit && buffer[pos] == ':') { pos++; return idx; }
+		consumeColon();
+		return idx;
+	}
+
+	final void consumeColon() throws IOException {
+		if (pos < limit) {
+			final var b = buffer[pos];
+			if (b == ':') { pos++; return; }
+			if ((b & 0xC0) == 0 && ((1L << b) & WHITESPACE_MASK) != 0) {
+				skipWhitespace();
+				if (pos < limit && buffer[pos] == ':') { pos++; return; }
+			}
+		}
+		consumeColonSlow();
+	}
+
+	private void consumeColonSlow() throws IOException {
+		skipWhitespace();
+		if (pos >= limit) ensure(1);
+		if (pos >= limit || buffer[pos++] != ':') throwInvalid("Expected ':' after object key");
+	}
+
 	final int parseStringKeyAsIndex(final Object context, final ObjectMeta meta) throws IOException {
-		pos++; // Skip the opening quote
+		pos++;
 		final var start = pos;
 		final var safeLimit = limit - 8;
 		final var buf = buffer;
-		// 64-bit hash accumulator
 		var hash64 = HASH_BASIS;
-		// --- SWAR Fast-Path with 64-bit block hashing ---
 		while (pos <= safeLimit) {
 			final var word = (long) JSONString.LONG_VIEW.get(buf, pos);
-			if ((word & JSONString.NON_ASCII_PATTERN) != 0) break; // UTF-8 Slow-Path
+			if ((word & JSONString.NON_ASCII_PATTERN) != 0) break;
 			final var quoteXor     = word ^ JSONString.QUOTE_PATTERN;
 			final var backslashXor = word ^ JSONString.BACKSLASH_PATTERN;
 			final var hasQuote     = (quoteXor     - 0x0101010101010101L) & ~quoteXor;
@@ -569,8 +592,7 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 			final var hasCtrl      = (word - 0x2020202020202020L) & ~word;
 			final var has = (hasQuote | hasBackslash | hasCtrl) & JSONString.NON_ASCII_PATTERN;
 			if (has != 0) {
-				// We found a quote, escape or control character.
-				final var match  = Long.lowestOneBit(has); // x86 BLSI instruction (1 cycle)
+				final var match  = Long.lowestOneBit(has);
 				if ((hasCtrl & match) != 0) throwInvalid("Unescaped control character in key");
 				final var offset = (Long.numberOfTrailingZeros(match) >>> 3);
 				if(offset > 0) {
@@ -579,24 +601,19 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 					hash64 *= HASH_PRIME;
 				}
 				pos += offset;
-				// If the found bit is NOT in the quote mask, it was a backslash.
-				if ((hasQuote & match) == 0) break; // Backslash found, jump to slow path
+				if ((hasQuote & match) == 0) break;
 				final var len = pos - start;
-				pos++; // Skip the closing '"'
-				// Fold the 64-bit hash elegantly into a 32-bit integer (for tables/maps)
+				pos++;
 				final var finalHash = finalizeHash(hash64);
 				final var idx = meta.prepareKey(finalHash, buf, start, len);
-				if (idx != -1) return idx;
+				if (idx != -1) return finishKey(idx);
 				final var key = internBytes(buf, start, len, finalHash, true);
-				return meta.prepareKey(context, key);
+				return finishKey(meta.prepareKey(context, key));
 			}
-			// Full 8-byte block without special characters!
-			// Hash in 2 clock cycles: XOR and Multiply. No loop!
 			hash64 ^= word;
 			hash64 *= HASH_PRIME;
 			pos += 8;
 		}
-		// Pass the calculated 64-bit hash as 32-bit integer to the slow path
 		final var passedHash = finalizeHash(hash64);
 		return parseStringKeyAsIndexSlow(context, meta, start, passedHash);
 	}
@@ -612,28 +629,20 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 			if (b == '"') {
 				final var len = pos - start;
 				pos++;
-
-				// Process any remaining bytes in the accumulator identically to computeHash
 				if (tailLen > 0) {
 					hash64 ^= tailWord;
 					hash64 *= HASH_PRIME;
 				}
-
 				final var finalHash = finalizeHash(hash64);
 				final var idx = meta.prepareKey(finalHash, buf, start, len);
-				if (idx != -1) return idx;
+				if (idx != -1) return finishKey(idx);
 				final var key = internBytes(buf, start, len, finalHash, true);
-				return meta.prepareKey(context, key);
+				return finishKey(meta.prepareKey(context, key));
 			}
-
-			if (b == '\\' || b < 0) break; // Escapes or UTF-8
-
-			// Pack byte into tailWord (Little-Endian)
+			if (b == '\\' || b < 0) break;
 			tailWord |= (b & 0xFFL) << (tailLen * 8);
 			tailLen++;
 			pos++;
-
-			// If we accumulate a full 8-byte block, process it
 			if (tailLen == 8) {
 				hash64 ^= tailWord;
 				hash64 *= HASH_PRIME;
@@ -641,14 +650,9 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 				tailLen = 0;
 			}
 		}
-
-		// If we break due to '\\' or UTF-8, the raw bytes no longer represent the final string.
-		// parseStringSlow will build the unescaped string and compute the hash from scratch.
 		final var key = parseStringSlow(start, pos, true, true);
-		return meta.prepareKey(context, key);
+		return finishKey(meta.prepareKey(context, key));
 	}
-
-
 	// SWAR Optimized
 	// 1. Der klassische Einstieg (z. B. wenn SWAR direkt am Anfang ein UTF-8 Byte sieht)
 	private String parseStringSlow(final int start, final int lPos, final boolean isAscii, final boolean asKey) throws IOException {

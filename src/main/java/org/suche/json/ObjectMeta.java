@@ -100,7 +100,6 @@ final class ObjectMeta {
 	final         boolean             setNumeric0      ;
 	final         boolean             setEmpty         ;
 	final         boolean             setEmptyString   ;
-	private final int[]               lastSeenSizeByDepth = new int[64];
 	final         boolean             needsPrims;
 	final         long                componentDescriptor;
 	final         int                 cacheIndex;
@@ -189,14 +188,11 @@ final class ObjectMeta {
 		return PRIM_OTHER;
 	}
 
-
 	long fieldDescriptor(final int idx) {
 		return (metaType == TYPE_INSTANTIATOR || metaType == TYPE_SEALED) ? fieldDescriptors[idx] : componentDescriptor;
 	}
 
 	ObjectMeta childMeta(final int index) { return childMetas[index]; }
-
-	private void lastSize(final int depth, final int size) { if (depth >= 0 && depth < 64) lastSeenSizeByDepth[depth] = size; }
 
 	private static IllegalStateException illegalStateException(final MetaPool location, final String mesg) {
 		var m = mesg;
@@ -211,12 +207,6 @@ final class ObjectMeta {
 		@Override public StackTraceElement[] getStackTrace() { return trace; }
 		@Override public void setStackTrace(final StackTraceElement[] stackTrace) { }
 		@Override public synchronized Throwable fillInStackTrace() { return this; }
-	}
-
-	private IllegalStateException invalidKeyException(final MetaPool location, final String mesg, final String key, final StackTraceElement[] trace) {
-		var m = mesg;
-		if(location != null) m = m.replace("{offset}", Long.toString(location.offset()));
-		throw new JsonException(m.replace("{classsName}", className).replace("{key}",key), trace);
 	}
 
 	private IllegalStateException invalidKeyException(final String mesg, final String key) {
@@ -428,16 +418,6 @@ final class ObjectMeta {
 	long getChildDescriptor(final int index) {
 		return (this.metaType == TYPE_INSTANTIATOR || this.metaType == TYPE_SEALED) ? fieldDescriptors[index] : this.componentDescriptor;
 	}
-
-	// Overloaded bridge constructors for backward compatibility
-	// ObjectMeta(final InternalEngine e, final String pClassName, final Class<?>[] pSubclasses, final String[] pKeys, final Class<?>[] pTypes, final int pCacheIndex) {
-	// 	this(e, null, pClassName, pSubclasses, pKeys, pTypes, null, pCacheIndex);
-	// }
-
-	// @Deprecated(forRemoval = true, since = "use with pComponents=null")
-	// ObjectMeta(final InternalEngine e, final Type baseTyp, final String pClassName, final Class<?>[] pSubclasses, final String[] pKeys, final Class<?>[] pTypes, final int pCacheIndex) {
-	// 	this(e, baseTyp, pClassName, pSubclasses, pKeys, pTypes, null, pCacheIndex);
-	// }
 
 	// The unified main constructor for TYPE_SEALED
 	ObjectMeta(final InternalEngine e, final Type baseTyp, final String pClassName, final Class<?>[] pSubclasses, final String[] pKeys, final Class<?>[] pTypes, final ComponentMeta[] pComponents, final int pCacheIndex) {
@@ -665,7 +645,7 @@ final class ObjectMeta {
 		return switch (metaType) {
 		case TYPE_MAP, TYPE_OBJ_ARRAY, TYPE_COLLECTION -> s.takeContext(TYPE_MAP == metaType);
 		case TYPE_INSTANTIATOR, TYPE_SEALED -> {
-			final var len = fieldDescriptors != null ? fieldDescriptors.length : 0;
+			final var len = fieldDescriptors != null ? fieldDescriptors.length : 16;
 			final var ctx = s.takeContext(false);
 			if (ctx.objs == null) ctx.objs = s.takeArray(len);
 			if (needsPrims && ctx.prims == null) ctx.prims = s.takeLongArray(len);
@@ -695,36 +675,36 @@ final class ObjectMeta {
 				return c;
 			}
 		}
-
-		if(cnt == 0) {
+		if (cnt == 0) {
 			s.returnContext(ctx);
 			return EmptyJSONArray.ONCE;
 		}
-		lastSize(s.depth(), cnt);
-		if(ctx.prims != null && ctx.prims.length == cnt) {
-			if(ctx.singleType == PRIMITIVE.T_LONG || ctx.singleType == PRIMITIVE.T_DOUBLE) {
-				final var ret = new CompactList(ctx.singleType, null, ctx.prims);
-				ctx.prims = new long[cnt];
-				s.returnContext(ctx);
-				return ret;
-			}
-			if(ctx.objs != null && ctx.objs.length == cnt) {
-				final var ret = new CompactList(ctx.singleType, ctx.objs, ctx.prims);
-				ctx.prims = new long  [cnt];
-				ctx.objs  = new Object[cnt];
-				s.returnContext(ctx);
-				return ret;
-			}
-		}
-		if(ctx.singleType == PRIMITIVE.T_LONG || ctx.singleType == PRIMITIVE.T_DOUBLE) {
-			final var ret =  new CompactList(ctx.singleType, null, Arrays.copyOf(ctx.prims, ctx.cnt));
-			s.returnContext(ctx);
-			return ret;
 
+		final var primsLen   = ctx.prims == null ? 0 : ctx.prims.length;
+		final var objsLen    = ctx.objs  == null ? 0 : ctx.objs .length;
+		final var wastePrims = primsLen - cnt;
+		final var wasteObjs  = objsLen  - cnt;
+
+		long[] p;
+		Object[] o;
+
+		if (ctx.prims != null && wastePrims <= 16) {
+			p = ctx.prims;
+			ctx.prims = null;
+		} else {
+			p = ctx.prims == null ? null : Arrays.copyOf(ctx.prims, cnt);
 		}
-		final var p = ctx.prims == null ? null : Arrays.copyOf(ctx.prims, ctx.cnt);
-		final var o = ctx.objs  == null ? null : Arrays.copyOf(ctx.objs , ctx.cnt);
-		final var ret = new CompactList(ctx.singleType, o, p);
+
+		if (ctx.singleType == PRIMITIVE.T_LONG || ctx.singleType == PRIMITIVE.T_DOUBLE) {
+			o = null;
+		} else if (ctx.objs != null && wasteObjs <= 16) {
+			o = ctx.objs;
+			ctx.objs = null;
+		} else {
+			o = ctx.objs == null ? null : Arrays.copyOf(ctx.objs, cnt);
+		}
+
+		final var ret = new CompactList(ctx.singleType, o, p, cnt);
 		s.returnContext(ctx);
 		return ret;
 	}
@@ -758,15 +738,37 @@ final class ObjectMeta {
 					yield map;
 				}
 			}
-			final var data = Arrays.copyOf(ctx.objs, ctx.cnt);
-			final var prims = ctx.prims == null ? null : Arrays.copyOf(ctx.prims, ctx.cnt >> 1);
+
+			final var objsLen    = ctx.objs.length;
+			final var primsLen   = ctx.prims == null ? 0 : ctx.prims.length;
+			final var wasteObjs  = objsLen - ctx.cnt;
+			final var wastePrims = primsLen - (ctx.cnt >> 1);
+
+			Object[] data;
+			long[] prims;
+
+			if (wasteObjs <= 16) {
+				data = ctx.objs;
+				ctx.objs = null;
+			} else {
+				data = Arrays.copyOf(ctx.objs, ctx.cnt);
+			}
+
+			if (ctx.prims == null) {
+				prims = null;
+			} else if (wastePrims <= 16) {
+				prims = ctx.prims;
+				ctx.prims = null;
+			} else {
+				prims = Arrays.copyOf(ctx.prims, ctx.cnt >> 1);
+			}
+
 			s.returnContext(ctx);
 			yield new CompactMap(ctx.singleType, data, prims);
 		}
 		case TYPE_OBJ_ARRAY -> {
 			final var ctx = (ParseContext) context;
 			if (setEmpty && ctx.cnt == 0) { s.returnContext(ctx); yield null; }
-			lastSize(s.depth(), ctx.cnt);
 			final var result = arrayCreator.apply(ctx.cnt);
 			if (ctx.objs != null) System.arraycopy(ctx.objs, 0, result, 0, ctx.cnt);
 			else if (ctx.prims != null) {
@@ -779,7 +781,7 @@ final class ObjectMeta {
 		}
 		case TYPE_COLLECTION -> endCollection(s, context);
 		case TYPE_SEALED     -> SealedUnionMapper.end(s, context, baseType, permitted, keys, types);
-		default -> throw illegalStateException(s, Integer.toString(metaType));
+		default              -> throw illegalStateException(s, Integer.toString(metaType));
 		};
 	}
 

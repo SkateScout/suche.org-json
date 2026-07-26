@@ -271,7 +271,6 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				if (needsComma) throwInvalid("Expected comma bevore STRING");
 				if (curTypeDesc >= 0L && curIdx < 0) {
 					curIdx = parseStringKeyAsIndex(curObj, curMeta);
-					expect((byte) ':');
 					needsComma = false;
 					trailingComma = false;
 				} else {
@@ -513,18 +512,9 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				pos++;
 				return meta.end(this, context);
 			}
-			if (buffer[pos] != '"') throwInvalid("Expected '\"' for object key but got: " + (char) buffer[pos]);
+			if (buffer[pos] != '"') throwInvalid("Expected '\"' for object key");
 			final var targetIdx = parseStringKeyAsIndex(context, meta);
-			ensure(3); // Minimum :1}
 
-			b = buffer[pos++];
-			if ((b & 0xC0) == 0 && ((1L << b) & WHITESPACE_MASK) != 0) {
-				skipWhitespace();
-				ensure(3); // Minimum :1}
-				b = buffer[pos++];
-			}
-
-			if (b != ':') unexpect((byte)':', b);
 			if (targetIdx < 0) { skipWhitespace(); skipValue(); consumeCommaIfPresent(); continue; }
 			// Use register-based conditional move for Maps instead of executing a rel32 CALL per entry
 			final var targetTD  = isMap ? mapDesc : meta.fieldDescriptor(targetIdx);

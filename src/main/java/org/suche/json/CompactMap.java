@@ -14,7 +14,7 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 	private Object[]                  data;
 	private long  []                  prims;
 	private byte                      singleType;
-	private Set<String>               keys; // LAZY INIT
+	private transient Set<String>               keys; // LAZY INIT
 	private Set<Map.Entry<String, Object>> entrySet;
 
 	@Override public Object rawValueAt(final int logicalIdx) { return data[(logicalIdx << 1) + 1]; }
@@ -37,33 +37,85 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 		this.prims      = pPrims;
 	}
 
-	@Override
-	public Set<String> keySet() {
-		if (keys == null) {
-			// Creates a lightweight view over the existing array without allocating node objects
-			keys = new AbstractSet<>() {
-				@Override public int size() { return CompactMap.this.size(); }
-				@Override public Iterator<String> iterator() {
-					return new Iterator<>() {
-						private int index = 0;
-						@Override public boolean hasNext() {
-							while(index < data.length && data[index]==null) index += 2;
-							return index < data.length;
-						}
-						@Override public String next() {
-							while(index < data.length && data[index]==null) index += 2;
-							if (index >= data.length - 1) throw new NoSuchElementException();
-							final var k = (String) data[index];
-							index += 2;
-							return k;
-						}
-					};
-				}
-			};
+	@Override public Set<String> keySet() {
+		var ks = keys;
+		if (ks == null) {
+			ks = new KeySet();
+			keys = ks;
 		}
-		return keys;
+		return ks;
 	}
 
+	private final class KeySet extends AbstractSet<String> {
+		@Override public int size() { return CompactMap.this.size(); }
+		@Override public void clear() { CompactMap.this.clear(); }
+		@Override public boolean contains(final Object o) { return CompactMap.this.containsKey(o); }
+		@Override public boolean remove(final Object o) { return CompactMap.this.remove(o) != null; }
+		@Override public Iterator<String> iterator() { return new KeyIterator(); }
+
+		@Override @SuppressWarnings("unchecked")
+		public void forEach(final java.util.function.Consumer<? super String> action) {
+			java.util.Objects.requireNonNull(action);
+			final var len = data.length;
+			for (var i = 0; i < len; i += 2) {
+				final var k = data[i];
+				if (k != null) action.accept((String) k);
+			}
+		}
+
+		@Override @SuppressWarnings("unchecked")
+		public boolean removeIf(final java.util.function.Predicate<? super String> filter) {
+			java.util.Objects.requireNonNull(filter);
+			var removed = false;
+			final var len = data.length;
+			for (var i = 0; i < len; i += 2) {
+				final var k = data[i];
+				if (k != null && filter.test((String) k)) {
+					CompactMap.this.remove(k);
+					removed = true;
+				}
+			}
+			return removed;
+		}
+	}
+
+	private final class KeyIterator implements Iterator<String> {
+		private int index = 0;
+		private int nextIndex = -1;
+		private int lastReturned = -1;
+
+		KeyIterator() { findNext(); }
+
+		private void findNext() {
+			final var len = data.length;
+			while (index < len) {
+				if (data[index] != null) {
+					nextIndex = index;
+					index += 2;
+					return;
+				}
+				index += 2;
+			}
+			nextIndex = -1;
+		}
+
+		@Override public boolean hasNext() { return nextIndex != -1; }
+
+		@Override @SuppressWarnings("unchecked")
+		public String next() {
+			if (nextIndex == -1) throw new java.util.NoSuchElementException();
+			lastReturned = nextIndex;
+			final var key = (String) data[lastReturned];
+			findNext();
+			return key;
+		}
+
+		@Override public void remove() {
+			if (lastReturned == -1) throw new IllegalStateException();
+			CompactMap.this.remove(data[lastReturned]);
+			lastReturned = -1;
+		}
+	}
 	/** Checks if the key exists within the map */
 	@Override public boolean has(final String pKey) { return idx(pKey)>=0; }
 

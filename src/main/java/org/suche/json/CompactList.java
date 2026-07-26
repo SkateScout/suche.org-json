@@ -17,6 +17,13 @@ public final class CompactList extends AbstractList<Object> implements ContextBa
 		this.prims      = pPrims == null ? NO_PRIMS : pPrims;
 	}
 
+	CompactList(final byte pSingleType, final Object[] pData, final long[] pPrims, final int cnt) {
+		this.singleType = pSingleType;
+		this.data       = pData;
+		this.prims      = pPrims == null ? NO_PRIMS : pPrims;
+		this.removed    = (this.prims != NO_PRIMS ? this.prims.length : (this.data != null ? this.data.length : 0)) - cnt;
+	}
+
 	private void ensureCapacity(final int requiredIndex) {
 		final var physicalCapacity = (prims != NO_PRIMS) ? prims.length : (data != null ? data.length : 0);
 
