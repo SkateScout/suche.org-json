@@ -7,8 +7,10 @@ import java.util.Collection;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 public final class CompactMap extends AbstractMap<String, Object> implements ContextBacked, JSONObject {
 	private Object[]                  data;
@@ -53,9 +55,9 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 		@Override public boolean remove(final Object o) { return CompactMap.this.remove(o) != null; }
 		@Override public Iterator<String> iterator() { return new KeyIterator(); }
 
-		@Override @SuppressWarnings("unchecked")
-		public void forEach(final java.util.function.Consumer<? super String> action) {
-			java.util.Objects.requireNonNull(action);
+		@Override
+		public void forEach(final Consumer<? super String> action) {
+			Objects.requireNonNull(action);
 			final var len = data.length;
 			for (var i = 0; i < len; i += 2) {
 				final var k = data[i];
@@ -101,7 +103,7 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 
 		@Override public boolean hasNext() { return nextIndex != -1; }
 
-		@Override @SuppressWarnings("unchecked")
+		@Override
 		public String next() {
 			if (nextIndex == -1) throw new java.util.NoSuchElementException();
 			lastReturned = nextIndex;
@@ -213,17 +215,49 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 	@Override public Set<Map.Entry<String, Object>> entrySet() {
 		if (entrySet == null) {
 			entrySet = new AbstractSet<>() {
+				class MyEntry implements Map.Entry<String,Object> {
+					int idx;
+					@Override public String getKey  () { return (String) data[idx]; }
+					@Override public Object getValue() { return resolve(idx >> 1); }
+					@Override public Object setValue(final Object value) {
+						final var old = resolve(idx >> 1);
+						CompactMap.this.p(idx, value);
+						return old;
+					}
+				}
 				@Override public int size() { return CompactMap.this.size(); }
+				@Override public void clear() { CompactMap.this.clear(); }
 				@Override public Iterator<Map.Entry<String, Object>> iterator() {
 					return new Iterator<>() {
-						private int index = 0;
-						@Override public boolean hasNext() { return index < data.length; }
+						private int     index = 0;
+						private int     nextIndex = -1;
+						private int     lastReturned = -1;
+						private MyEntry entry;
+						{ findNext(); }
+						private void findNext() {
+							final var len = data.length;
+							while (index < len) {
+								if (data[index] != null) { nextIndex = index; index += 2; return; }
+								index += 2;
+							}
+							nextIndex = -1;
+						}
+
+						@Override public boolean hasNext() { return nextIndex != -1; }
+
 						@Override public Map.Entry<String, Object> next() {
-							if (index >= data.length - 1) throw new NoSuchElementException();
-							final var k = (String) data[index];
-							final var v = resolve(index>>1);
-							index += 2;
-							return new AbstractMap.SimpleImmutableEntry<>(k, v);
+							if (nextIndex == -1) throw new NoSuchElementException();
+							lastReturned = nextIndex;
+							findNext();
+							if(entry == null) entry = new MyEntry();
+							entry.idx = lastReturned;
+							return entry;
+						}
+
+						@Override public void remove() {
+							if (lastReturned == -1) throw new IllegalStateException();
+							CompactMap.this.remove(data[lastReturned]);
+							lastReturned = -1;
 						}
 					};
 				}
@@ -294,26 +328,26 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 		if (action == null) throw new NullPointerException();
 		for (var i = 0; i < data.length - 1; i += 2) if(data[i] != null){
 			final var k = (String) data[i];
-			action.accept(k, resolve(i>>1));
+			if(k != null) action.accept(k, resolve(i>>1));
 		}
 	}
 
-	private JSONObject p(final String key, final Object value) {
+	private JSONObject p(final int idx, final Object value) {
 		if (singleType == PRIMITIVE.T_EMPTY) singleType = PRIMITIVE.T_MIXED;
-
 		if (singleType == PRIMITIVE.T_LONG) {
 			if (!(value instanceof final Number n)) upgradeToMixed();
 			else if ((n instanceof Double || n instanceof Float) && n.longValue() != n.doubleValue()) upgradeToDouble();
 		} else if ((singleType == PRIMITIVE.T_DOUBLE) && !(value instanceof Number)) upgradeToMixed();
 
-		final var idx = getOrCreateIdx(key);
 		switch (singleType) {
-		case PRIMITIVE.T_LONG   -> longPut(idx, value);
+		case PRIMITIVE.T_LONG   -> longPut  (idx, value);
 		case PRIMITIVE.T_DOUBLE -> doublePut(idx, value);
-		default                 -> mixedPut(idx, value);
+		default                 -> mixedPut (idx, value);
 		}
 		return this;
 	}
+
+	private JSONObject p(final String key, final Object value) { return p(getOrCreateIdx(key), value); }
 
 	private void longPut(final int idx, final Object value) {
 		if (prims == null) prims = new long[data.length >> 1];
