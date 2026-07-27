@@ -41,18 +41,6 @@ public sealed interface JsonEngine permits InternalEngine {
 
 	void autoPojo(final Predicate<Class<?>> p);
 
-	static class JSONException extends RuntimeException {
-		private static final long serialVersionUID = 1L;
-		final Throwable cause;
-		JSONException(final Throwable t) {
-			super(t.getMessage(), null, false, false);
-			cause = t;
-			setStackTrace(t.getStackTrace());
-		}
-
-		JSONException(final String t) { super(t); cause = null; }
-	}
-
 	static JSONException illegalStateException(final Throwable t) { throw (t instanceof final RuntimeException e  ? e : new JSONException(t)); }
 	static JSONException illegalStateException(final String    t) { throw new JSONException(t); }
 

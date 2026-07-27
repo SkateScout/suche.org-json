@@ -200,15 +200,6 @@ final class ObjectMeta {
 		throw new IllegalStateException(m);
 	}
 
-	static class JsonException extends RuntimeException {
-		private static final long serialVersionUID = 1L;
-		private final StackTraceElement[] trace;
-		JsonException(final String mesg, final StackTraceElement[] ste) { super(mesg, null, false, false); this.trace = ste; }
-		@Override public StackTraceElement[] getStackTrace() { return trace; }
-		@Override public void setStackTrace(final StackTraceElement[] stackTrace) { }
-		@Override public synchronized Throwable fillInStackTrace() { return this; }
-	}
-
 	private IllegalStateException invalidKeyException(final String mesg, final String key) {
 		throw new IllegalStateException(mesg.replace("{classsName}", className).replace("{key}",key));
 	}
