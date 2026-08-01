@@ -19,6 +19,12 @@ final class NumberParser {
 
 	private static void throwInvalid(final String mesg) { throw new IllegalStateException(mesg); }
 
+	private static void throwInvalid(final String mesg, final byte[] buffer, final int startPos, final int endPos) {
+		final var len = endPos - startPos;
+		final var text = len > 0 ? new String(buffer, startPos, len) : "Char: '" + (char) buffer[startPos] + "'";
+		throw new IllegalStateException(mesg + "[" + startPos + "..." + endPos + "] TEXT: " + text);
+	}
+
 	int parseNumberCore(final byte[] buffer, int pos) {
 		var lIntDigitCount = 0;
 		var lFracDigits    = 0;
@@ -27,6 +33,7 @@ final class NumberParser {
 		var lParsedExp     = 0;
 		var lVirtualExp    = 0;
 		var lExpNeg        = false;
+		final var startPos       = pos;
 
 		var start = (int)JSONStringAddOpens.INT_VIEW.get(buffer, pos);
 
@@ -57,6 +64,7 @@ final class NumberParser {
 				final var non_digits = (val | (val + 0x0606060606060606L)) & 0xF0F0F0F0F0F0F0F0L;
 
 				// --- FAST PATH: Keine Branches, keine TrailingZeros ---
+				// Next extra method since MaxInlineSize would not ioline it so it apear 3 times
 				if (non_digits == 0) {
 					var chunk = val;
 					chunk = (chunk & 0x00FF00FF00FF00FFL) * 10 + ((chunk >>> 8) & 0x00FF00FF00FF00FFL);
@@ -147,7 +155,7 @@ final class NumberParser {
 			// ====================================================================
 			if (!phaseFraction) {
 				lIntDigitCount = sigDigits;
-				if (lIntDigitCount == 0) throwInvalid("Missing integer digits");
+				if (lIntDigitCount == 0) throwInvalid("Missing integer digits", buffer, startPos, pos);
 
 				if (stopCharFound == '.') {
 					phaseFraction = true;

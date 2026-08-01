@@ -109,6 +109,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 	}
 
 	private void parseQuotedIntLong(final ObjectMeta meta, final Object context, final int targetIdx) throws IOException {
+		pos++;
 		final var val = parseLongPrimitive();
 		if (pos >= limit || buffer[pos++] != '"') throwInvalid("Expected closing quote after numeric value");
 		meta.setLong(this, context, targetIdx, val);

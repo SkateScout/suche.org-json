@@ -19,10 +19,10 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 	private static final long PATTERN_BRACE_OPEN    = 0x7B7B7B7B7B7B7B7BL; // '{'
 	private static final long PATTERN_BRACKET_OPEN  = 0x5B5B5B5B5B5B5B5BL; // '['
 
+	// FNV-1a offset basis
+	private static final long HASH_BASIS = new java.security.SecureRandom().nextLong();
 	// FNV-1a 64-bit prime
 	private static final long HASH_PRIME = 0x100000001b3L;
-	// FNV-1a offset basis
-	private static final long HASH_BASIS = 0xcbf29ce484222325L;
 
 	Map<Object, Object> internPool;
 	byte[]                       strBuf          = new byte[1024];
