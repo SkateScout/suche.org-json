@@ -11,19 +11,18 @@ import java.util.Map;
 
 public final class GernericsHandler {
 
+	static Type resolveActualType(final Type genericType, final Type contextType) {
+		if (genericType == null) return Object.class;
+		return resolveType(genericType, buildContextMap(contextType));
+	}
+
 	static Type extractValueType(Type genericType, final Type contextType) {
 		if (genericType == null) return Object.class;
-
 		final var typeMap = buildContextMap(contextType);
 		genericType = resolveType(genericType, typeMap);
-
-		if (genericType instanceof final GenericArrayType gat) {
-			return resolveType(gat.getGenericComponentType(), typeMap);
-		}
+		if (genericType instanceof final GenericArrayType gat) return resolveType(gat.getGenericComponentType(), typeMap);
 		final Class<?> rawType = resolveClass(genericType);
-		if (rawType.isArray()) {
-			return rawType.getComponentType();
-		}
+		if (rawType.isArray()) return rawType.getComponentType();
 
 		final Class<?> targetInterface;
 		final int targetIndex;
@@ -33,37 +32,27 @@ public final class GernericsHandler {
 		} else if (Collection.class.isAssignableFrom(rawType)) {
 			targetInterface = Collection.class;
 			targetIndex = 0;
-		} else {
-			return genericType;
-		}
+		} else return genericType;
 
 		final var targetType = findExactSuperType(genericType, targetInterface, typeMap);
-		if (targetType instanceof final ParameterizedType pt) {
-			return resolveType(pt.getActualTypeArguments()[targetIndex], typeMap);
-		}
+		if (targetType instanceof final ParameterizedType pt) return resolveType(pt.getActualTypeArguments()[targetIndex], typeMap);
 		return Object.class;
 	}
 
-	// Maps TypeVariables by their name ("T") to prevent JVM identity loss
-	private static Map<String, Type> buildContextMap(final Type contextType) {
-		final var map = new HashMap<String, Type>();
+	// Maps TypeVariables directly to prevent JVM identity loss and endless loops
+	private static Map<TypeVariable<?>, Type> buildContextMap(final Type contextType) {
+		final var map = new HashMap<TypeVariable<?>, Type>();
 		if (contextType instanceof final ParameterizedType pt && pt.getRawType() instanceof final Class<?> raw) {
 			final var vars = raw.getTypeParameters();
 			final var args = pt.getActualTypeArguments();
-			for (var i = 0; i < vars.length && i < args.length; i++) {
-				map.put(vars[i].getName(), args[i]);
-			}
+			for (var i = 0; i < vars.length && i < args.length; i++) map.put(vars[i], args[i]); // <- Using TypeVariable instead of String
 		}
 		return map;
 	}
 
-	private static Type resolveType(Type type, final Map<String, Type> map) {
-		while (type instanceof final TypeVariable<?> tv && map.containsKey(tv.getName())) {
-			type = map.get(tv.getName());
-		}
-		if (type instanceof final ParameterizedType pt) {
-			return resolveParameterizedType(pt, map);
-		}
+	private static Type resolveType(Type type, final Map<TypeVariable<?>, Type> map) {
+		while (type instanceof final TypeVariable<?> tv && map.containsKey(tv)) type = map.get(tv);
+		if (type instanceof final ParameterizedType pt) return resolveParameterizedType(pt, map);
 		if (type instanceof final GenericArrayType gat) {
 			final var comp = resolveType(gat.getGenericComponentType(), map);
 			if (comp instanceof final Class<?> c) return c.arrayType();
@@ -72,17 +61,16 @@ public final class GernericsHandler {
 		return type;
 	}
 
-	private static Type fromParameterizedType(final ParameterizedType pt, final Class<?> targetClass, final Map<String, Type> typeMap) {
+	private static Type fromParameterizedType(final ParameterizedType pt, final Class<?> targetClass, final Map<TypeVariable<?>, Type> typeMap) {
 		final var raw = (Class<?>) pt.getRawType();
 		if (raw == targetClass) return resolveParameterizedType(pt, typeMap);
-
 		final var vars = raw.getTypeParameters();
 		final var args = pt.getActualTypeArguments();
 		final var nextMap = new HashMap<>(typeMap);
 		for (var i = 0; i < vars.length; i++) {
 			var arg = args[i];
-			while (arg instanceof final TypeVariable<?> tv && nextMap.containsKey(tv.getName())) arg = nextMap.get(tv.getName());
-			nextMap.put(vars[i].getName(), arg);
+			while (arg instanceof final TypeVariable<?> tv && nextMap.containsKey(tv)) arg = nextMap.get(tv);
+			nextMap.put(vars[i], arg);
 		}
 
 		for (final var intf : raw.getGenericInterfaces())
@@ -91,7 +79,7 @@ public final class GernericsHandler {
 		return null;
 	}
 
-	private static Type findExactSuperType(final Type currentType, final Class<?> targetClass, final Map<String, Type> typeMap) {
+	private static Type findExactSuperType(final Type currentType, final Class<?> targetClass, final Map<TypeVariable<?>, Type> typeMap) {
 		if (currentType instanceof final Class<?> c) {
 			if (c == targetClass) return c;
 			for (final var intf : c.getGenericInterfaces()) if (findExactSuperType(intf, targetClass, new HashMap<>(typeMap)) instanceof final Type found) return found;
@@ -103,12 +91,12 @@ public final class GernericsHandler {
 		return null;
 	}
 
-	private static ParameterizedType resolveParameterizedType(final ParameterizedType pt, final Map<String, Type> typeMap) {
+	private static ParameterizedType resolveParameterizedType(final ParameterizedType pt, final Map<TypeVariable<?>, Type> typeMap) {
 		final var originalArgs = pt.getActualTypeArguments();
 		final var resolvedArgs = new Type[originalArgs.length];
 		for (var i = 0; i < originalArgs.length; i++) {
 			var arg = originalArgs[i];
-			while (arg instanceof final TypeVariable<?> tv && typeMap.containsKey(tv.getName())) arg = typeMap.get(tv.getName());
+			while (arg instanceof final TypeVariable<?> tv && typeMap.containsKey(tv)) arg = typeMap.get(tv);
 			resolvedArgs[i] = arg;
 		}
 		return new ResolvedParameterizedType(pt, resolvedArgs);

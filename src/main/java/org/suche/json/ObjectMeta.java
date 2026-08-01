@@ -254,7 +254,7 @@ final class ObjectMeta {
 		}
 	}
 
-	static final record Prop(String name, boolean isField, Class<?> type, Type valueType, int ctorIdx, MethodHandle setterHandle) { }
+	static final record Prop(String name, boolean isField, Class<?> jsonType, Class<?> declaredType, Type valueType, int ctorIdx, MethodHandle setterHandle) { }
 
 	private static ObjectMeta[] componentMetaToObjectMeta(final InternalEngine e, final long[] fieldDescriptors) {
 		if(fieldDescriptors == null || fieldDescriptors.length == 0) return NO_childMetas;
@@ -460,20 +460,24 @@ final class ObjectMeta {
 	static ObjectMeta ofRecord(final InternalEngine engine, final Type genericType, final Class<? extends Record> c, final int cacheIndex) {
 		final var comps = c.getRecordComponents();
 		final var metaComps = new ComponentMeta[comps.length];
-		final var types = new Class<?>[comps.length];
+		final var constructorTypes = new Class<?>[comps.length];
+		final var jsonTypes        = new Class<?>[comps.length];
 		try {
 			for (var i = 0; i < comps.length; i++) {
 				final var comp = comps[i];
-				types[i] = comp.getType();
 				var name = comp.getName();
 				if(comp.getAnnotation(org.suche.json.JsonProperty.class) instanceof final org.suche.json.JsonProperty p && !p.value().isEmpty()) name = p.value();
-
+				// Resolved type for JSON logic
+				final var actualFieldType = GernericsHandler.resolveActualType(comp.getGenericType(), genericType);
+				jsonTypes[i] = GernericsHandler.resolveClass(actualFieldType);
+				// 1. Erased type for Reflection (Constructor lookup)
+				constructorTypes[i] = comp.getType();
 				// The resolved type (e.g., Station.class) goes EXCLUSIVELY into the valueType...
-				final var resolvedValueType = GernericsHandler.extractValueType(comp.getGenericType(), genericType);
-
-				metaComps[i] = new ComponentMeta(name, types[i], resolvedValueType);
+				metaComps[i] = new ComponentMeta(name, jsonTypes[i], GernericsHandler.extractValueType(comp.getGenericType(), genericType));
+				// System.out.println("metaComps[i] "+metaComps[i]+" CT: "+constructorTypes[i]);	// type=List value=XY ctor=Object
 			}
-			return new ObjectMeta(engine, c.getCanonicalName(), NO_POJO_START, ConstructorGenerator.generate(c, types), comps.length, FastKeyTable.build(metaComps), types, metaComps, buildEnumConstants(types), cacheIndex);
+			final var factory = ConstructorGenerator.generate(c, constructorTypes);
+			return new ObjectMeta(engine, c.getCanonicalName(), NO_POJO_START, factory, comps.length, FastKeyTable.build(metaComps), jsonTypes, metaComps, buildEnumConstants(jsonTypes), cacheIndex);
 		} catch (final Exception e) {
 			e.printStackTrace();
 			return DEFECT_FIRST;
@@ -505,10 +509,14 @@ final class ObjectMeta {
 				final var  jsonKey = entry.getKey();
 				final var  prop    = entry.getValue();
 				final var  targetIdx = prop.ctorIdx != -1 ? prop.ctorIdx : setterCounter++;
-				finalComps[targetIdx] = new ComponentMeta(jsonKey, prop.type(), prop.valueType());
-				finalTypes[targetIdx] = prop.type();
-				if (prop.ctorIdx != -1) ctorTypes[prop.ctorIdx] = prop.type();
-				else propDefsList.add(new ConstructorGenerator.PropDef(prop.name(), prop.type(), prop.isField()));
+
+				// Verwende jsonType für die JSON Metadaten
+				finalComps[targetIdx] = new ComponentMeta(jsonKey, prop.jsonType(), prop.valueType());
+				finalTypes[targetIdx] = prop.jsonType();
+
+				// Verwende declaredType (erased) für die Reflection Generator Aufrufe
+				if (prop.ctorIdx != -1) ctorTypes[prop.ctorIdx] = prop.declaredType();
+				else propDefsList.add(new ConstructorGenerator.PropDef(prop.name(), prop.declaredType(), prop.isField()));
 			}
 
 			final var keys          = FastKeyTable.build(finalComps);
@@ -528,8 +536,11 @@ final class ObjectMeta {
 		final var props = new LinkedHashMap<String, Prop>();
 
 		for (var i = 0; i < params.length; i++) {
-			final var resolvedVal = GernericsHandler.extractValueType(params[i].getParameterizedType(), genericContext);
-			props.put(params[i].getName(), new Prop(params[i].getName(), false, params[i].getType(), resolvedVal, i, null));
+			final var paramGenType = params[i].getParameterizedType();
+			final var actualType = GernericsHandler.resolveActualType(paramGenType, genericContext);
+			final var resolvedClass = GernericsHandler.resolveClass(actualType);
+			final var resolvedVal = GernericsHandler.extractValueType(paramGenType, genericContext);
+			props.put(params[i].getName(), new Prop(params[i].getName(), false, resolvedClass, params[i].getType(), resolvedVal, i, null));
 		}
 
 		for (final var e : c.getMethods()) {
@@ -541,8 +552,11 @@ final class ObjectMeta {
 			}
 			if (!props.containsKey(jsonName)) {
 				e.setAccessible(true);
-				final var resolvedVal = GernericsHandler.extractValueType(e.getGenericParameterTypes()[0], genericContext);
-				props.put(jsonName, new Prop(javaName, false, e.getParameterTypes()[0], resolvedVal, -1, null));
+				final var paramGenType = e.getGenericParameterTypes()[0];
+				final var actualType = GernericsHandler.resolveActualType(paramGenType, genericContext);
+				final var resolvedClass = GernericsHandler.resolveClass(actualType);
+				final var resolvedVal = GernericsHandler.extractValueType(paramGenType, genericContext);
+				props.put(jsonName, new Prop(javaName, false, resolvedClass, e.getParameterTypes()[0], resolvedVal, -1, null));
 			}
 		}
 
@@ -555,8 +569,11 @@ final class ObjectMeta {
 			}
 			if (!props.containsKey(jsonName)) {
 				try { e.setAccessible(true); } catch(final Throwable _) { }
-				final var resolvedVal = GernericsHandler.extractValueType(e.getGenericType(), genericContext);
-				props.put(jsonName, new Prop(javaName, true, e.getType(), resolvedVal, -1, null));
+				final var fieldGenType = e.getGenericType();
+				final var actualType    = GernericsHandler.resolveActualType(fieldGenType, genericContext);
+				final var resolvedClass = GernericsHandler.resolveClass     (actualType);
+				final var resolvedVal   = GernericsHandler.extractValueType (fieldGenType, genericContext);
+				props.put(jsonName, new Prop(javaName, true, resolvedClass, e.getType(), resolvedVal, -1, null));
 			}
 		}
 		return props;
