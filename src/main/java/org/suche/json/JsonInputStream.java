@@ -259,9 +259,9 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 	private Object runStateEngine(final long startTypeDesc, final Object startObj, final Object startMeta, final int startIdx) throws Throwable {
 		final var stackLimit = engine.config().maxDepth();
 		var curTypeDesc = startTypeDesc;
-		var curObj = startObj;
-		var curMeta = (ObjectMeta) startMeta;
-		var curIdx = startIdx;
+		var context = startObj;
+		var meta    = (ObjectMeta) startMeta;
+		var idx     = startIdx;
 		engineStack.clear();
 		var needsComma = false;
 		var trailingComma = false;
@@ -272,20 +272,21 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			case '\t', '\n', '\r', ' ' -> { pos++; skipWhitespace(); }
 			case '"' -> {
 				if (needsComma) throwInvalid("Expected comma bevore STRING");
-				if (curTypeDesc >= 0L && curIdx < 0) {
-					curIdx = parseStringKeyAsIndex(curObj, curMeta);
+				if (curTypeDesc >= 0L && idx < 0) {
+					idx = parseStringKeyAsIndex(context, meta);
 					needsComma = false;
 					trailingComma = false;
 				} else {
-					final var targetTD = curIdx >= 0 ? curMeta.fieldDescriptor(curIdx) : 0L;
+					final var targetTD = idx >= 0 ? meta.fieldDescriptor(idx) : 0L;
 					switch ((int) targetTD) {
-					case ObjectMeta.SW_BYTE_ARRAY -> curMeta.set(this, curObj, curIdx, parse64());
-					case ObjectMeta.SW_PRIM_INT   , ObjectMeta.SW_PRIM_LONG -> parseQuotedIntLong(curMeta, curObj, curIdx);
-					case ObjectMeta.SW_PRIM_DOUBLE, ObjectMeta.SW_PRIM_FLOAT -> parseQuotedDoubleFloat(curMeta, curObj, curIdx);
-					case ObjectMeta.SW_PRIM_BOOLEAN -> parseQuotedBoolean(curMeta, curObj, curIdx);
-					default                         -> curMeta.set(this, curObj, curIdx, parseStringValue());
+					case ObjectMeta.SW_BYTE_ARRAY -> meta.set(this, context, idx, parse64());
+					case ObjectMeta.SW_PRIM_INT   , ObjectMeta.SW_PRIM_LONG  -> parseQuotedIntLong    (meta, context, idx);
+					case ObjectMeta.SW_PRIM_DOUBLE, ObjectMeta.SW_PRIM_FLOAT -> parseQuotedDoubleFloat(meta, context, idx);
+					case ObjectMeta.SW_PRIM_BOOLEAN                          -> parseQuotedBoolean    (meta, context, idx);
+					case ObjectMeta.SW_PRIM_STRING , ObjectMeta.IDX_GENERIC  -> meta.set(this, context, idx, parseStringValue());
+					default -> { final var str = parseStringValue(); meta.set(this, context, idx, str.length() == 0 ? null : str); }
 					}
-					curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
+					idx = curTypeDesc < 0L ? idx + 1 : -1;
 					final var hasComma = consumeCommaIfPresent();
 					needsComma = !hasComma;
 					trailingComma = hasComma;
@@ -293,41 +294,41 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			}
 			case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9' -> {
 				if (needsComma) throwInvalid("Expected comma before NUMBER");
-				if (curTypeDesc >= 0L && curIdx < 0) throwInvalid( "Expected key before NUMBER");
-				parseNumericPrimitive(curMeta, curObj, curIdx, curTypeDesc);
-				curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
+				if (curTypeDesc >= 0L && idx < 0) throwInvalid( "Expected key before NUMBER");
+				parseNumericPrimitive(meta, context, idx, curTypeDesc);
+				idx = curTypeDesc < 0L ? idx + 1 : -1;
 				final var hasComma = consumeCommaIfPresent();
 				needsComma = !hasComma;
 				trailingComma = hasComma;
 			}
 			case 'n' -> {
 				if (needsComma) throwInvalid("Expected comma before NULL");
-				if (curTypeDesc >= 0L && curIdx < 0) throwInvalid("Expected key before NULL");
-				fillNullValue(curTypeDesc, curObj, curIdx, curMeta);
-				curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
+				if (curTypeDesc >= 0L && idx < 0) throwInvalid("Expected key before NULL");
+				fillNullValue(curTypeDesc, context, idx, meta);
+				idx = curTypeDesc < 0L ? idx + 1 : -1;
 				final var hasComma = consumeCommaIfPresent();
 				needsComma = !hasComma;
 				trailingComma = hasComma;
 			}
 			case 't', 'f' -> {
 				if (needsComma) throwInvalid("Expected comma before BOOLEAN");
-				if (curTypeDesc >= 0L && curIdx < 0) throwInvalid("Expected key before BOOLEAN");
-				curMeta.set(this, curObj, curIdx, parseTrueOrFalse(b == 't'));
-				curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
+				if (curTypeDesc >= 0L && idx < 0) throwInvalid("Expected key before BOOLEAN");
+				meta.set(this, context, idx, parseTrueOrFalse(b == 't'));
+				idx = curTypeDesc < 0L ? idx + 1 : -1;
 				final var hasComma = consumeCommaIfPresent();
 				needsComma = !hasComma;
 				trailingComma = hasComma;
 			}
 			case '{' -> {
 				if (needsComma) throwInvalid("Expected comma before OBJECT");
-				if (curTypeDesc >= 0L && curIdx < 0) throwInvalid("Expected key before OBJECT");
-				engineStack.push(curTypeDesc, curObj, curMeta, curIdx, stackLimit);
-				curTypeDesc = curMeta.fieldDescriptor(curIdx);
+				if (curTypeDesc >= 0L && idx < 0) throwInvalid("Expected key before OBJECT");
+				engineStack.push(curTypeDesc, context, meta, idx, stackLimit);
+				curTypeDesc = meta.fieldDescriptor(idx);
 				pos++;
 				if (curTypeDesc < 0L || (curTypeDesc & 1L) != 0L) throwInvalid("Expected got unexpected '{'");
-				curMeta = metaCache[(int) (curTypeDesc >> 1)];
-				curObj = curMeta.start(this);
-				curIdx = -1;
+				meta = metaCache[(int) (curTypeDesc >> 1)];
+				context = meta.start(this);
+				idx = -1;
 				needsComma = false;
 				trailingComma = false;
 			}
@@ -335,44 +336,44 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				if (trailingComma) throwInvalid("Trailing comma");
 				if (b == '}') {
 					if (curTypeDesc    <  0L) throwInvalid("Expected ']', got '}'");
-					if (curIdx         >= 0 ) throwInvalid("Expected value, got '}'");
+					if (idx         >= 0 ) throwInvalid("Expected value, got '}'");
 				} else if (curTypeDesc >= 0L) throwInvalid("Expected '}', got ']'");
 
 				pos++;
-				final var finishedObj = curMeta.end(this, curObj);
+				final var finishedObj = meta.end(this, context);
 				if (engineStack.depth < 0) return finishedObj;
 				final var parent = engineStack.stack[engineStack.depth--];
 				curTypeDesc = parent.typeDesc;
-				curObj      = parent.obj;
-				curMeta     = (ObjectMeta) parent.meta;
-				curIdx      = parent.targetIdx;
-				curMeta.set(this, curObj, curIdx, finishedObj);
-				curIdx      = curTypeDesc < 0L ? curIdx + 1 : -1;
+				context      = parent.obj;
+				meta     = (ObjectMeta) parent.meta;
+				idx      = parent.targetIdx;
+				meta.set(this, context, idx, finishedObj);
+				idx      = curTypeDesc < 0L ? idx + 1 : -1;
 				final var hasComma = consumeCommaIfPresent();
 				needsComma = !hasComma;
 				trailingComma = hasComma;
 			}
 			case '[' -> {
 				if (needsComma) throwInvalid("Expected comma");
-				if (curTypeDesc >= 0L && curIdx < 0) throwInvalid("Expected key");
+				if (curTypeDesc >= 0L && idx < 0) throwInvalid("Expected key");
 				pos++;
-				var childDesc = curMeta.fieldDescriptor(curIdx);
+				var childDesc = meta.fieldDescriptor(idx);
 				if (childDesc >= 0L) {
 					if (((int) (childDesc >> 1))!= ObjectMeta.IDX_MAP) throwInvalid(OBJECT_INSTEAD_OF_ARRAY);
 					childDesc = ObjectMeta.DESC_COLLECTION;
 				}
 				if ((childDesc & 1L) != 0L) {
-					curMeta.set(this, curObj, curIdx, parsePrimitiveArray(childDesc));
-					curIdx = curTypeDesc < 0L ? curIdx + 1 : -1;
+					meta.set(this, context, idx, parsePrimitiveArray(childDesc));
+					idx = curTypeDesc < 0L ? idx + 1 : -1;
 					final var hasComma = consumeCommaIfPresent();
 					needsComma = !hasComma;
 					trailingComma = hasComma;
 				} else {
-					engineStack.push(curTypeDesc, curObj, curMeta, curIdx, stackLimit);
+					engineStack.push(curTypeDesc, context, meta, idx, stackLimit);
 					curTypeDesc   = childDesc;
-					curMeta       = metaCache[(int) (curTypeDesc >> 1)];
-					curObj        = curMeta.start(this);
-					curIdx        = 0;
+					meta       = metaCache[(int) (curTypeDesc >> 1)];
+					context        = meta.start(this);
+					idx        = 0;
 					needsComma    = false;
 					trailingComma = false;
 				}
@@ -531,11 +532,12 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			case 'f' -> meta.set(this, context, targetIdx, parseFalse());
 			case '"' -> {
 				switch ((int)targetTD) {
-				case ObjectMeta.SW_BYTE_ARRAY -> meta.set(this, context, targetIdx, parse64());
-				case ObjectMeta.SW_PRIM_INT   , ObjectMeta.SW_PRIM_LONG -> parseQuotedIntLong(meta, context, targetIdx);
+				case ObjectMeta.SW_BYTE_ARRAY                            -> meta.set(this, context, targetIdx, parse64());
+				case ObjectMeta.SW_PRIM_INT   , ObjectMeta.SW_PRIM_LONG  -> parseQuotedIntLong(meta, context, targetIdx);
 				case ObjectMeta.SW_PRIM_DOUBLE, ObjectMeta.SW_PRIM_FLOAT -> parseQuotedDoubleFloat(meta, context, targetIdx);
-				case ObjectMeta.SW_PRIM_BOOLEAN -> parseQuotedBoolean(meta, context, targetIdx);
-				default                         ->  meta.set(this, context, targetIdx, parseStringValue());
+				case ObjectMeta.SW_PRIM_BOOLEAN                          -> parseQuotedBoolean(meta, context, targetIdx);
+				case ObjectMeta.SW_PRIM_STRING , ObjectMeta.IDX_GENERIC  -> meta.set(this, context, targetIdx, parseStringValue());
+				default -> { final var str = parseStringValue(); meta.set(this, context, targetIdx, str.length() == 0 ? null : str); }
 				}
 			}
 			case '{' -> {
@@ -633,11 +635,12 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				if(state==1) throwInvalid("Komma or Closeing breaket instead of STRING expected");
 				state = 1;
 				switch ((int) childDesc) {
-				case ObjectMeta.SW_BYTE_ARRAY -> meta.set(this, context, idx, parse64());
-				case ObjectMeta.SW_PRIM_INT   , ObjectMeta.SW_PRIM_LONG -> parseQuotedIntLong(meta, context, idx);
+				case ObjectMeta.SW_BYTE_ARRAY                            -> meta.set(this, context, idx, parse64());
+				case ObjectMeta.SW_PRIM_INT   , ObjectMeta.SW_PRIM_LONG  -> parseQuotedIntLong    (meta, context, idx);
 				case ObjectMeta.SW_PRIM_DOUBLE, ObjectMeta.SW_PRIM_FLOAT -> parseQuotedDoubleFloat(meta, context, idx);
-				case ObjectMeta.SW_PRIM_BOOLEAN -> parseQuotedBoolean(meta, context, idx);
-				default                         -> meta.set(this, context, idx, parseStringValue());
+				case ObjectMeta.SW_PRIM_BOOLEAN                          -> parseQuotedBoolean    (meta, context, idx);
+				case ObjectMeta.SW_PRIM_STRING , ObjectMeta.IDX_GENERIC  -> meta.set(this, context, idx, parseStringValue());
+				default -> { final var str = parseStringValue(); meta.set(this, context, idx, str.length() == 0 ? null : str); }
 				}
 			}
 			case '{' -> {

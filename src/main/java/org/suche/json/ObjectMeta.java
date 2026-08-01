@@ -40,15 +40,17 @@ final class ObjectMeta {
 	private static final int                  MOD_FINAL_OR_STATIC = Modifier.STATIC | Modifier.FINAL;
 	private static final Supplier<Object>     NO_POJO_START       = null;
 	private static final Class<?>[]           ENUM_TYPES          = { String.class, String.class };
-	static         final int PRIM_INT          = 1;
-	static         final int PRIM_LONG         = 2;
-	static         final int PRIM_DOUBLE       = 3;
-	static         final int PRIM_FLOAT        = 4;
-	static         final int PRIM_BOOLEAN      = 5;
-	static         final int PRIM_BYTE         = 6;
-	static         final int PRIM_SHORT        = 7;
-	static         final int PRIM_CHAR         = 8;
-	static         final int PRIM_OTHER        = 9;
+	static         final int PRIM_INT          =  1;
+	static         final int PRIM_LONG         =  2;
+	static         final int PRIM_DOUBLE       =  3;
+	static         final int PRIM_FLOAT        =  4;
+	static         final int PRIM_BOOLEAN      =  5;
+	static         final int PRIM_BYTE         =  6;
+	static         final int PRIM_SHORT        =  7;
+	static         final int PRIM_CHAR         =  8;
+	static         final int PRIM_STRING       =  9;
+	static         final int PRIM_OTHER        = 10;
+
 	static         final int          IDX_GENERIC    = 0;	// Must be 0 for speedup with bit checks
 	static         final int          IDX_MAP        = 1;
 	static         final int          IDX_COLLECTION = 2;
@@ -62,14 +64,16 @@ final class ObjectMeta {
 	static final long DESC_PRIM_DOUBLE  = (((long) PRIM_DOUBLE)    << 1) | 1L;
 	static final long DESC_PRIM_FLOAT   = (((long) PRIM_FLOAT)     << 1) | 1L;
 	static final long DESC_PRIM_BOOLEAN = (((long) PRIM_BOOLEAN)   << 1) | 1L;
+	static final long DESC_PRIM_STRING  = (((long) PRIM_STRING)    << 1) | 1L;
 
 	// NEU: Exakte 32-Bit int-Konstanten für den Switch (schneidet Bit 63 zur Compile-Zeit ab):
-	static final int SW_BYTE_ARRAY   = (int) DESC_BYTE_ARRAY;   // 13
-	static final int SW_PRIM_INT     = (int) DESC_PRIM_INT;     // 3
-	static final int SW_PRIM_LONG    = (int) DESC_PRIM_LONG;    // 5
-	static final int SW_PRIM_DOUBLE  = (int) DESC_PRIM_DOUBLE;  // 7
-	static final int SW_PRIM_FLOAT   = (int) DESC_PRIM_FLOAT;   // 9
+	static final int SW_PRIM_INT     = (int) DESC_PRIM_INT    ; // 3
+	static final int SW_PRIM_LONG    = (int) DESC_PRIM_LONG   ; // 5
+	static final int SW_PRIM_DOUBLE  = (int) DESC_PRIM_DOUBLE ; // 7
+	static final int SW_PRIM_FLOAT   = (int) DESC_PRIM_FLOAT  ; // 9
 	static final int SW_PRIM_BOOLEAN = (int) DESC_PRIM_BOOLEAN; // 11
+	static final int SW_BYTE_ARRAY   = (int) DESC_BYTE_ARRAY  ; // 13
+	static final int SW_PRIM_STRING  = (int) DESC_PRIM_STRING ;
 
 	static         final int  IDX_CUSTOM_START = 16;
 	static         final int  TYPE_INSTANTIATOR = 1;
@@ -149,6 +153,54 @@ final class ObjectMeta {
 			D.$(ConcurrentSkipListMap.class, ConcurrentSkipListMap::new),	// ConcurrentNavigableMap, NavigableMap, SortedMap
 	};
 
+	static int getPrimId(final Class<?> type) {
+		if (type == int    .class) return PRIM_INT    ;
+		if (type == long   .class) return PRIM_LONG   ;
+		if (type == double .class) return PRIM_DOUBLE ;
+		if (type == float  .class) return PRIM_FLOAT  ;
+		if (type == boolean.class) return PRIM_BOOLEAN;
+		if (type == byte   .class) return PRIM_BYTE   ;
+		if (type == short  .class) return PRIM_SHORT  ;
+		if (type == char   .class) return PRIM_CHAR   ;
+		if (type == String .class) return PRIM_STRING ;
+		return PRIM_OTHER;
+	}
+
+	private static boolean isPrimitive(final Class<?> t) {
+		if(null == t) return false;
+		if(t.isPrimitive() || (String.class == t)) return true;
+		return false;
+	}
+
+	private static long resolveDescriptor(final InternalEngine e, Type type, final Type valueType) {
+		if (type == null) type = Object.class;
+
+		final Class<?> rawType = GernericsHandler.resolveClass(type);
+
+		// FIX: If valueType is missing or hardcoded to Object.class, dynamically extract
+		// the generic child type from 'type'. This completely bridges the gap for nested collections
+		// and prevents the fallback to CompactMap.
+		final var actualValueType = (valueType == null || valueType == Object.class)
+				? GernericsHandler.extractValueType(type, rawType) : valueType;
+
+		final var isArray = rawType.isArray() || Collection.class.isAssignableFrom(rawType);
+		final Class<?> resolvedValClass = GernericsHandler.resolveClass(actualValueType);
+		final var isPrimArray =  isArray && (rawType.isArray() ? isPrimitive(rawType.componentType()) : isPrimitive(resolvedValClass));
+		final var isPrimValue = !isArray &&  isPrimitive(rawType);
+
+		Class<?> primTarget = null;
+		if      (isPrimArray) primTarget = rawType.isArray() ? rawType.componentType() : resolvedValClass;
+		else if (isPrimValue) primTarget = rawType;
+
+		final int subIdx;
+		if (primTarget != null) subIdx = getPrimId(primTarget);
+		else if (e instanceof final EngineImpl ei) { subIdx = ei.resolveEngineObjectDescriptor(type, actualValueType);
+		}
+		else subIdx = IDX_GENERIC;
+
+		return EngineImpl.createTypeDesc(isArray, primTarget != null, subIdx);
+	}
+
 	private static Supplier<Object> supplier(final Class<?> rawBase, final Class<?> standard, final D[] defaults) {
 		if(rawBase == null || rawBase.isArray()) return null;
 		var ret = rawsupplier.get(rawBase);
@@ -174,18 +226,6 @@ final class ObjectMeta {
 		if(Modifier.isFinal(rawBase.getModifiers())) return new Defect("final class "+rawBase.getCanonicalName()+" not supported.");
 		for(final var e : defaults) if(rawBase.isAssignableFrom(e.c)) return e.s;
 		return new Defect("Class "+rawBase.getCanonicalName()+" not supported.");
-	}
-
-	static int getPrimId(final Class<?> type) {
-		if (type == int.class    ) return PRIM_INT;
-		if (type == long.class   ) return PRIM_LONG;
-		if (type == double.class ) return PRIM_DOUBLE;
-		if (type == float.class  ) return PRIM_FLOAT;
-		if (type == boolean.class) return PRIM_BOOLEAN;
-		if (type == byte.class   ) return PRIM_BYTE;
-		if (type == short.class  ) return PRIM_SHORT;
-		if (type == char.class   ) return PRIM_CHAR;
-		return PRIM_OTHER;
 	}
 
 	long fieldDescriptor(final int idx) {
@@ -215,38 +255,6 @@ final class ObjectMeta {
 	}
 
 	static final record Prop(String name, boolean isField, Class<?> type, Type valueType, int ctorIdx, MethodHandle setterHandle) { }
-
-	private static long resolveDescriptor(final InternalEngine e, Type type, final Type valueType) {
-		if (type == null) type = Object.class;
-
-		final Class<?> rawType = GernericsHandler.resolveClass(type);
-
-		// FIX: If valueType is missing or hardcoded to Object.class, dynamically extract
-		// the generic child type from 'type'. This completely bridges the gap for nested collections
-		// and prevents the fallback to CompactMap.
-		final var actualValueType = (valueType == null || valueType == Object.class)
-				? GernericsHandler.extractValueType(type, rawType)
-						: valueType;
-
-		final var isArray = rawType.isArray() || Collection.class.isAssignableFrom(rawType);
-
-		final Class<?> resolvedValClass = GernericsHandler.resolveClass(actualValueType);
-		final var isPrimArray = isArray && (rawType.isArray() ? rawType.componentType().isPrimitive() : resolvedValClass.isPrimitive());
-		final var isPrimValue = !isArray && rawType.isPrimitive();
-
-		Class<?> primTarget = null;
-		if      (isPrimArray) primTarget = rawType.isArray() ? rawType.componentType() : resolvedValClass;
-		else if (isPrimValue) primTarget = rawType;
-
-		final int subIdx;
-		if (primTarget != null) subIdx = getPrimId(primTarget);
-		else if (e instanceof final EngineImpl ei) {
-			subIdx = ei.resolveEngineObjectDescriptor(type, actualValueType);
-		}
-		else subIdx = IDX_GENERIC;
-
-		return EngineImpl.createTypeDesc(isArray, primTarget != null, subIdx);
-	}
 
 	private static ObjectMeta[] componentMetaToObjectMeta(final InternalEngine e, final long[] fieldDescriptors) {
 		if(fieldDescriptors == null || fieldDescriptors.length == 0) return NO_childMetas;
@@ -818,9 +826,6 @@ final class ObjectMeta {
 			final var pc = (ParseContext)context;
 			if (value == null) { pc.objs [index] = null; pc.prims[index] = 0; return; }
 			if (this.enumConstants != null && this.enumConstants[index] != null) value = Meta.resolveEnum(this.enumConstants[index], value);
-			// Workaround for defekt "" as null implementations
-			if(types[index]!=String.class && "".equals(value)) { pc.objs [index] = null; pc.prims[index] = 0; return; }
-
 			pc.objs[index] = value;
 		}
 		case TYPE_MAP -> {
