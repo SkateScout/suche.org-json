@@ -116,12 +116,14 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 	}
 
 	private void parseQuotedDoubleFloat(final ObjectMeta meta, final Object context, final int targetIdx) throws IOException {
+		pos++;
 		final var val = parseDoublePrimitive();
 		if (pos >= limit || buffer[pos++] != '"') throwInvalid("Expected closing quote after float value");
 		meta.setDouble(this, context, targetIdx, val);
 	}
 
 	private void parseQuotedBoolean(final ObjectMeta meta, final Object context, final int targetIdx) throws IOException {
+		pos++;
 		final var val = parseBooleanPrimitive();
 		if (pos >= limit || buffer[pos++] != '"') throwInvalid("Expected closing quote after float value");
 		meta.set(this, context, targetIdx, val);
