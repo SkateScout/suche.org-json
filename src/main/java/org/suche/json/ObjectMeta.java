@@ -818,6 +818,9 @@ final class ObjectMeta {
 			final var pc = (ParseContext)context;
 			if (value == null) { pc.objs [index] = null; pc.prims[index] = 0; return; }
 			if (this.enumConstants != null && this.enumConstants[index] != null) value = Meta.resolveEnum(this.enumConstants[index], value);
+			// Workaround for defekt "" as null implementations
+			if(types[index]!=String.class && "".equals(value)) { pc.objs [index] = null; pc.prims[index] = 0; return; }
+
 			pc.objs[index] = value;
 		}
 		case TYPE_MAP -> {
