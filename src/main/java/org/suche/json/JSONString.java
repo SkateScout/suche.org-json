@@ -3,6 +3,7 @@ package org.suche.json;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.nio.ByteOrder;
+import java.util.Arrays;
 
 final class JSONString {
 	static final byte[]     hex                     = "0123456789abcdef".getBytes();
@@ -73,15 +74,29 @@ final class JSONString {
 	}
 
 	static byte[] buildJsonKey(final String name, final boolean keyWrap) {
-		final var temp = new byte[name.length() * 6 + 6];
+		var temp = new byte[name.length() * 6 + 64];
 		var pos = 0;
 		if (keyWrap) temp[pos++] = '"';
-		final var res = encodeChunk(name, 0, name.length(), temp, pos, temp.length);
-		pos += (int) res;
+		var sOff = 0;
+		final var sLen = name.length();
+		while (sOff < sLen) {
+			final var res = encodeChunk(name, sOff, sLen, temp, pos, temp.length);
+			final var sDelta = (int) (res >> 32);
+			final var pDelta = (int) res;
+			if (sDelta == 0) {
+				// SIMD-Puffer-Limit erreicht! Da wir nicht flushen können,
+				// müssen wir das Array vergrößern, um den nötigen Platz bereitzustellen.
+				temp = java.util.Arrays.copyOf(temp, temp.length + 64);
+				continue;
+			}
+			sOff += sDelta;
+			pos  += pDelta;
+		}
 		if (keyWrap) {
+			if (pos + 2 > temp.length) temp = java.util.Arrays.copyOf(temp, pos + 2);
 			temp[pos++] = '"';
 			temp[pos++] = ':';
 		}
-		return java.util.Arrays.copyOf(temp, pos);
+		return Arrays.copyOf(temp, pos);
 	}
 }
