@@ -56,7 +56,11 @@ public class ProtoBufParser {
 		switch (wireType) {
 		case  0 -> readVarInt(buffer);                     // Varint (int32, int64, uint32, bool, enum, ...)
 		case  1 -> buffer.position(buffer.position() + 8); // 64-bit (double, fixed64, sfixed64, ...)
-		case  2 -> buffer.position(buffer.position() + readLength(buffer)); // Length-delimited (string, bytes, embedded messages, packed repeated fields)
+		case  2 -> {
+			final var length = readLength(buffer); // Do not place in next line since if change position
+			buffer.position(buffer.position() + length);
+			// Length-delimited (string, bytes, embedded messages, packed repeated fields)
+		}
 		case  3 -> skipGroup(buffer); // "Start group (Deprecated sinced P2) replaced with Embedded Messages & Wire Type 2 ersetzt"
 		case  4 -> throw error("End group (Deprecated sinced P2) replaced with Embedded Messages & Wire Type 2 ersetzt");
 		case  5 -> buffer.position(buffer.position() + 4); // 32-bit (float, fixed32, ...)
