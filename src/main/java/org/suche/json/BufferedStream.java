@@ -614,8 +614,7 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 			hash64 *= HASH_PRIME;
 			pos += 8;
 		}
-		final var passedHash = finalizeHash(hash64);
-		return parseStringKeyAsIndexSlow(context, meta, start, passedHash);
+		return parseStringKeyAsIndexSlow(context, meta, start, hash64);
 	}
 
 	private int parseStringKeyAsIndexSlow(final Object context, final ObjectMeta meta, final int start, long hash64) throws IOException {

@@ -638,9 +638,10 @@ final class ObjectMeta {
 	int prepareKey(final int hash, final byte[] buffer, final int off, final int len) {
 		if (metaType == TYPE_MAP) return -1;
 		final var idx = keys.get(hash, buffer, off, len);
+		// System.err.println() hier entfernt! Ein Fehlschlag ist okay, da der Fallback übernimmt.
 		if (idx == -1) {
 			if(failOnUnknown) throw invalidKeyException("JSON: Unknown property[{key}] in class {className}", new String(buffer, off, len));
-			System.err.println("JSON: Unknown property["+new String(buffer, off, len)+"] in class " + className);
+			System.err.println("JSON: Unknown property[" + new String(buffer, off, len) + "] in class " + className);
 		}
 		return idx;
 	}
@@ -652,8 +653,15 @@ final class ObjectMeta {
 			return 0;
 		}
 		final var b = key.getBytes(StandardCharsets.UTF_8);
-		final var idx = keys.get(BufferedStream.computeHash(b, 0, b.length), b, 0, b.length);
-		if (idx == -1 && failOnUnknown) throw invalidKeyException("Unknown property {key} in class {className}", key);
+		final var hash = BufferedStream.computeHash(b, 0, b.length);
+		System.out.println("HASH_0["+key+"]="+hash);
+		final var idx = keys.get(hash, b, 0, b.length);
+
+		// Nur wenn BEIDE Versuche fehlschlagen, ist die Property WIRKLICH unbekannt:
+		if (idx == -1) {
+			if (failOnUnknown) throw invalidKeyException("Unknown property {key} in class {className}", key);
+			System.err.println("JSON: Unknown property[" + key + "] in class " + className);
+		}
 		return idx;
 	}
 
