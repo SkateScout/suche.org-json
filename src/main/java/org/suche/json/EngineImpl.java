@@ -73,14 +73,14 @@ final class EngineImpl implements InternalEngine {
 	private int dynamicMetaCount = 0;
 	private final int flags;
 
-	@Override public void    ignoreTrailing(final boolean v) { ignoreTrailing = v; }
+	@Override public JsonEngine    ignoreTrailing(final boolean v) { ignoreTrailing = v; return this; }
 	@Override public boolean ignoreTrailing() { return ignoreTrailing; }
 	@Override public void    maxRecursiveDepth(final int v) { if(v <= 128) this.maxRecursiveDepth = v; }
 	@Override public int     maxRecursiveDepth() { return maxRecursiveDepth; }
 	@Override public ObjectMeta[] metaCache() { return metaCache; }
-	@Override public void    skipInvalid(final boolean v) { this.skipInvalid = v; }
+	@Override public JsonEngine    skipInvalid(final boolean v) { this.skipInvalid = v; return this; }
 	@Override public boolean skipInvalid() { return skipInvalid; }
-	@Override public void    failOnUnknownProperties(final boolean v) { this.failOnUnknownProperties = v; }
+	@Override public JsonEngine    failOnUnknownProperties(final boolean v) { this.failOnUnknownProperties = v; return this; }
 	@Override public boolean failOnUnknownProperties() { return failOnUnknownProperties; }
 
 	final Collection<Predicate<Class<?>>> autoPojo = new CopyOnWriteArrayList<>();
@@ -197,6 +197,7 @@ final class EngineImpl implements InternalEngine {
 		final var t = getTypeRecord(type);
 		final Class<?> clazz = t.rawClass;
 
+
 		if (type == Map.class || (clazz == Map.class && !(type instanceof ParameterizedType))) {
 			return ObjectMeta.IDX_MAP;
 		}
@@ -215,21 +216,15 @@ final class EngineImpl implements InternalEngine {
 			if (Collection.class.isAssignableFrom(clazz) || Map.class.isAssignableFrom(clazz)) {
 				final var valType = GernericsHandler.extractValueType(type, clazz);
 				final var targetMetaType = Map.class.isAssignableFrom(clazz) ? ObjectMeta.TYPE_MAP : ObjectMeta.TYPE_COLLECTION;
-				// Wenn es eine Custom-Subklasse ist, registrieren wir ein dezidiertes ObjectMeta,
-				// das die konkrete Klasse als baseType mitschreibt!
 				if (!clazz.getName().startsWith("java.util.") && clazz != Map.class && clazz != Set.class && clazz != Collection.class) {
 					final var customId = registerMeta(null);
-					final var m = (targetMetaType == ObjectMeta.TYPE_MAP)
-							? new ObjectMeta(this, type, valType, customId)
-									: new ObjectMeta(this, type, valType, targetMetaType, customId);
-
+					final var m = (targetMetaType == ObjectMeta.TYPE_MAP) ? new ObjectMeta(this, type, valType, customId) : new ObjectMeta(this, type, valType, targetMetaType, customId);
 					t.cacheIndex = customId;
 					t.metaObject = m;
 					metaCache[customId] = m;
 					t.building = false;
 					return customId;
 				}
-
 				final var dynId = getDynamicMetaId(type, valType, targetMetaType);
 				t.cacheIndex = dynId;
 				t.metaObject = metaCache[dynId];
@@ -238,12 +233,11 @@ final class EngineImpl implements InternalEngine {
 			}
 
 			final ObjectMeta r;
-			if (clazz.isSealed()) r = SealedUnionMapper.build(this, clazz, t.cacheIndex);
-			else if ((clazz.isPrimitive() || clazz.isArray() || 0 != (clazz.getModifiers() & MOG_IGNORE)) || isJDKClass(clazz)) r = ObjectMeta.NULL;
-			else if (clazz.isRecord()) r = ObjectMeta.ofRecord(this, type, clazz.asSubclass(Record.class), t.cacheIndex);
-			else if (clazz.isEnum  ()) r = ObjectMeta.ofEnum(this, clazz.asSubclass(Enum.class), t.cacheIndex);
-			else r = ObjectMeta.ofPojo(this, type, clazz, t.cacheIndex);
-
+			if      ( clazz.isSealed    ()) r = SealedUnionMapper.build(this, clazz, t.cacheIndex);
+			else if ((clazz.isPrimitive () || clazz.isArray() || 0 != (clazz.getModifiers() & MOG_IGNORE)) || isJDKClass(clazz)) r = ObjectMeta.NULL;
+			else if ( clazz.isRecord    ()) r = ObjectMeta.ofRecord(this, type, clazz.asSubclass(Record.class), t.cacheIndex);
+			else if ( clazz.isEnum      ()) r = ObjectMeta.ofEnum(this, clazz.asSubclass(Enum.class), t.cacheIndex);
+			else                            r = ObjectMeta.ofPojo(this, type, clazz, t.cacheIndex);
 			t.metaObject = r;
 			if (r != ObjectMeta.NULL) metaCache[t.cacheIndex] = r;
 			t.building = false;

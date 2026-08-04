@@ -573,7 +573,8 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 	private void consumeColonSlow() throws IOException {
 		skipWhitespace();
 		if (pos >= limit) ensure(1);
-		if (pos >= limit || buffer[pos++] != ':') throwInvalid("Expected ':' after object key");
+		if (pos >= limit        ) throwInvalid("Expected ':' after object key and not end of input");
+		if (buffer[pos++] != ':') throwInvalid("Expected ':' after object key and not '"+(char)buffer[pos-1]+"'");
 	}
 
 	final int parseStringKeyAsIndex(final Object context, final ObjectMeta meta) throws IOException {

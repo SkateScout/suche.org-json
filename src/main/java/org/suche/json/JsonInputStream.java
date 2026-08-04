@@ -53,6 +53,8 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 	static JsonInputStream of(final InputStream in, final InternalEngine engine) {
 		final var s = STREAM_POOL.acquire();
 		s.init(in, engine);
+		s.limit = 0;
+		s.pos = 0;
 		s.engineStack.depth = -1;
 		s.lastArraySize = 16;
 		s.metaCache = engine.metaCache();
@@ -66,6 +68,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		s.init(in, engine);
 		if(in == null) {
 			s.limit = l;
+			s.pos = 0;
 			System.arraycopy(bs, 0, s.buffer, 0, l);
 		}
 		s.engineStack.depth = -1;
@@ -111,21 +114,21 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 	private void parseQuotedIntLong(final ObjectMeta meta, final Object context, final int targetIdx) throws IOException {
 		pos++;
 		final var val = parseLongPrimitive();
-		if (pos >= limit || buffer[pos++] != '"') throwInvalid("Expected closing quote after numeric value");
+		if (pos >= limit || buffer[pos++] != '"') throwTypeMismatch(meta, targetIdx, "Expected closing quote after numeric value");
 		meta.setLong(this, context, targetIdx, val);
 	}
 
 	private void parseQuotedDoubleFloat(final ObjectMeta meta, final Object context, final int targetIdx) throws IOException {
 		pos++;
 		final var val = parseDoublePrimitive();
-		if (pos >= limit || buffer[pos++] != '"') throwInvalid("Expected closing quote after float value");
+		if (pos >= limit || buffer[pos++] != '"') throwTypeMismatch(meta, targetIdx, "Expected closing quote after float value");
 		meta.setDouble(this, context, targetIdx, val);
 	}
 
 	private void parseQuotedBoolean(final ObjectMeta meta, final Object context, final int targetIdx) throws IOException {
 		pos++;
 		final var val = parseBooleanPrimitive();
-		if (pos >= limit || buffer[pos++] != '"') throwInvalid("Expected closing quote after float value");
+		if (pos >= limit || buffer[pos++] != '"') throwTypeMismatch(meta, targetIdx, "Expected closing quote after float value");
 		meta.set(this, context, targetIdx, val);
 	}
 
@@ -157,6 +160,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		case ObjectMeta.PRIM_SHORT   -> parseShortArray  (new short  [size]);
 		case ObjectMeta.PRIM_FLOAT   -> parseFloatArray  (new float  [size]);
 		case ObjectMeta.PRIM_CHAR    -> parseCharArray   (new char   [size]);
+		case ObjectMeta.PRIM_STRING  -> parseStringArray (new String [size]);
 		default -> null;
 		};
 	}
@@ -172,7 +176,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		}
 	}
 
-	private short[] parseShortArray(short[] b) throws IOException {
+	private short  [] parseShortArray(short[] b) throws IOException {
 		var idx = 0;
 		while (true) {
 			skipWhitespace();
@@ -183,7 +187,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		}
 	}
 
-	private float[] parseFloatArray(float[] b) throws IOException {
+	private float  [] parseFloatArray(float[] b) throws IOException {
 		var idx = 0;
 		while (true) {
 			skipWhitespace();
@@ -194,7 +198,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		}
 	}
 
-	private char[] parseCharArray(char[] b) throws IOException {
+	private char   [] parseCharArray(char[] b) throws IOException {
 		var idx = 0;
 		while (true) {
 			skipWhitespace();
@@ -210,7 +214,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		}
 	}
 
-	private double[] parseDoubleArray(double[] b) throws IOException {
+	private double [] parseDoubleArray(double[] b) throws IOException {
 		var idx = 0;
 		while (true) {
 			skipWhitespace();
@@ -221,7 +225,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		}
 	}
 
-	private int[] parseIntArray(int[] b) throws IOException {
+	private int    [] parseIntArray(int[] b) throws IOException {
 		var idx = 0;
 		while (true) {
 			skipWhitespace();
@@ -232,7 +236,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		}
 	}
 
-	private long[] parseLongArray(long[] b) throws IOException {
+	private long   [] parseLongArray(long[] b) throws IOException {
 		var idx = 0;
 		while (true) {
 			skipWhitespace();
@@ -254,6 +258,17 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		}
 	}
 
+	private String [] parseStringArray(String[] b) throws IOException {
+		var idx = 0;
+		while (true) {
+			skipWhitespace();
+			if (pos < limit && buffer[pos] == ']') { pos++; lastArraySize = idx; return Arrays.copyOf(b, idx); }
+			if (idx == b.length) b = Arrays.copyOf(b, b.length << 1);
+			b[idx++] = parseStringValue();
+			consumeCommaIfPresent();
+		}
+	}
+
 	// ############################### Non Recursive state engine ##############################
 
 	private Object runStateEngine(final long startTypeDesc, final Object startObj, final Object startMeta, final int startIdx) throws Throwable {
@@ -271,7 +286,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			switch (b) {
 			case '\t', '\n', '\r', ' ' -> { pos++; skipWhitespace(); }
 			case '"' -> {
-				if (needsComma) throwInvalid("Expected comma bevore STRING");
+				if (needsComma) throwTypeMismatch(meta, idx, "Expected comma bevore STRING");
 				if (curTypeDesc >= 0L && idx < 0) {
 					idx = parseStringKeyAsIndex(context, meta);
 					needsComma = false;
@@ -302,8 +317,8 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				trailingComma = hasComma;
 			}
 			case 'n' -> {
-				if (needsComma) throwInvalid("Expected comma before NULL");
-				if (curTypeDesc >= 0L && idx < 0) throwInvalid("Expected key before NULL");
+				if (needsComma) throwTypeMismatch(meta, idx, "Expected comma before NULL");
+				if (curTypeDesc >= 0L && idx < 0) throwTypeMismatch(meta, idx, "Expected key before NULL");
 				fillNullValue(curTypeDesc, context, idx, meta);
 				idx = curTypeDesc < 0L ? idx + 1 : -1;
 				final var hasComma = consumeCommaIfPresent();
@@ -311,8 +326,8 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				trailingComma = hasComma;
 			}
 			case 't', 'f' -> {
-				if (needsComma) throwInvalid("Expected comma before BOOLEAN");
-				if (curTypeDesc >= 0L && idx < 0) throwInvalid("Expected key before BOOLEAN");
+				if (needsComma) throwTypeMismatch(meta, idx, "Expected comma before BOOLEAN");
+				if (curTypeDesc >= 0L && idx < 0) throwTypeMismatch(meta, idx, "Expected key before BOOLEAN");
 				meta.set(this, context, idx, parseTrueOrFalse(b == 't'));
 				idx = curTypeDesc < 0L ? idx + 1 : -1;
 				final var hasComma = consumeCommaIfPresent();
@@ -320,12 +335,12 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				trailingComma = hasComma;
 			}
 			case '{' -> {
-				if (needsComma) throwInvalid("Expected comma before OBJECT");
-				if (curTypeDesc >= 0L && idx < 0) throwInvalid("Expected key before OBJECT");
+				if (needsComma                  ) throwTypeMismatch(meta, idx, "Expected comma before OBJECT");
+				if (curTypeDesc >= 0L && idx < 0) throwTypeMismatch(meta, idx, "Expected key before OBJECT");
 				engineStack.push(curTypeDesc, context, meta, idx, stackLimit);
 				curTypeDesc = meta.fieldDescriptor(idx);
 				pos++;
-				if (curTypeDesc < 0L || (curTypeDesc & 1L) != 0L) throwInvalid("Expected got unexpected '{'");
+				if (curTypeDesc < 0L || (curTypeDesc & 1L) != 0L) throwTypeMismatch(meta, idx, "Expected got unexpected '{'");
 				meta = metaCache[(int) (curTypeDesc >> 1)];
 				context = meta.start(this);
 				idx = -1;
@@ -335,9 +350,9 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			case '}', ']' -> {
 				if (trailingComma) throwInvalid("Trailing comma");
 				if (b == '}') {
-					if (curTypeDesc    <  0L) throwInvalid("Expected ']', got '}'");
-					if (idx         >= 0 ) throwInvalid("Expected value, got '}'");
-				} else if (curTypeDesc >= 0L) throwInvalid("Expected '}', got ']'");
+					if (curTypeDesc    <  0L) throwTypeMismatch(meta, idx, "Expected ']', got '}'");
+					if (idx            >= 0 ) throwTypeMismatch(meta, idx, "Expected value, got '}'");
+				} else if (curTypeDesc >= 0L) throwTypeMismatch(meta, idx, "Expected '}', got ']'");
 
 				pos++;
 				final var finishedObj = meta.end(this, context);
@@ -359,10 +374,10 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				pos++;
 				var childDesc = meta.fieldDescriptor(idx);
 				if (childDesc >= 0L) {
-					if (((int) (childDesc >> 1))!= ObjectMeta.IDX_MAP) throwInvalid(OBJECT_INSTEAD_OF_ARRAY);
+					if (((int) (childDesc >> 1))!= ObjectMeta.IDX_MAP) throwTypeMismatch(meta, idx, OBJECT_INSTEAD_OF_ARRAY);
 					childDesc = ObjectMeta.DESC_COLLECTION;
 				}
-				if ((childDesc & 1L) != 0L) {
+				if ((childDesc & 1L) != 0L && childDesc < 0L) {
 					meta.set(this, context, idx, parsePrimitiveArray(childDesc));
 					idx = curTypeDesc < 0L ? idx + 1 : -1;
 					final var hasComma = consumeCommaIfPresent();
@@ -542,7 +557,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			}
 			case '{' -> {
 				final var fieldDesc = targetTD;
-				if (fieldDesc < 0L || (fieldDesc & 1L) != 0L) throwInvalid("Expected array, got '{'");
+				if (fieldDesc < 0L || (fieldDesc & 1L) != 0L) throwTypeMismatch(meta, targetIdx, "Expected array, got '{'");
 				final var childMeta = meta.childMeta(targetIdx);
 				final var fallbackMeta = childMeta != null ? childMeta : metaCache[ObjectMeta.IDX_MAP];
 				if (recursionDeep >= limitDepth) {
@@ -554,18 +569,18 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				}
 			}
 			case '[' -> {
-				final var fieldDesc = targetTD;
-				final var metaIdx = (int) (fieldDesc >>> 1);
-				if (fieldDesc >= 0L && metaIdx != ObjectMeta.IDX_GENERIC && metaIdx != ObjectMeta.IDX_MAP) throwInvalid(OBJECT_INSTEAD_OF_ARRAY);
-				if ((fieldDesc & 1L) != 0L) {
+				final var childdDesc = targetTD;
+				final var metaIdx = (int) (childdDesc >>> 1);
+				if (childdDesc >= 0L && metaIdx != ObjectMeta.IDX_GENERIC && metaIdx != ObjectMeta.IDX_MAP) throwTypeMismatch(meta, targetIdx, OBJECT_INSTEAD_OF_ARRAY);
+				if ((childdDesc & 1L) != 0L && childdDesc < 0L) {
 					pos++;
-					meta.set(this, context, targetIdx, parsePrimitiveArray(fieldDesc));
+					meta.set(this, context, targetIdx, parsePrimitiveArray(childdDesc));
 				} else {
 					final var childMeta = meta.childMeta(targetIdx);
-					final var isFallbackToCollection = (fieldDesc >= 0L) && (metaIdx == ObjectMeta.IDX_MAP || metaIdx == ObjectMeta.IDX_GENERIC);
+					final var isFallbackToCollection = (childdDesc >= 0L) && (metaIdx == ObjectMeta.IDX_MAP || metaIdx == ObjectMeta.IDX_GENERIC);
 					final var fallbackMeta = isFallbackToCollection ? metaCache[ObjectMeta.IDX_COLLECTION] : (childMeta != null ? childMeta : metaCache[ObjectMeta.IDX_COLLECTION]);
 					if (recursionDeep >= limitDepth) {
-						final var passDesc = isFallbackToCollection ? ObjectMeta.DESC_COLLECTION : (fieldDesc == 0L ? ObjectMeta.DESC_COLLECTION : fieldDesc);
+						final var passDesc = isFallbackToCollection ? ObjectMeta.DESC_COLLECTION : (childdDesc == 0L ? ObjectMeta.DESC_COLLECTION : childdDesc);
 						meta.set(this, context, targetIdx, runStateEngine(passDesc, fallbackMeta.start(this), fallbackMeta, 0));
 					} else {
 						pos++;
@@ -573,7 +588,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 					}
 				}
 			}
-			default -> throwInvalid("Unexpected CHAR");
+			default -> throwTypeMismatch(meta, targetIdx, "Unexpected CHAR");
 			}
 			if (pos < limit && buffer[pos] == ',') {
 				pos++;
@@ -602,37 +617,37 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			switch (buffer[pos]) {
 			case '\t','\n','\r',' ' -> { pos++; }
 			case ']' -> {
-				if (state == 0 && idx > 0) throwInvalid("Trailing comma in array");
+				if (state == 0 && idx > 0) throwTypeMismatch(meta, idx, "Trailing comma in array");
 				pos++; return meta.end(this, context);
 			}
 			case '-','0','1','2','3','4','5','6','7','8','9' -> {
-				if(state==1) throwInvalid("Komma or Closeing breaket instead of NUMERIC expected");
+				if(state==1) throwTypeMismatch(meta, idx, "Komma or Closeing breaket instead of NUMERIC expected");
 				state = 1;
 				parseNumericPrimitive(meta, context, idx, childDesc);
 			}
 			case ',' -> {
 				idx++;
-				if(state==0) throwInvalid("VALUE instead of KOMMA expected");
+				if(state==0) throwTypeMismatch(meta, idx, "VALUE instead of KOMMA expected");
 				state = 0;
 				pos++;
 			}
 			case 'n' -> {
-				if(state==1) throwInvalid("Komma or Closeing breaket instead of NULL expected");
+				if(state==1) throwTypeMismatch(meta, idx, "Komma or Closeing breaket instead of NULL expected");
 				state = 1;
 				fillNullValue(childDesc, context, idx, meta);
 			}
 			case 't' -> {
-				if(state==1) throwInvalid("Komma or Closeing breaket instead of BOOLEAN expected");
+				if(state==1) throwTypeMismatch(meta, idx, "Komma or Closeing breaket instead of BOOLEAN expected");
 				state = 1;
 				meta.set(this, context, idx, parseTrue());
 			}
 			case 'f' -> {
-				if(state==1) throwInvalid("Komma or Closeing breaket instead of BOOLEAN expected");
+				if(state==1) throwTypeMismatch(meta, idx, "Komma or Closeing breaket instead of BOOLEAN expected");
 				state = 1;
 				meta.set(this, context, idx, parseFalse());
 			}
 			case '"' -> {
-				if(state==1) throwInvalid("Komma or Closeing breaket instead of STRING expected");
+				if(state==1) throwTypeMismatch(meta, idx, "Komma or Closeing breaket instead of STRING expected");
 				state = 1;
 				switch ((int) childDesc) {
 				case ObjectMeta.SW_BYTE_ARRAY                            -> meta.set(this, context, idx, parse64());
@@ -644,7 +659,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				}
 			}
 			case '{' -> {
-				if(state==1) throwInvalid("Komma or Closeing breaket instead of OBJECT expected");
+				if(state==1) throwTypeMismatch(meta, idx, "Komma or Closeing breaket instead of OBJECT expected");
 				state = 1;
 				if (objFallbackMeta == null) {
 					isPrimitive = (childDesc & 1L) != 0L;
@@ -657,7 +672,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 					arrPassDesc = isFallbackToCollection ? ObjectMeta.DESC_COLLECTION : (childDesc == 0L ? ObjectMeta.DESC_COLLECTION : childDesc);
 				}
 
-				if (childDesc < 0L || isPrimitive) throwInvalid("Expected array, got '{'");
+				if (childDesc < 0L || isPrimitive) throwTypeMismatch(meta, idx, "Expected array, got '{'");
 				if (recursionDeep >= limitDepth) {
 					meta.set(this, context, idx, runStateEngine(objPassDesc, objFallbackMeta.start(this), objFallbackMeta, -1));
 				} else {
@@ -666,7 +681,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				}
 			}
 			case '[' -> {
-				if(state==1) throwInvalid("Komma or Closeing breaket instead of ARRAY expected");
+				if(state==1) throwTypeMismatch(meta, idx, "Komma or Closeing breaket instead of ARRAY expected");
 				state = 1;
 				if (arrFallbackMeta == null) {
 					isPrimitive = (childDesc & 1L) != 0L;
@@ -679,8 +694,8 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 					arrPassDesc     = isFallbackToCollection ?           ObjectMeta.DESC_COLLECTION : (childDesc == 0L ? ObjectMeta.DESC_COLLECTION : childDesc);
 				}
 
-				if ((childDesc >= 0L) && metaIdx != ObjectMeta.IDX_GENERIC && metaIdx != ObjectMeta.IDX_MAP) throwInvalid(OBJECT_INSTEAD_OF_ARRAY);
-				if (isPrimitive) {
+				if ((childDesc >= 0L) && metaIdx != ObjectMeta.IDX_GENERIC && metaIdx != ObjectMeta.IDX_MAP) throwTypeMismatch(meta, idx, OBJECT_INSTEAD_OF_ARRAY);
+				if (isPrimitive && childDesc < 0L) {
 					pos++;
 					meta.set(this, context, idx, parsePrimitiveArray(childDesc));
 				} else if (recursionDeep >= limitDepth) {
@@ -694,4 +709,25 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			}
 		}
 	}
+
+	/**
+	 * Throws a detailed type mismatch exception.
+	 * Extracted into a separate method to keep the bytecode footprint
+	 * of the hot path minimal for optimal JIT inlining.
+	 */
+	private void throwTypeMismatch(final ObjectMeta meta, final int targetIdx, final String baseMsg) {
+		var className = "UnknownClass";
+		var fieldName = "unknownField";
+		var fieldType = "unknownType";
+		if (meta != null) {
+			if(meta.className instanceof final String t) className = t;
+			if (targetIdx >= 0) {
+				final var c = meta.components[targetIdx];
+				fieldName = c.name(); // Adapt to how your ObjectMeta stores the field names
+				fieldType = c.valueType().getTypeName();
+			}
+		}
+		throwInvalid(baseMsg + " for field["+targetIdx+"] {"+fieldType+"} '" + fieldName + "' in target class '" + className + "'");
+	}
+
 }

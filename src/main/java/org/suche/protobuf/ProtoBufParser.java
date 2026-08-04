@@ -11,7 +11,7 @@ import org.suche.protobuf.ObjectMeta.FieldInfo;
 
 public class ProtoBufParser {
 
-	private static final IllegalArgumentException error(final String mesg) {
+	private static final IllegalArgumentException error   (final String mesg) {
 		throw new IllegalArgumentException(mesg);
 	}
 
@@ -19,17 +19,17 @@ public class ProtoBufParser {
 		throw new IllegalArgumentException(mesg.replace("{val}", Integer.toString(val)));
 	}
 
-	private static final IllegalArgumentException error(final String mesg, final Type cls, final FieldInfo info) {
+	private static final IllegalArgumentException error   (final String mesg, final Type cls, final FieldInfo info) {
 		throw new IllegalArgumentException(mesg.replace("{cls}", cls.getTypeName()).replace("{name}", info.keyName()));
 	}
 
-	public static int    readLength (final ByteBuffer buffer) {
+	public static int      readLength       (final ByteBuffer buffer) {
 		final var length = readVarInt(buffer);
 		if (length < 0 || buffer.remaining() < length) throw intError("Invalid Protobuf length ({val}) or buffer underflow.", length);
 		return length;
 	}
 
-	public static int    readVarInt (final ByteBuffer buffer) {
+	public static int      readVarInt       (final ByteBuffer buffer) {
 		var result = 0;
 		var shift = 0;
 		while (shift < 32) {
@@ -42,17 +42,17 @@ public class ProtoBufParser {
 		throw error("Malformed varint (too many bytes for 32-bit integer)");
 	}
 
-	public static void   skipGroup  (final ByteBuffer buffer) {
+	public static void     skipGroup        (final ByteBuffer buffer) {
 		while (buffer.hasRemaining()) {
 			final var tag = readVarInt(buffer);
 			final var wireType = tag & 0x07;
-			if (wireType == 4) return; // Passendes End-Group Tag gefunden, Abbruch der Schleife
-			skipField(buffer, wireType); // Rekursiv weiter überspringen
+			if (wireType == 4) return; // Matching End-Group tag found, aborting the loop
+			skipField(buffer, wireType); // Skip recursively
 		}
-		throw error("Unterbrochener Stream: End-group Tag (Wire Type 4) fehlt.");
+		throw error("Interrupted stream: End-group tag (Wire Type 4) is missing.");
 	}
 
-	public static void   skipField  (final ByteBuffer buffer, final int wireType) {
+	public static void     skipField        (final ByteBuffer buffer, final int wireType) {
 		switch (wireType) {
 		case  0 -> readVarInt(buffer);                     // Varint (int32, int64, uint32, bool, enum, ...)
 		case  1 -> buffer.position(buffer.position() + 8); // 64-bit (double, fixed64, sfixed64, ...)
@@ -61,8 +61,8 @@ public class ProtoBufParser {
 			buffer.position(buffer.position() + length);
 			// Length-delimited (string, bytes, embedded messages, packed repeated fields)
 		}
-		case  3 -> skipGroup(buffer); // "Start group (Deprecated sinced P2) replaced with Embedded Messages & Wire Type 2 ersetzt"
-		case  4 -> throw error("End group (Deprecated sinced P2) replaced with Embedded Messages & Wire Type 2 ersetzt");
+		case  3 -> skipGroup(buffer); // Start group (Deprecated since P2) replaced with Embedded Messages & Wire Type 2
+		case  4 -> throw error("End group (Deprecated since P2) replaced with Embedded Messages & Wire Type 2");
 		case  5 -> buffer.position(buffer.position() + 4); // 32-bit (float, fixed32, ...)
 		case  6 -> throw error("Reserved");
 		case  7 -> throw error("Reserved");
@@ -70,13 +70,13 @@ public class ProtoBufParser {
 		}
 	}
 
-	public static String readString (final ByteBuffer buffer, final int length) {
+	public static String   readString       (final ByteBuffer buffer, final int length) {
 		final var ret = new String(buffer.array(), buffer.arrayOffset() + buffer.position(), length, StandardCharsets.UTF_8);
 		buffer.position(buffer.position() + length);
 		return ret;
 	}
 
-	public static long   readVarLong(final ByteBuffer buffer) {
+	public static long     readVarLong      (final ByteBuffer buffer) {
 		var result = 0L;
 		var shift = 0;
 		while (shift < 64) {
@@ -107,7 +107,7 @@ public class ProtoBufParser {
 
 	public static int   [] readPackedInts   (final ByteBuffer buffer, final int length) {
 		final var end = buffer.position() + length;
-		var temp = new int[length / 2 + 1]; // Gute Schätzung für VarInt-Größe
+		var temp = new int[length / 2 + 1]; // Good estimation for VarInt size
 		var count = 0;
 		while (buffer.position() < end) {
 			if (count == temp.length) temp = java.util.Arrays.copyOf(temp, count * 2);
@@ -134,15 +134,28 @@ public class ProtoBufParser {
 	@SuppressWarnings("unchecked")
 	public static <T extends Record> T decode(final ByteBuffer buf, final Type recordClass) {
 		final ObjectMeta<T> meta = ObjectMeta.of(recordClass);
-		final var clen = meta.fieldSize();
+
+		// FIX 1: Array sizes must strictly match the component count, NOT the dynamic fieldMap size.
+		final var cls = org.suche.json.GernericsHandler.resolveClass(recordClass);
+		final var components = cls.getRecordComponents();
+		final var clen = components.length;
+
 		final var objects = new Object[clen];
 		final var prims   = new long  [clen];
+
 		while (buf.hasRemaining()) {
 			final var tag      = readVarInt(buf);
 			final var fieldId  = (tag >>> 3);
 			final var wireType = tag & 0x07;
 			final var info     = meta.field(fieldId);
-			if (info == null) { meta.skip(fieldId); skipField(buf, wireType); continue; }
+
+			// FIX 2: Guard against previously skipped fields returning cpos = -1
+			if (info == null || info.cpos() < 0) {
+				if (info == null) meta.skip(fieldId);
+				skipField(buf, wireType);
+				continue;
+			}
+
 			final var cpos = info.cpos();
 			if(objects[cpos] != null && objects[cpos].getClass().isArray()) throw error("Array concat not supported yet for class {cls} field {name}", recordClass, info);
 			switch(info.classIndex()) {
@@ -152,14 +165,14 @@ public class ProtoBufParser {
 			case ObjectMeta.T_INT_ARR    -> objects[cpos] = readPackedInts   (buf, readLength(buf));
 			case ObjectMeta.T_LONG_ARR   -> objects[cpos] = readPackedLongs  (buf, readLength(buf));
 			case ObjectMeta.T_INT        -> {
-				if (wireType == 2) { // Packed Array, das als List<Integer> in das Record soll
+				if (wireType == 2) { // Packed Array to be injected into the Record as List<Integer>
 					final var ints = readPackedInts(buf, readLength(buf));
 					if (info.isRepeated()) {
 						if (objects[cpos] == null) objects[cpos] = new ArrayList<Integer>();
 						final var list = (List<Object>) objects[cpos];
 						for (final var v : ints) list.add(v);
 					}
-				} else { // Reguläres VarInt (Wire Type 0)
+				} else { // Regular VarInt (Wire Type 0)
 					final var val = readVarInt(buf);
 					addObj(objects, prims, info, val, val);
 				}
@@ -203,7 +216,7 @@ public class ProtoBufParser {
 					addObj(objects, prims, info, val, Double.doubleToRawLongBits(val));
 				}
 			}
-			case ObjectMeta.T_RECORD     -> { // 4. VERSCHACHTELTE RECORDS
+			case ObjectMeta.T_RECORD     -> { // NESTED RECORDS
 				final var length = readLength(buf);
 				final var subBuffer = buf.slice().limit(length).order(ByteOrder.LITTLE_ENDIAN);
 				addObj(objects, prims, info, decode(subBuffer, info.effCls()), 0);
@@ -212,6 +225,29 @@ public class ProtoBufParser {
 			default                      -> skipField(buf, wireType);
 			}
 		}
+
+		// Convert dynamically collected ArrayLists back into actual Java arrays if the target Record expects an Array
+		for (var i = 0; i < clen; i++) {
+			if (objects[i] instanceof final List<?> list) {
+				final var compType = components[i].getType();
+				if (compType.isArray()) {
+					final var cType = compType.getComponentType();
+					final var arr = java.lang.reflect.Array.newInstance(cType, list.size());
+
+					if (!cType.isPrimitive()) {
+						// Fast path: use JVM intrinsic for object arrays (String[], LineSeries[])
+						objects[i] = list.toArray((Object[]) arr);
+					} else {
+						// Safe fallback for boxed primitives to primitive arrays
+						for (var j = 0; j < list.size(); j++) {
+							java.lang.reflect.Array.set(arr, j, list.get(j));
+						}
+						objects[i] = arr;
+					}
+				}
+			}
+		}
+
 		return (T) meta.create(objects, prims);
 	}
 

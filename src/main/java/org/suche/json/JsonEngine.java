@@ -29,14 +29,14 @@ public sealed interface JsonEngine permits InternalEngine {
 
 	<C> void registerTransformer(final Class<C> c, final UnaryOperator<Object> f);
 
-	void skipInvalid(final boolean v);
+	JsonEngine skipInvalid(final boolean v);
 	boolean skipInvalid();
 
-	void ignoreTrailing(final boolean v);
+	JsonEngine ignoreTrailing(final boolean v);
 	boolean ignoreTrailing();
 
 
-	void failOnUnknownProperties(final boolean v);
+	JsonEngine failOnUnknownProperties(final boolean v);
 	boolean failOnUnknownProperties();
 
 	void autoPojo(final Predicate<Class<?>> p);

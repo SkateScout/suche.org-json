@@ -16,12 +16,12 @@ public class ObjectMeta<T extends Record> {
 	static final int T_DOUBLE_ARR =  2;
 	static final int T_INT_ARR    =  3;
 	static final int T_LONG_ARR   =  4;
-	static final int T_INT        =  5;
-	static final int T_LONG       =  6;
-	static final int T_FLOAT      =  7;
-	static final int T_DOUBLE     =  8;
-	static final int T_RECORD     =  9;
-	static final int T_OBJECT     = 10;
+	static final int T_INT        =  6;
+	static final int T_LONG       =  7;
+	static final int T_FLOAT      =  8;
+	static final int T_DOUBLE     =  9;
+	static final int T_RECORD     = 10;
+	static final int T_OBJECT     = 11;
 
 	private static int classIndex(final Class<?> ec) {
 		if (ec == String  .class) return T_STRING;
@@ -34,6 +34,8 @@ public class ObjectMeta<T extends Record> {
 		if (ec == float.class  || ec == Float  .class) return T_FLOAT;
 		if (ec == double.class || ec == Double .class) return T_DOUBLE;
 		if (Record.class.isAssignableFrom(ec)) return T_RECORD;
+		if (ec == Object.class) return T_OBJECT;
+		System.err.println("protobuf: classIndex("+ec.getCanonicalName()+") => Unsupported type");
 		return T_OBJECT;
 	}
 
@@ -76,15 +78,19 @@ public class ObjectMeta<T extends Record> {
 			idx++;
 			final var field      = component.getAnnotation(Fld.class) instanceof final Fld f ? f.value() : idx;
 			final var name       = component.getName();
-			if (field <= 0 || (field >= 19000 && field <= 19999) || field > 536870911) throw invalidId(field, name);
+			if ((field >= 19000 && field <= 19999) || field > 536870911) throw invalidId(field, name);
+			if(field <= 0) continue;
 			final var generic    = component.getGenericType();
 			final var raw        = GernericsHandler.resolveClass(generic);
 			final var isRepeated = Collection.class.isAssignableFrom(raw) || raw.isArray();
-			final var ec         = isRepeated ? GernericsHandler.resolveClass(generic) : raw;
+			final Class<?> ec;
+			if (raw.isArray() && !raw.getComponentType().isPrimitive()) ec = raw.getComponentType();
+			else if (Collection.class.isAssignableFrom(raw)) ec = GernericsHandler.resolveClass(generic);
+			else ec = raw;
 			final var classIndex = classIndex(ec);
-			if(T_OBJECT == classIndex) System.err.println("Unsupported type " + ec.getCanonicalName() + " for field:" + field + ":"+name+" for class " + recordClass.getCanonicalName());
-			if(fieldMap.put(field, new FieldInfo(cpos, name, isRepeated, ec, classIndex)) instanceof final FieldInfo old)
-				throw dupplicate(field, old.keyName, name);
+			if(T_OBJECT == classIndex) invalidId(field , "{" + ec.getCanonicalName() + "}:" +name+" in " + recordClass.getCanonicalName());
+			if(fieldMap.put(field, new FieldInfo(cpos, name, isRepeated, ec, classIndex)) instanceof final FieldInfo old) throw dupplicate(field, old.keyName, name);
+
 		}
 		try { factory    = ConstructorGenerator.generate(recordClass); }
 		catch(final Exception e) { throw new RuntimeException(e); }

@@ -11,6 +11,7 @@ import java.lang.reflect.Parameter;
 import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashSet;
@@ -90,7 +91,7 @@ final class ObjectMeta {
 	static         final ObjectMeta           GENERIC_MAP         = new ObjectMeta(null, null, Object.class, IDX_MAP);
 
 	final         int                 metaType;
-	private final String              className;
+	final         String              className;
 	private final boolean             failOnUnknown;
 	final         ObjectArrayFactory  factory;
 	private final IntFunction<Object> arrayCreator;
@@ -111,12 +112,19 @@ final class ObjectMeta {
 	private final ObjectMeta[]        childMetas;
 	private final Supplier<Object>    customCollectionStart;
 	private final boolean             isComplexComponent;
-
 	// Types for dynamic generic resolution
 	final Type genericBaseType;
 	final Type genericCompType;
 
 	final ComponentMeta[] components;
+
+	record ComponentMeta(String name, Class<?> type, Type valueType) {
+		ComponentMeta {
+			if (name == null) throw illegalStateException(null, "Missing name");
+			if (type == null) throw illegalStateException(null, "Missing type");
+			if (valueType == null) valueType = Object.class;
+		}
+	}
 
 	private static final class Defect extends RuntimeException implements Supplier<Object> {
 		private static final long serialVersionUID = 1L;
@@ -174,28 +182,27 @@ final class ObjectMeta {
 
 	private static long resolveDescriptor(final InternalEngine e, Type type, final Type valueType) {
 		if (type == null) type = Object.class;
-
 		final Class<?> rawType = GernericsHandler.resolveClass(type);
-
-		// FIX: If valueType is missing or hardcoded to Object.class, dynamically extract
-		// the generic child type from 'type'. This completely bridges the gap for nested collections
-		// and prevents the fallback to CompactMap.
+		// If valueType is missing or hardcoded to Object.class, dynamically extract  the generic child type from 'type'.
+		// This completely bridges the gap for nested collections and prevents the fallback to CompactMap.
 		final var actualValueType = (valueType == null || valueType == Object.class)
 				? GernericsHandler.extractValueType(type, rawType) : valueType;
 
 		final var isArray = rawType.isArray() || Collection.class.isAssignableFrom(rawType);
-		final Class<?> resolvedValClass = GernericsHandler.resolveClass(actualValueType);
-		final var isPrimArray =  isArray && (rawType.isArray() ? isPrimitive(rawType.componentType()) : isPrimitive(resolvedValClass));
-		final var isPrimValue = !isArray &&  isPrimitive(rawType);
+		// final Class<?> resolvedValClass = GernericsHandler.resolveClass(actualValueType);
+
+		// ONLY native Java arrays (e.g. String[], int[]) are primitive arrays.
+		// Collections (e.g. HashSet<String>, List<Integer>) MUST resolve their target collection type.
+		final var isPrimArray = rawType.isArray() && isPrimitive(rawType.componentType());
+		final var isPrimValue = !isArray && isPrimitive(rawType);
 
 		Class<?> primTarget = null;
-		if      (isPrimArray) primTarget = rawType.isArray() ? rawType.componentType() : resolvedValClass;
+		if      (isPrimArray) primTarget = rawType.componentType();
 		else if (isPrimValue) primTarget = rawType;
 
 		final int subIdx;
 		if (primTarget != null) subIdx = getPrimId(primTarget);
-		else if (e instanceof final EngineImpl ei) { subIdx = ei.resolveEngineObjectDescriptor(type, actualValueType);
-		}
+		else if (e instanceof final EngineImpl ei) { subIdx = ei.resolveEngineObjectDescriptor(type, actualValueType); }
 		else subIdx = IDX_GENERIC;
 
 		return EngineImpl.createTypeDesc(isArray, primTarget != null, subIdx);
@@ -241,18 +248,10 @@ final class ObjectMeta {
 	}
 
 	private IllegalStateException invalidKeyException(final String mesg, final String key) {
-		throw new IllegalStateException(mesg.replace("{classsName}", className).replace("{key}",key));
+		throw new IllegalStateException(mesg.replace("{className}", className).replace("{key}",key));
 	}
 
 	void invalidType() { throw new IllegalStateException("metaType: "+metaType); }
-
-	record ComponentMeta(String name, Class<?> type, Type valueType) {
-		ComponentMeta {
-			if (name == null) throw illegalStateException(null, "Missing name");
-			if (type == null) throw illegalStateException(null, "Missing type");
-			if (valueType == null) valueType = Object.class;
-		}
-	}
 
 	static final record Prop(String name, boolean isField, Class<?> jsonType, Class<?> declaredType, Type valueType, int ctorIdx, MethodHandle setterHandle) { }
 
@@ -477,7 +476,7 @@ final class ObjectMeta {
 				// System.out.println("metaComps[i] "+metaComps[i]+" CT: "+constructorTypes[i]);	// type=List value=XY ctor=Object
 			}
 			final var factory = ConstructorGenerator.generate(c, constructorTypes);
-			return new ObjectMeta(engine, c.getCanonicalName(), NO_POJO_START, factory, comps.length, FastKeyTable.build(metaComps), jsonTypes, metaComps, buildEnumConstants(jsonTypes), cacheIndex);
+			return new ObjectMeta(engine, genericType.getTypeName(), NO_POJO_START, factory, comps.length, FastKeyTable.build(metaComps), jsonTypes, metaComps, buildEnumConstants(jsonTypes), cacheIndex);
 		} catch (final Exception e) {
 			e.printStackTrace();
 			return DEFECT_FIRST;
@@ -524,7 +523,7 @@ final class ObjectMeta {
 			final var propDefs      = propDefsList.isEmpty() ? null : propDefsList.toArray(new ConstructorGenerator.PropDef[0]);
 			final var factory       = ConstructorGenerator.generate(c, "<init>", ctorTypes, propDefs);
 
-			return new ObjectMeta(engine, c.getCanonicalName(), NO_POJO_START, factory, ctorArgs, keys, finalTypes, finalComps, enumConstants, cacheIndex);
+			return new ObjectMeta(engine, genericType.getTypeName(), NO_POJO_START, factory, ctorArgs, keys, finalTypes, finalComps, enumConstants, cacheIndex);
 		} catch (final Exception e) {
 			e.printStackTrace();
 			return DEFECT_FIRST;
@@ -638,11 +637,12 @@ final class ObjectMeta {
 	int prepareKey(final int hash, final byte[] buffer, final int off, final int len) {
 		if (metaType == TYPE_MAP) return -1;
 		final var idx = keys.get(hash, buffer, off, len);
-		// System.err.println() hier entfernt! Ein Fehlschlag ist okay, da der Fallback übernimmt.
-		if (idx == -1) {
-			if(failOnUnknown) throw invalidKeyException("JSON: Unknown property[{key}] in class {className}", new String(buffer, off, len));
-			System.err.println("JSON: Unknown property[" + new String(buffer, off, len) + "] in class " + className);
+		ArrayList<String> unknownKeys = null;
+		if(idx == -1 && failOnUnknown) {
+			if(unknownKeys == null) unknownKeys = new ArrayList<>();
+			unknownKeys.add(new String(buffer, off, len));
 		}
+		if(unknownKeys != null) throw invalidKeyException("JSON: Unknown property.0 [{key}] in class {className}", unknownKeys.toString());
 		return idx;
 	}
 
@@ -654,14 +654,8 @@ final class ObjectMeta {
 		}
 		final var b = key.getBytes(StandardCharsets.UTF_8);
 		final var hash = BufferedStream.computeHash(b, 0, b.length);
-		System.out.println("HASH_0["+key+"]="+hash);
 		final var idx = keys.get(hash, b, 0, b.length);
-
-		// Nur wenn BEIDE Versuche fehlschlagen, ist die Property WIRKLICH unbekannt:
-		if (idx == -1) {
-			if (failOnUnknown) throw invalidKeyException("Unknown property {key} in class {className}", key);
-			System.err.println("JSON: Unknown property[" + key + "] in class " + className);
-		}
+		if (idx == -1 && failOnUnknown) throw invalidKeyException("JSON: Unknown property.1 {key} in class {className}", key);
 		return idx;
 	}
 
