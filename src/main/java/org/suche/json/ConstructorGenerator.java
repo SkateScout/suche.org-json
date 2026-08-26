@@ -13,8 +13,6 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
-import java.lang.reflect.RecordComponent;
-import java.util.List;
 
 public class ConstructorGenerator {
 	private static final String CONSTRUCTOR_NAME = "<init>";
@@ -52,9 +50,26 @@ public class ConstructorGenerator {
 	}
 
 	public static ObjectArrayFactory generate(final Class<?> cls, final String methodName, final Class<?>[] factoryArgs, final PropDef[] setters) throws IllegalAccessException, InstantiationException, IllegalArgumentException, InvocationTargetException, NoSuchMethodException  {
-		final var className  = cls.getName() + "$$InternalFactory";
+		// Resolving deep visibility to safely bypass cross-module privateLookupIn for entirely public targets
+		var isPublicTarget = false;
+		try {
+			var mods = cls.getModifiers();
+			for (Class<?> c = cls.getEnclosingClass(); c != null; c = c.getEnclosingClass()) mods &= c.getModifiers();
+			if (CONSTRUCTOR_NAME.equals(methodName)) mods &= cls.getDeclaredConstructor(factoryArgs).getModifiers();
+			else                                     mods &= cls.getDeclaredMethod(methodName, factoryArgs).getModifiers();
+			if (setters != null) {
+				for (final var setter : setters) {
+					if (setter.isField()) mods &= cls.getDeclaredField(setter.name()).getModifiers();
+					else                  mods &= cls.getDeclaredMethod(setter.name(), setter.type()).getModifiers();
+				}
+			}
+			isPublicTarget = Modifier.isPublic(mods);
+		} catch (final NoSuchMethodException | NoSuchFieldException _) { }
+
+		final var className  = isPublicTarget ? "org.suche.json." + cls.getSimpleName() + "$$InternalFactory" : cls.getName() + "$$InternalFactory";
 		final var classDesc  = ClassDesc.ofDescriptor("L" + className.replace('.', '/') + ";");
 		final var recordDesc = ClassDesc.ofDescriptor(cls.descriptorString());
+
 		final var bytes      = ClassFile.of().build(classDesc, classBuilder -> {
 			classBuilder.withFlags(ACC_PUBLIC | ACC_FINAL);
 			classBuilder.withInterfaceSymbols(IF_NAME);
@@ -72,7 +87,9 @@ public class ConstructorGenerator {
 				}
 				addFactoryArgs(codeBuilder, factoryArgs);
 
-				final var argDescs = List.of(factoryArgs).stream().map(c -> ClassDesc.ofDescriptor(c.descriptorString())).toList();
+				// Replaced Stream execution with direct array mappings for zero-allocation
+				final var argDescs = new ClassDesc[factoryArgs.length];
+				for (var i = 0; i < factoryArgs.length; i++) argDescs[i] = ClassDesc.ofDescriptor(factoryArgs[i].descriptorString());
 
 				if (isConstructor) {
 					final var constructorDesc = MethodTypeDesc.of(ClassDesc.ofDescriptor("V"), argDescs);
@@ -91,7 +108,8 @@ public class ConstructorGenerator {
 			});
 		});
 		try {
-			final var definedClass = MethodHandles.privateLookupIn(cls, LOOKUP).defineHiddenClass(bytes, true, MethodHandles.Lookup.ClassOption.NESTMATE).lookupClass();
+			final var targetLookup = isPublicTarget ? LOOKUP : MethodHandles.privateLookupIn(cls, LOOKUP);
+			final var definedClass = targetLookup.defineHiddenClass(bytes, true, MethodHandles.Lookup.ClassOption.NESTMATE).lookupClass();
 			return (ObjectArrayFactory) definedClass.getConstructor().newInstance();
 		} catch(final IllegalAccessException e) {
 			final var x = new IllegalAccessException("generate("+cls+" , "+methodName+" , factoryArgs , setters) => "+e.getMessage());
@@ -154,7 +172,11 @@ public class ConstructorGenerator {
 	}
 
 	public static ObjectArrayFactory generate(final Class<? extends Record> cls) throws IllegalAccessException, InstantiationException, IllegalArgumentException, InvocationTargetException, NoSuchMethodException {
-		return generate(cls, CONSTRUCTOR_NAME, List.of(cls.getRecordComponents()).stream().map(RecordComponent::getType).toList().toArray(new Class[0]), null);
+		// Replacing Stream traversal with a loop array population to evade internal allocations
+		final var components = cls.getRecordComponents();
+		final var args = new Class<?>[components.length];
+		for (var i = 0; i < components.length; i++) args[i] = components[i].getType();
+		return generate(cls, CONSTRUCTOR_NAME, args, null);
 	}
 
 	private static void pushArgument(final CodeBuilder cb, final int value) {

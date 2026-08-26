@@ -139,7 +139,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		while (p < l) {
 			final var c = buf[p];
 			if (c == ',') { pos = p + 1; return true; }
-			if ((c & 0xC0) != 0 || ((1L << c) & WHITESPACE_MASK) == 0) { pos = p; return false; }
+			if ((c & 0xC0) != 0 || (1L << c & WHITESPACE_MASK) == 0) { pos = p; return false; }
 			p++;
 		}
 		pos = p;
@@ -150,7 +150,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 
 	private Object parsePrimitiveArray(final long typeDesc) throws IOException {
 		final var primId = (int)(typeDesc>>1);
-		final var size = (lastArraySize > 0 && lastArraySize < 1024) ? lastArraySize : 16;
+		final var size = lastArraySize > 0 && lastArraySize < 1024 ? lastArraySize : 16;
 		return switch (primId) {
 		case ObjectMeta.PRIM_DOUBLE  -> parseDoubleArray (new double [size]);
 		case ObjectMeta.PRIM_LONG    -> parseLongArray   (new long   [size]);
@@ -171,7 +171,8 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			skipWhitespace();
 			if (pos < limit && buffer[pos] == ']') { pos++; lastArraySize = idx; return Arrays.copyOf(b, idx); }
 			if (idx == b.length) b = Arrays.copyOf(b, b.length << 1);
-			b[idx++] = (byte) parseLongPrimitive();
+			b[idx] = (byte) parseLongPrimitive();
+			idx++;
 			consumeCommaIfPresent();
 		}
 	}
@@ -182,7 +183,8 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			skipWhitespace();
 			if (pos < limit && buffer[pos] == ']') { pos++; lastArraySize = idx; return Arrays.copyOf(b, idx); }
 			if (idx == b.length) b = Arrays.copyOf(b, b.length << 1);
-			b[idx++] = (short) parseLongPrimitive();
+			b[idx] = (short) parseLongPrimitive();
+			idx++;
 			consumeCommaIfPresent();
 		}
 	}
@@ -193,7 +195,8 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			skipWhitespace();
 			if (pos < limit && buffer[pos] == ']') { pos++; lastArraySize = idx; return Arrays.copyOf(b, idx); }
 			if (idx == b.length) b = Arrays.copyOf(b, b.length << 1);
-			b[idx++] = (float) parseDoublePrimitive();
+			b[idx] = (float) parseDoublePrimitive();
+			idx++;
 			consumeCommaIfPresent();
 		}
 	}
@@ -206,10 +209,11 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			if (idx == b.length) b = Arrays.copyOf(b, b.length << 1);
 			if (buffer[pos] == '"') {
 				final var s = parseStringValue();
-				b[idx++] = s.isEmpty() ? '\0' : s.charAt(0);
+				b[idx] = s.isEmpty() ? '\0' : s.charAt(0);
 			} else {
-				b[idx++] = (char) parseLongPrimitive();
+				b[idx] = (char) parseLongPrimitive();
 			}
+			idx++;
 			consumeCommaIfPresent();
 		}
 	}
@@ -220,7 +224,8 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			skipWhitespace();
 			if (pos < limit && buffer[pos] == ']') { pos++; lastArraySize = idx; return Arrays.copyOf(b, idx); }
 			if (idx == b.length) b = Arrays.copyOf(b, b.length << 1);
-			b[idx++] = parseDoublePrimitive();
+			b[idx] = parseDoublePrimitive();
+			idx++;
 			consumeCommaIfPresent();
 		}
 	}
@@ -231,7 +236,8 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			skipWhitespace();
 			if (pos < limit && buffer[pos] == ']') { pos++; lastArraySize = idx; return Arrays.copyOf(b, idx); }
 			if (idx == b.length) b = Arrays.copyOf(b, b.length << 1);
-			b[idx++] = (int) parseLongPrimitive();
+			b[idx] = (int) parseLongPrimitive();
+			idx++;
 			consumeCommaIfPresent();
 		}
 	}
@@ -242,7 +248,8 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			skipWhitespace();
 			if (pos < limit && buffer[pos] == ']') { pos++; lastArraySize = idx; return Arrays.copyOf(b, idx); }
 			if (idx == b.length) b = Arrays.copyOf(b, b.length << 1);
-			b[idx++] = parseLongPrimitive();
+			b[idx] = parseLongPrimitive();
+			idx++;
 			consumeCommaIfPresent();
 		}
 	}
@@ -253,7 +260,8 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			skipWhitespace();
 			if (pos < limit && buffer[pos] == ']') { pos++; lastArraySize = idx; return Arrays.copyOf(b, idx); }
 			if (idx == b.length) b = Arrays.copyOf(b, b.length << 1);
-			b[idx++] = parseBooleanPrimitive();
+			b[idx] = parseBooleanPrimitive();
+			idx++;
 			consumeCommaIfPresent();
 		}
 	}
@@ -264,7 +272,8 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			skipWhitespace();
 			if (pos < limit && buffer[pos] == ']') { pos++; lastArraySize = idx; return Arrays.copyOf(b, idx); }
 			if (idx == b.length) b = Arrays.copyOf(b, b.length << 1);
-			b[idx++] = parseStringValue();
+			b[idx] = parseStringValue();
+			idx++;
 			consumeCommaIfPresent();
 		}
 	}
@@ -328,7 +337,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			case 't', 'f' -> {
 				if (needsComma) throwTypeMismatch(meta, idx, "Expected comma before BOOLEAN");
 				if (curTypeDesc >= 0L && idx < 0) throwTypeMismatch(meta, idx, "Expected key before BOOLEAN");
-				meta.set(this, context, idx, parseTrueOrFalse(b == 't'));
+				meta.setBoolean(this, context, idx, parseTrueOrFalse(b == 't'));
 				idx = curTypeDesc < 0L ? idx + 1 : -1;
 				final var hasComma = consumeCommaIfPresent();
 				needsComma = !hasComma;
@@ -337,15 +346,31 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			case '{' -> {
 				if (needsComma                  ) throwTypeMismatch(meta, idx, "Expected comma before OBJECT");
 				if (curTypeDesc >= 0L && idx < 0) throwTypeMismatch(meta, idx, "Expected key before OBJECT");
-				engineStack.push(curTypeDesc, context, meta, idx, stackLimit);
-				curTypeDesc = meta.fieldDescriptor(idx);
-				pos++;
-				if (curTypeDesc < 0L || (curTypeDesc & 1L) != 0L) throwTypeMismatch(meta, idx, "Expected got unexpected '{'");
-				meta = metaCache[(int) (curTypeDesc >> 1)];
-				context = meta.start(this);
-				idx = -1;
-				needsComma = false;
-				trailingComma = false;
+				final var nextDesc = meta.fieldDescriptor(idx);
+				if (nextDesc < 0L || (nextDesc & 1L) != 0L) {
+					pos++;
+					skipWhitespace();
+					if (pos < limit && buffer[pos] == '}') {
+						pos++;
+						meta.set(this, context, idx, null);
+						idx = curTypeDesc < 0L ? idx + 1 : -1;
+						final var hasComma = consumeCommaIfPresent();
+						needsComma = !hasComma;
+						trailingComma = hasComma;
+					} else {
+						throwTypeMismatch(meta, idx, "Expected got unexpected '{'");
+					}
+				} else {
+					engineStack.push(curTypeDesc, context, meta, idx, stackLimit);
+					curTypeDesc = meta.fieldDescriptor(idx);
+					pos++;
+					if (curTypeDesc < 0L || (curTypeDesc & 1L) != 0L) throwTypeMismatch(meta, idx, "Expected got unexpected '{'");
+					meta = metaCache[(int) (curTypeDesc >> 1)];
+					context = meta.start(this);
+					idx = -1;
+					needsComma = false;
+					trailingComma = false;
+				}
 			}
 			case '}', ']' -> {
 				if (trailingComma) throwInvalid("Trailing comma");
@@ -374,7 +399,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				pos++;
 				var childDesc = meta.fieldDescriptor(idx);
 				if (childDesc >= 0L) {
-					if (((int) (childDesc >> 1))!= ObjectMeta.IDX_MAP) throwTypeMismatch(meta, idx, OBJECT_INSTEAD_OF_ARRAY);
+					if ((int) (childDesc >> 1)!= ObjectMeta.IDX_MAP) throwTypeMismatch(meta, idx, OBJECT_INSTEAD_OF_ARRAY);
 					childDesc = ObjectMeta.DESC_COLLECTION;
 				}
 				if ((childDesc & 1L) != 0L && childDesc < 0L) {
@@ -415,7 +440,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		if (b == '[' && targetMeta != null && (targetMeta.cacheIndex == ObjectMeta.IDX_MAP || targetMeta.cacheIndex == ObjectMeta.IDX_GENERIC)) {
 			targetMeta = metaCache[ObjectMeta.IDX_COLLECTION];
 		}
-		final var isArray = (b == '[');
+		final var isArray = b == '[';
 		final var startTypeDesc = EngineImpl.createTypeDesc(isArray, false, targetMeta != null ? targetMeta.cacheIndex : 0);
 
 		final T result;
@@ -519,13 +544,13 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		final var context = meta.start(this);
 		final var limitDepth = this.maxDepth;
 		// Pre-resolve loop-invariant descriptors for Maps to eliminate rel32 CALL overhead in the hot loop
-		final var isMap   = (meta.metaType == ObjectMeta.TYPE_MAP);
+		final var isMap   = meta.metaType == ObjectMeta.TYPE_MAP;
 		final var mapDesc = isMap ? meta.getComponentDescriptor() : 0L;
 		var expectKey = false;
 		while (true) {
 			if (pos >= limit) { ensure(1); if (pos >= limit) throwInvalid("Unexpedted END.2"); }
 			var b = buffer[pos];
-			if ((b & 0xC0) == 0 && ((1L << b) & WHITESPACE_MASK) != 0) skipWhitespace();
+			if ((b & 0xC0) == 0 && (1L << b & WHITESPACE_MASK) != 0) skipWhitespace();
 			if (pos < limit && buffer[pos] == (byte) '}') {
 				if (expectKey) throwInvalid("Trailing comma in object");
 				pos++;
@@ -539,12 +564,12 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			final var targetTD  = isMap ? mapDesc : meta.fieldDescriptor(targetIdx);
 			if (pos >= limit) { ensure(1); if (pos >= limit) throwInvalid("Unexpedted END.1"); }
 			b = buffer[pos];
-			if ((b & 0xC0) == 0 && ((1L << b) & WHITESPACE_MASK) != 0) { skipWhitespace(); b = buffer[pos]; }
+			if ((b & 0xC0) == 0 && (1L << b & WHITESPACE_MASK) != 0) { skipWhitespace(); b = buffer[pos]; }
 			switch (b) {
 			case '-','0','1','2','3','4','5','6','7','8','9' -> parseNumericPrimitive(meta, context, targetIdx, targetTD);
 			case 'n' -> fillNullValue(targetTD, context, targetIdx, meta);
-			case 't' -> meta.set(this, context, targetIdx, parseTrue());
-			case 'f' -> meta.set(this, context, targetIdx, parseFalse());
+			case 't' -> meta.setBoolean(this, context, targetIdx, parseTrue());
+			case 'f' -> meta.setBoolean(this, context, targetIdx, parseFalse());
 			case '"' -> {
 				switch ((int)targetTD) {
 				case ObjectMeta.SW_BYTE_ARRAY                            -> meta.set(this, context, targetIdx, parse64());
@@ -557,15 +582,25 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			}
 			case '{' -> {
 				final var fieldDesc = targetTD;
-				if (fieldDesc < 0L || (fieldDesc & 1L) != 0L) throwTypeMismatch(meta, targetIdx, "Expected array, got '{'");
-				final var childMeta = meta.childMeta(targetIdx);
-				final var fallbackMeta = childMeta != null ? childMeta : metaCache[ObjectMeta.IDX_MAP];
-				if (recursionDeep >= limitDepth) {
-					final var passDesc = fieldDesc == 0L ? (((long) ObjectMeta.IDX_MAP) << 1) : fieldDesc;
-					meta.set(this, context, targetIdx, runStateEngine(passDesc, fallbackMeta.start(this), fallbackMeta, -1));
-				} else {
+				if (fieldDesc < 0L || (fieldDesc & 1L) != 0L) {
 					pos++;
-					meta.set(this, context, targetIdx, parseRecordRecursive(fallbackMeta, recursionDeep + 1));
+					skipWhitespace();
+					if (pos < limit && buffer[pos] == '}') {
+						pos++;
+						meta.set(this, context, targetIdx, null);
+					} else {
+						throwTypeMismatch(meta, targetIdx, "Expected array, got '{'");
+					}
+				} else {
+					final var childMeta = meta.childMeta(targetIdx);
+					final var fallbackMeta = childMeta != null ? childMeta : metaCache[ObjectMeta.IDX_MAP];
+					if (recursionDeep >= limitDepth) {
+						final var passDesc = fieldDesc == 0L ? (long) ObjectMeta.IDX_MAP << 1 : fieldDesc;
+						meta.set(this, context, targetIdx, runStateEngine(passDesc, fallbackMeta.start(this), fallbackMeta, -1));
+					} else {
+						pos++;
+						meta.set(this, context, targetIdx, parseRecordRecursive(fallbackMeta, recursionDeep + 1));
+					}
 				}
 			}
 			case '[' -> {
@@ -577,10 +612,10 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 					meta.set(this, context, targetIdx, parsePrimitiveArray(childdDesc));
 				} else {
 					final var childMeta = meta.childMeta(targetIdx);
-					final var isFallbackToCollection = (childdDesc >= 0L) && (metaIdx == ObjectMeta.IDX_MAP || metaIdx == ObjectMeta.IDX_GENERIC);
-					final var fallbackMeta = isFallbackToCollection ? metaCache[ObjectMeta.IDX_COLLECTION] : (childMeta != null ? childMeta : metaCache[ObjectMeta.IDX_COLLECTION]);
+					final var isFallbackToCollection = childdDesc >= 0L && (metaIdx == ObjectMeta.IDX_MAP || metaIdx == ObjectMeta.IDX_GENERIC);
+					final var fallbackMeta = isFallbackToCollection ? metaCache[ObjectMeta.IDX_COLLECTION] : childMeta != null ? childMeta : metaCache[ObjectMeta.IDX_COLLECTION];
 					if (recursionDeep >= limitDepth) {
-						final var passDesc = isFallbackToCollection ? ObjectMeta.DESC_COLLECTION : (childdDesc == 0L ? ObjectMeta.DESC_COLLECTION : childdDesc);
+						final var passDesc = isFallbackToCollection ? ObjectMeta.DESC_COLLECTION : childdDesc == 0L ? ObjectMeta.DESC_COLLECTION : childdDesc;
 						meta.set(this, context, targetIdx, runStateEngine(passDesc, fallbackMeta.start(this), fallbackMeta, 0));
 					} else {
 						pos++;
@@ -590,12 +625,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			}
 			default -> throwTypeMismatch(meta, targetIdx, "Unexpected CHAR");
 			}
-			if (pos < limit && buffer[pos] == ',') {
-				pos++;
-				expectKey = true;
-			} else {
-				expectKey = consumeCommaSlow();
-			}
+			if (pos < limit && buffer[pos] == ',') { pos++; expectKey = true; } else expectKey = consumeCommaSlow();
 		}
 	}
 
@@ -639,12 +669,13 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			case 't' -> {
 				if(state==1) throwTypeMismatch(meta, idx, "Komma or Closeing breaket instead of BOOLEAN expected");
 				state = 1;
-				meta.set(this, context, idx, parseTrue());
+				meta.setBoolean(this, context, idx, parseTrue());
 			}
 			case 'f' -> {
 				if(state==1) throwTypeMismatch(meta, idx, "Komma or Closeing breaket instead of BOOLEAN expected");
 				state = 1;
-				meta.set(this, context, idx, parseFalse());
+				meta.setBoolean(this, context, idx, parseFalse());
+
 			}
 			case '"' -> {
 				if(state==1) throwTypeMismatch(meta, idx, "Komma or Closeing breaket instead of STRING expected");
@@ -666,10 +697,10 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 					metaIdx = (int) (childDesc >>> 1);
 					final var childMeta = metaIdx == ObjectMeta.IDX_GENERIC ? null : metaCache[metaIdx];
 					objFallbackMeta = childMeta != null ? childMeta : metaCache[ObjectMeta.IDX_MAP];
-					objPassDesc = childDesc == 0L ? (((long) ObjectMeta.IDX_MAP) << 1) : childDesc;
-					final var isFallbackToCollection = ((childDesc >= 0L) && (metaIdx == ObjectMeta.IDX_MAP || metaIdx == ObjectMeta.IDX_GENERIC));
-					arrFallbackMeta = isFallbackToCollection ? metaCache[ObjectMeta.IDX_COLLECTION] : (childMeta != null ? childMeta : metaCache[ObjectMeta.IDX_COLLECTION]);
-					arrPassDesc = isFallbackToCollection ? ObjectMeta.DESC_COLLECTION : (childDesc == 0L ? ObjectMeta.DESC_COLLECTION : childDesc);
+					objPassDesc = childDesc == 0L ? (long) ObjectMeta.IDX_MAP << 1 : childDesc;
+					final var isFallbackToCollection = childDesc >= 0L && (metaIdx == ObjectMeta.IDX_MAP || metaIdx == ObjectMeta.IDX_GENERIC);
+					arrFallbackMeta = isFallbackToCollection ? metaCache[ObjectMeta.IDX_COLLECTION] : childMeta != null ? childMeta : metaCache[ObjectMeta.IDX_COLLECTION];
+					arrPassDesc = isFallbackToCollection ? ObjectMeta.DESC_COLLECTION : childDesc == 0L ? ObjectMeta.DESC_COLLECTION : childDesc;
 				}
 
 				if (childDesc < 0L || isPrimitive) throwTypeMismatch(meta, idx, "Expected array, got '{'");
@@ -688,13 +719,13 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 					metaIdx = (int) (childDesc >>> 1);
 					final var childMeta = metaIdx == ObjectMeta.IDX_GENERIC ? null : metaCache[metaIdx];
 					objFallbackMeta = childMeta != null ? childMeta : metaCache[ObjectMeta.IDX_MAP];
-					objPassDesc = childDesc == 0L ? (((long) ObjectMeta.IDX_MAP) << 1) : childDesc;
-					final var isFallbackToCollection = ((childDesc >= 0L) && (metaIdx == ObjectMeta.IDX_MAP || metaIdx == ObjectMeta.IDX_GENERIC));
-					arrFallbackMeta = isFallbackToCollection ? metaCache[ObjectMeta.IDX_COLLECTION] : (childMeta != null ? childMeta : metaCache[ObjectMeta.IDX_COLLECTION]);
-					arrPassDesc     = isFallbackToCollection ?           ObjectMeta.DESC_COLLECTION : (childDesc == 0L ? ObjectMeta.DESC_COLLECTION : childDesc);
+					objPassDesc = childDesc == 0L ? (long) ObjectMeta.IDX_MAP << 1 : childDesc;
+					final var isFallbackToCollection = childDesc >= 0L && (metaIdx == ObjectMeta.IDX_MAP || metaIdx == ObjectMeta.IDX_GENERIC);
+					arrFallbackMeta = isFallbackToCollection ? metaCache[ObjectMeta.IDX_COLLECTION] : childMeta != null ? childMeta : metaCache[ObjectMeta.IDX_COLLECTION];
+					arrPassDesc     = isFallbackToCollection ?           ObjectMeta.DESC_COLLECTION : childDesc == 0L ? ObjectMeta.DESC_COLLECTION : childDesc;
 				}
 
-				if ((childDesc >= 0L) && metaIdx != ObjectMeta.IDX_GENERIC && metaIdx != ObjectMeta.IDX_MAP) throwTypeMismatch(meta, idx, OBJECT_INSTEAD_OF_ARRAY);
+				if (childDesc >= 0L && metaIdx != ObjectMeta.IDX_GENERIC && metaIdx != ObjectMeta.IDX_MAP) throwTypeMismatch(meta, idx, OBJECT_INSTEAD_OF_ARRAY);
 				if (isPrimitive && childDesc < 0L) {
 					pos++;
 					meta.set(this, context, idx, parsePrimitiveArray(childDesc));

@@ -57,15 +57,15 @@ final class ObjectMeta {
 	static         final int          IDX_COLLECTION = 2;
 	static         final int          IDX_OBJ_ARRAY  = 4;
 	// Bestehende 64-Bit Deskriptoren für die Engine-Logik:
-	static final long DESC_COLLECTION   = (((long) IDX_COLLECTION) << 1) | 0x8000000000000000L;
-	static final long DESC_OBJ_ARRAY    = (((long) IDX_OBJ_ARRAY)  << 1) | 0x8000000000000000L;
-	static final long DESC_BYTE_ARRAY   = (((long) PRIM_BYTE)      << 1) | 0x8000000000000001L;
-	static final long DESC_PRIM_INT     = (((long) PRIM_INT)       << 1) | 1L;
-	static final long DESC_PRIM_LONG    = (((long) PRIM_LONG)      << 1) | 1L;
-	static final long DESC_PRIM_DOUBLE  = (((long) PRIM_DOUBLE)    << 1) | 1L;
-	static final long DESC_PRIM_FLOAT   = (((long) PRIM_FLOAT)     << 1) | 1L;
-	static final long DESC_PRIM_BOOLEAN = (((long) PRIM_BOOLEAN)   << 1) | 1L;
-	static final long DESC_PRIM_STRING  = (((long) PRIM_STRING)    << 1) | 1L;
+	static final long DESC_COLLECTION   = (long) IDX_COLLECTION << 1 | 0x8000000000000000L;
+	static final long DESC_OBJ_ARRAY    = (long) IDX_OBJ_ARRAY  << 1 | 0x8000000000000000L;
+	static final long DESC_BYTE_ARRAY   = (long) PRIM_BYTE      << 1 | 0x8000000000000001L;
+	static final long DESC_PRIM_INT     = (long) PRIM_INT       << 1 | 1L;
+	static final long DESC_PRIM_LONG    = (long) PRIM_LONG      << 1 | 1L;
+	static final long DESC_PRIM_DOUBLE  = (long) PRIM_DOUBLE    << 1 | 1L;
+	static final long DESC_PRIM_FLOAT   = (long) PRIM_FLOAT     << 1 | 1L;
+	static final long DESC_PRIM_BOOLEAN = (long) PRIM_BOOLEAN   << 1 | 1L;
+	static final long DESC_PRIM_STRING  = (long) PRIM_STRING    << 1 | 1L;
 
 	// NEU: Exakte 32-Bit int-Konstanten für den Switch (schneidet Bit 63 zur Compile-Zeit ab):
 	static final int SW_PRIM_INT     = (int) DESC_PRIM_INT    ; // 3
@@ -176,7 +176,7 @@ final class ObjectMeta {
 
 	private static boolean isPrimitive(final Class<?> t) {
 		if(null == t) return false;
-		if(t.isPrimitive() || (String.class == t)) return true;
+		if(t.isPrimitive() || String.class == t) return true;
 		return false;
 	}
 
@@ -185,7 +185,7 @@ final class ObjectMeta {
 		final Class<?> rawType = GernericsHandler.resolveClass(type);
 		// If valueType is missing or hardcoded to Object.class, dynamically extract  the generic child type from 'type'.
 		// This completely bridges the gap for nested collections and prevents the fallback to CompactMap.
-		final var actualValueType = (valueType == null || valueType == Object.class)
+		final var actualValueType = valueType == null || valueType == Object.class
 				? GernericsHandler.extractValueType(type, rawType) : valueType;
 
 		final var isArray = rawType.isArray() || Collection.class.isAssignableFrom(rawType);
@@ -236,7 +236,7 @@ final class ObjectMeta {
 	}
 
 	long fieldDescriptor(final int idx) {
-		return (metaType == TYPE_INSTANTIATOR || metaType == TYPE_SEALED) ? fieldDescriptors[idx] : componentDescriptor;
+		return metaType == TYPE_INSTANTIATOR || metaType == TYPE_SEALED ? fieldDescriptors[idx] : componentDescriptor;
 	}
 
 	ObjectMeta childMeta(final int index) { return childMetas[index]; }
@@ -261,7 +261,7 @@ final class ObjectMeta {
 		if(e == null) for (var i = 0; i < fieldDescriptors.length; i++) childMetas[i] = null;
 		else for (var i = 0; i < fieldDescriptors.length; i++) {
 			final var metaId = (int)(fieldDescriptors[i] >>> 1);
-			childMetas[i] = (metaId == ObjectMeta.IDX_GENERIC) ? null : e.metaCache()[metaId];
+			childMetas[i] = metaId == ObjectMeta.IDX_GENERIC ? null : e.metaCache()[metaId];
 		}
 		return childMetas;
 	}
@@ -284,7 +284,7 @@ final class ObjectMeta {
 		this.metaType = targetMetaType;
 		this.failOnUnknown = true;
 		this.factory = null;
-		this.arrayCreator = (rawComp != null && targetMetaType == TYPE_OBJ_ARRAY) ? size -> Array.newInstance(rawComp, size) : null;
+		this.arrayCreator = rawComp != null && targetMetaType == TYPE_OBJ_ARRAY ? size -> Array.newInstance(rawComp, size) : null;
 		this.ctorParamCount = 0;
 		this.permitted = null;
 		this.baseType = rawBase;
@@ -309,7 +309,7 @@ final class ObjectMeta {
 			final var childMeta = e.metaCache()[targetMetaId];
 			// Nur wenn das Kind-Element ein echtes POJO/Record (TYPE_INSTANTIATOR) oder Sealed-Interface ist,
 			// ist es eine komplexe Komponente, die im JSON ein '{' erzwingt!
-			this.isComplexComponent = (childMeta != null && (childMeta.metaType == TYPE_INSTANTIATOR || childMeta.metaType == TYPE_SEALED));
+			this.isComplexComponent = childMeta != null && (childMeta.metaType == TYPE_INSTANTIATOR || childMeta.metaType == TYPE_SEALED);
 		} else {
 			this.isComplexComponent = false;
 		}
@@ -352,7 +352,7 @@ final class ObjectMeta {
 		this.genericBaseType       = null;
 		this.genericCompType       = null;
 		this.className             = pClassName;
-		this.metaType              = (pStart == null && pFactory == null) ? TYPE_DEFECT : TYPE_INSTANTIATOR;
+		this.metaType              = pStart == null && pFactory == null ? TYPE_DEFECT : TYPE_INSTANTIATOR;
 		this.factory               = pFactory;
 		this.arrayCreator          = null;
 		this.ctorParamCount        = pStartCount;
@@ -414,7 +414,7 @@ final class ObjectMeta {
 	Class<?> type(final int index) { return types[1==types.length?0:index]; }
 
 	long getChildDescriptor(final int index) {
-		return (this.metaType == TYPE_INSTANTIATOR || this.metaType == TYPE_SEALED) ? fieldDescriptors[index] : this.componentDescriptor;
+		return this.metaType == TYPE_INSTANTIATOR || this.metaType == TYPE_SEALED ? fieldDescriptors[index] : this.componentDescriptor;
 	}
 
 	// The unified main constructor for TYPE_SEALED
@@ -424,7 +424,7 @@ final class ObjectMeta {
 		this.genericBaseType = baseTyp;
 		this.genericCompType = null;
 		this.className      = pClassName;
-		final var possibleComponents = (pComponents != null) ? pComponents : new ComponentMeta[pKeys.length];
+		final var possibleComponents = pComponents != null ? pComponents : new ComponentMeta[pKeys.length];
 		if (pComponents == null) {
 			for (var i = 0; i < pKeys.length; i++) possibleComponents[i] = new ComponentMeta(pKeys[i], pTypes[i], Object.class);
 		}
@@ -632,7 +632,7 @@ final class ObjectMeta {
 	}
 
 	ComponentMeta[] components() { return components; }
-	public Class<?> typeOf(final int index) { return (components==null||index<0||index>=components.length ? Object.class : this.components[index].type()); }
+	public Class<?> typeOf(final int index) { return components==null||index<0||index>=components.length ? Object.class : this.components[index].type(); }
 
 	int prepareKey(final int hash, final byte[] buffer, final int off, final int len) {
 		if (metaType == TYPE_MAP) return -1;
@@ -835,6 +835,18 @@ final class ObjectMeta {
 		case TYPE_MAP                        -> ((ParseContext)context).primKeyValue(s, PRIMITIVE.DOUBLE, bits);
 		case TYPE_OBJ_ARRAY, TYPE_COLLECTION -> { checkComplexTypeConstraint(s); ((ParseContext)context).primIdxValue(s, PRIMITIVE.DOUBLE, bits, index); }
 		default                              -> set(s, context, index, v);
+		}
+	}
+
+	void setBoolean(final MetaPool s, final Object context, final int index, final boolean v) {
+		switch (metaType) {
+		case TYPE_INSTANTIATOR, TYPE_SEALED -> {
+			final var pc = (ParseContext)context;
+			pc.objs [index] = v ? Boolean.TRUE : Boolean.FALSE; // Zero-Allocation durch Singletons
+			pc.prims[index] = v ? 1L : 0L;
+		}
+		// Sicherer Fallback für Maps/Collections: Fügt den Wert einmalig als Objekt ein
+		default -> set(s, context, index, v ? Boolean.TRUE : Boolean.FALSE);
 		}
 	}
 
