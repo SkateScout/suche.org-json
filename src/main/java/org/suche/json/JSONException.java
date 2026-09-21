@@ -10,6 +10,7 @@ public class JSONException extends RuntimeException {
 	}
 
 	JSONException(final Throwable t) {
+		final var mesg = t.getMessage();
 		super(t.getMessage(), null, false, false);
 		cause = t;
 		setStackTrace(t.getStackTrace());

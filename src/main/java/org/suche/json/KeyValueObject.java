@@ -85,7 +85,7 @@ record KeyValueObject(
 		var cnt = 0;
 		final var mapComponent = cfg.mapComponent();
 		for (var i = 0; i < len; i++) cnt = addComponent(result, cnt, components[i], mapComponent);
-		return(cnt < len ? Arrays.copyOf(result, cnt) : result);
+		return cnt < len ? Arrays.copyOf(result, cnt) : result;
 	}
 
 	private static int registerComplexMethod(final KeyValueObject[] result, int cnt, final Method m, String name, final Set<String> seenKeys, final BiFunction<String, Method, Object> mapMethod) {
@@ -160,11 +160,7 @@ record KeyValueObject(
 	}
 
 	private static int registerComplexfields(final KeyValueObject[] result, int cnt, final Field[] fields, final Set<String> seenKeys, final BiFunction<String, Field , Object> mapField)  {
-		for (final var f : fields) {
-			if (!Modifier.isStatic(f.getModifiers()) && !Modifier.isTransient(f.getModifiers())) {
-				cnt = registerComplexfield(result, cnt, f, seenKeys, mapField);
-			}
-		}
+		for (final var f : fields) if (!Modifier.isStatic(f.getModifiers()) && !Modifier.isTransient(f.getModifiers())) cnt = registerComplexfield(result, cnt, f, seenKeys, mapField);
 		return cnt;
 	}
 
@@ -179,6 +175,6 @@ record KeyValueObject(
 		var cnt = 0;
 		cnt = registerComplexMethods(result, cnt, methods, seenKeys, cfg.mapMethod());
 		cnt = registerComplexfields(result, cnt, fields, seenKeys, mapField);
-		return(cnt < result.length ? Arrays.copyOf(result, cnt) : result);
+		return cnt < result.length ? Arrays.copyOf(result, cnt) : result;
 	}
 }

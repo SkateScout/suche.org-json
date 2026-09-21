@@ -13,6 +13,8 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class ConstructorGenerator {
 	private static final String CONSTRUCTOR_NAME = "<init>";
@@ -49,8 +51,31 @@ public class ConstructorGenerator {
 		}
 	}
 
+	private static final class BytecodeLoader extends ClassLoader {
+		BytecodeLoader(final ClassLoader parent) { super(parent); }
+		Class<?> def(final String name, final byte[] b) {
+			synchronized (getClassLoadingLock(name)) {
+				var c = findLoadedClass(name);
+				if (c == null) c = defineClass(name, b, 0, b.length);
+				return c;
+			}
+		}
+		Class<?> get(final String name) {
+			synchronized (getClassLoadingLock(name)) { return findLoadedClass(name); }
+		}
+	}
+
+	private static final Map<ClassLoader,BytecodeLoader> BYTE_LOADERS = new ConcurrentHashMap<>();
+
+	private static final Class<?> viaByteLoader(final ClassLoader cl, final String name, final byte[] bytes) {
+		return BYTE_LOADERS.computeIfAbsent(cl, BytecodeLoader::new).def(name, bytes);
+	}
+
+	private static final Class<?> viaByteLoader(final ClassLoader cl, final String name) {
+		return BYTE_LOADERS.computeIfAbsent(cl, BytecodeLoader::new).get(name);
+	}
+
 	public static ObjectArrayFactory generate(final Class<?> cls, final String methodName, final Class<?>[] factoryArgs, final PropDef[] setters) throws IllegalAccessException, InstantiationException, IllegalArgumentException, InvocationTargetException, NoSuchMethodException  {
-		// Resolving deep visibility to safely bypass cross-module privateLookupIn for entirely public targets
 		var isPublicTarget = false;
 		try {
 			var mods = cls.getModifiers();
@@ -66,11 +91,71 @@ public class ConstructorGenerator {
 			isPublicTarget = Modifier.isPublic(mods);
 		} catch (final NoSuchMethodException | NoSuchFieldException _) { }
 
-		final var className  = isPublicTarget ? "org.suche.json." + cls.getSimpleName() + "$$InternalFactory" : cls.getName() + "$$InternalFactory";
+		// 1. Exception-freier ClassLoader Visibility Check (Parent-Chain Traversal)
+		var isVisibleToLookup = false;
+		final var callerLoader = LOOKUP.lookupClass().getClassLoader();
+		final var targetLoader = cls.getClassLoader();
+
+		if (targetLoader == null || callerLoader == targetLoader) {
+			// null = Bootstrap ClassLoader (z.B. java.lang.*), für alle sichtbar.
+			// Identische Referenz = gleicher ClassLoader.
+			isVisibleToLookup = true;
+		} else if (callerLoader != null) {
+			// Hierarchie nach oben wandern: Ist der Target-Loader ein Parent des Caller-Loaders?
+			var p = callerLoader.getParent();
+			while (p != null) {
+				if (p == targetLoader) {
+					isVisibleToLookup = true;
+					break;
+				}
+				p = p.getParent();
+			}
+		}
+
+		final var useJsonLookup = isPublicTarget && isVisibleToLookup;
+		// 2. SICHEREN Klassennamen ohne '$' generieren (verhindert NoClassDefFoundError beim Linking)
+		final var pkg = cls.getPackageName();
+		// z.B. "HoymilesApi$IdPort"
+		final var nameWithoutPkg = pkg.isEmpty() ? cls.getName() : cls.getName().substring(pkg.length() + 1);
+		// '$' durch '_' ersetzen -> "HoymilesApi_IdPort_InternalFactory"
+		final var safeName = nameWithoutPkg.replace('$', '_') + "_InternalFactory";
+		final var className = useJsonLookup ? "org.suche.json." + safeName : pkg.isEmpty() ? safeName : pkg + "." + safeName;
+
+		if(isPublicTarget && viaByteLoader(cls.getClassLoader(), className) instanceof final Class<?> definedClass) return (ObjectArrayFactory) definedClass.getConstructor().newInstance();
 		final var classDesc  = ClassDesc.ofDescriptor("L" + className.replace('.', '/') + ";");
 		final var recordDesc = ClassDesc.ofDescriptor(cls.descriptorString());
+		final var bytes      = buildBytes(classDesc, methodName, recordDesc, factoryArgs, setters);
+		try {
+			// 2. JPMS Modul-Sicherheit: Dürfen wir überhaupt privateLookupIn aufrufen?
+			final var targetModule = cls.getModule();
+			final var callerModule = LOOKUP.lookupClass().getModule();
+			final var canPrivateLookup = targetModule == callerModule || targetModule.isOpen(cls.getPackageName(), callerModule);
 
-		final var bytes      = ClassFile.of().build(classDesc, classBuilder -> {
+			MethodHandles.Lookup targetLookup = null;
+			if (useJsonLookup) {
+				targetLookup = LOOKUP;
+			} else if (canPrivateLookup) {
+				targetLookup = MethodHandles.privateLookupIn(cls, LOOKUP);
+			}
+
+			// 3. Exception-freier Pre-Check: Hat das Lookup das "FullPrivilege" für defineHiddenClass behalten?
+			if (targetLookup != null && targetLookup.hasFullPrivilegeAccess()) {
+				final var definedClass = targetLookup.defineHiddenClass(bytes, true, MethodHandles.Lookup.ClassOption.NESTMATE).lookupClass();
+				return (ObjectArrayFactory) definedClass.getConstructor().newInstance();
+			}
+
+			// 4. Regulärer Fallback für ClassLoader- & Modul-Grenzen (z.B. Servlet-Container)
+			if (isPublicTarget) return (ObjectArrayFactory) viaByteLoader(cls.getClassLoader(), className, bytes).getConstructor().newInstance();
+			throw new IllegalAccessException("Keine Berechtigung zur Bytecode-Generierung für " + cls.getName() + " (Nicht public und JPMS-Modul blockiert)");
+		} catch(final Exception e) {
+			final var x = new IllegalAccessException("generate("+cls+" , "+methodName+" , factoryArgs , setters) => "+e.getMessage());
+			x.setStackTrace(e.getStackTrace());
+			throw x;
+		}
+	}
+
+	private static byte[] buildBytes(final ClassDesc classDesc, final String methodName, final ClassDesc recordDesc, final Class<?>[] factoryArgs, final PropDef[] setters) {
+		return ClassFile.of().build(classDesc, classBuilder -> {
 			classBuilder.withFlags(ACC_PUBLIC | ACC_FINAL);
 			classBuilder.withInterfaceSymbols(IF_NAME);
 			classBuilder.withMethodBody(CONSTRUCTOR_NAME, MT_INIT, ACC_PUBLIC, codeBuilder -> {
@@ -86,11 +171,9 @@ public class ConstructorGenerator {
 					codeBuilder.dup();
 				}
 				addFactoryArgs(codeBuilder, factoryArgs);
-
 				// Replaced Stream execution with direct array mappings for zero-allocation
 				final var argDescs = new ClassDesc[factoryArgs.length];
 				for (var i = 0; i < factoryArgs.length; i++) argDescs[i] = ClassDesc.ofDescriptor(factoryArgs[i].descriptorString());
-
 				if (isConstructor) {
 					final var constructorDesc = MethodTypeDesc.of(ClassDesc.ofDescriptor("V"), argDescs);
 					codeBuilder.invokespecial(recordDesc, CONSTRUCTOR_NAME, constructorDesc);
@@ -98,24 +181,11 @@ public class ConstructorGenerator {
 					final var factoryDesc = MethodTypeDesc.of(recordDesc, argDescs);
 					codeBuilder.invokestatic(recordDesc, methodName, factoryDesc);
 				}
-
-				if (setters != null)
-					for (var i = 0; i < setters.length; i++)
-						callSetter(codeBuilder, recordDesc, factoryArgs.length + i, setters[i]);
-
-
+				if (setters != null) for (var i = 0; i < setters.length; i++) callSetter(codeBuilder, recordDesc, factoryArgs.length + i, setters[i]);
 				codeBuilder.areturn();
 			});
 		});
-		try {
-			final var targetLookup = isPublicTarget ? LOOKUP : MethodHandles.privateLookupIn(cls, LOOKUP);
-			final var definedClass = targetLookup.defineHiddenClass(bytes, true, MethodHandles.Lookup.ClassOption.NESTMATE).lookupClass();
-			return (ObjectArrayFactory) definedClass.getConstructor().newInstance();
-		} catch(final IllegalAccessException e) {
-			final var x = new IllegalAccessException("generate("+cls+" , "+methodName+" , factoryArgs , setters) => "+e.getMessage());
-			x.setStackTrace(e.getStackTrace());
-			throw x;
-		}
+
 	}
 
 	private static void callSetter(final CodeBuilder codeBuilder, final ClassDesc recordDesc, final int idx, final PropDef prop) {
