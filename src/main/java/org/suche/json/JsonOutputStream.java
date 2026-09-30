@@ -29,7 +29,7 @@ public final class JsonOutputStream implements AutoCloseable {
 	private static final java.lang.invoke.VarHandle SHORT_VIEW = JSONStringAddOpens.SHORT_VIEW;
 	private static final java.lang.invoke.VarHandle INT_VIEW = JSONStringAddOpens.INT_VIEW;
 	private static final short[] DIGITS_S = new short[100];
-	static {  for (var i = 0; i < 100; i++) { final var tens = (i / 10) + '0'; final var ones = (i % 10) + '0'; DIGITS_S[i] = (short) ((ones << 8) | tens); } }
+	static {  for (var i = 0; i < 100; i++) { final var tens = i / 10 + '0'; final var ones = i % 10 + '0'; DIGITS_S[i] = (short) (ones << 8 | tens); } }
 	private static final int        BUFFER_SIZE = 128 * 1024;
 	private static final ObjectPool<JsonOutputStream> STREAM_POOL = new ObjectPool<>(64, JsonOutputStream::new);
 	private static final short      COMMA_QUOTE        = 0x222C;
@@ -346,14 +346,14 @@ public final class JsonOutputStream implements AutoCloseable {
 
 	private static int getDigits(final int v) {
 		final var bitLength = 32 - Integer.numberOfLeadingZeros(v);
-		final var guess = (bitLength * 1233) >>> 12;
-	return (v >= POW10[guess] ? guess+1 : guess);
+		final var guess = bitLength * 1233 >>> 12;
+	return v >= POW10[guess] ? guess+1 : guess;
 	}
 
 	private static int getDigits(final long v) {
 		final var bitLength = 64 - Long.numberOfLeadingZeros(v);
-		final var guess = (bitLength * 1233) >>> 12;
-		return (v >= POW10_L[guess] ? guess+1 : guess);
+		final var guess = bitLength * 1233 >>> 12;
+		return v >= POW10_L[guess] ? guess+1 : guess;
 	}
 
 	private void writeNumber(final char prefix, int val) throws IOException {
@@ -373,7 +373,7 @@ public final class JsonOutputStream implements AutoCloseable {
 
 		while (val >= 100) {
 			final var q = val / 100;
-			final var r = val - (q * 100);
+			final var r = val - q * 100;
 			val = q;
 			SHORT_VIEW.set(buffer, i-=2, DIGITS_S[r]);
 		}
@@ -402,7 +402,7 @@ public final class JsonOutputStream implements AutoCloseable {
 
 		while (val >= 100) {
 			final var q = val / 100;
-			final var r = (int)(val - (q * 100));
+			final var r = (int)(val - q * 100);
 			val = q;
 			SHORT_VIEW.set(buffer, i-=2, DIGITS_S[r]);
 		}
@@ -422,7 +422,7 @@ public final class JsonOutputStream implements AutoCloseable {
 		if (d == l) { writeNumber((char)0, l); return; }
 		var limit = fractionalLimit >= 0 ? fractionalLimit : 6;
 		if (limit >= POW10_L.length) limit = POW10_L.length - 1;
-		if (d >= 1e14 || d <= -1e14 || (Math.abs(d) < 1e-4)) { writeFractionalLimited(Double.toString(d)); return; }
+		if (d >= 1e14 || d <= -1e14 || Math.abs(d) < 1e-4) { writeFractionalLimited(Double.toString(d)); return; }
 		if (d < 0) {
 			buffer[pos++] = '-';
 			d = -d;
@@ -467,24 +467,24 @@ public final class JsonOutputStream implements AutoCloseable {
 
 		SHORT_VIEW.set(buffer, pos, DIGITS_S[century]); pos+=2;
 		SHORT_VIEW.set(buffer, pos, DIGITS_S[decade ]); pos+=2;
-		buffer[pos++] = ((byte)'-');
+		buffer[pos++] = (byte)'-';
 		SHORT_VIEW.set(buffer, pos, DIGITS_S[utc.getMonthValue()]); pos+=2;
-		buffer[pos++] = ((byte)'-');
+		buffer[pos++] = (byte)'-';
 		write2(utc.getDayOfMonth());
-		buffer[pos++] = ((byte)'T');
+		buffer[pos++] = (byte)'T';
 		write2(utc.getHour());
-		buffer[pos++] = ((byte)':');
+		buffer[pos++] = (byte)':';
 		write2(utc.getMinute());
-		buffer[pos++] = ((byte)':');
+		buffer[pos++] = (byte)':';
 		write2(utc.getSecond());
-		buffer[pos++] = ((byte)'.');
+		buffer[pos++] = (byte)'.';
 		write3( utc.getNano() / 1_000_000);
-		buffer[pos++] = ((byte)'Z');
-		buffer[pos++] = ((byte)'"');
+		buffer[pos++] = (byte)'Z';
+		buffer[pos++] = (byte)'"';
 	}
 
 	private void write3(final int val) {
-		buffer[pos++] = (byte)('0' + (val / 100));
+		buffer[pos++] = (byte)('0' + val / 100);
 		final var q = val % 100;
 		SHORT_VIEW.set(buffer, pos, DIGITS_S[q]); pos+=2;
 	}
@@ -608,17 +608,25 @@ public final class JsonOutputStream implements AutoCloseable {
 		if (!(key instanceof final String str)) throw wrongKeyType(key);
 		final var sLen = str.length();
 		if (sLen > 40) { writeEscapedStringKey(str, commaNeeded); return; }
+		// Fast-Path für leere Strings ("")
 		mayFlush(sLen * 3 + 5);
+		if (sLen == 0) {
+			if (commaNeeded) buffer[pos++] = ',';
+			buffer[pos++] = '"';
+			buffer[pos++] = '"';
+			buffer[pos++] = ':';
+			return;
+		}
 		final var first = str.charAt(0);
 		// Skip UUIDs and numeric IDs to avoid cache thrashing
-		final var skipCache = (first >= '0' && first <= '9') || sLen == 32 || (sLen == 36 && str.charAt(8) == '-');
+		final var skipCache = first >= '0' && first <= '9' || sLen == 32 || sLen == 36 && str.charAt(8) == '-';
 		if (skipCache) { writeUncachedMapKey(str, sLen); return; }
 		final var offset = commaNeeded ? 0 : 1;
 		var idx = h.apply(str) & KEY_CACHE_MASK;
 		var k = keyCacheKeys[idx];
 		if (k == key || key.equals(k)) { writeCachedMapKey(offset, idx); return; }
 		if(null != k) {
-			idx = (idx + 1) & KEY_CACHE_MASK;
+			idx = idx + 1 & KEY_CACHE_MASK;
 			k = keyCacheKeys[idx];
 			if (k == key || key.equals(k)) { writeCachedMapKey(offset, idx); return; }
 		}
@@ -661,7 +669,7 @@ public final class JsonOutputStream implements AutoCloseable {
 
 	private void handleValue(final Object val) throws IOException {
 		if(handleSimple(val)) return;
-		final var h = (engine.ofComplex(val.getClass()) instanceof final KeyValueObject[] kv ? kv : DEFAULTOBJ);
+		final var h = engine.ofComplex(val.getClass()) instanceof final KeyValueObject[] kv ? kv : DEFAULTOBJ;
 		if (h instanceof final KeyValueObject[] parts) push((byte)'{', TYPE_RECORD, val, parts, parts.length);
 		else  									       writeEscapedString(val.toString());
 	}

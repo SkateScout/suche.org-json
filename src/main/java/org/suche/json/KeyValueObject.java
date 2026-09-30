@@ -4,7 +4,9 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.RecordComponent;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.function.BiFunction;
@@ -160,7 +162,9 @@ record KeyValueObject(
 	}
 
 	private static int registerComplexfields(final KeyValueObject[] result, int cnt, final Field[] fields, final Set<String> seenKeys, final BiFunction<String, Field , Object> mapField)  {
-		for (final var f : fields) if (!Modifier.isStatic(f.getModifiers()) && !Modifier.isTransient(f.getModifiers())) cnt = registerComplexfield(result, cnt, f, seenKeys, mapField);
+		for (final var f : fields)
+			if (!Modifier.isStatic(f.getModifiers()) && !Modifier.isTransient(f.getModifiers()))
+				cnt = registerComplexfield(result, cnt, f, seenKeys, mapField);
 		return cnt;
 	}
 
@@ -168,7 +172,13 @@ record KeyValueObject(
 		while(c.isArray()) c = c.componentType();
 		if(c.isRecord()) return ofRecord(c.asSubclass(Record.class), cfg);
 		final var methods = c.getMethods();
-		final var fields  = c.getDeclaredFields();
+
+		final var fieldsList = new ArrayList<Field>();
+		for (var current = c; current != null && current != Object.class; current = current.getSuperclass()) {
+			final var declared = current.getDeclaredFields();
+			if (declared.length > 0) Collections.addAll(fieldsList, declared);
+		}
+		final var fields = fieldsList.toArray(Field[]::new);
 		final var result = new KeyValueObject[methods.length + fields.length];
 		final var seenKeys = new HashSet<String>();
 		final var mapField  = cfg.mapField();

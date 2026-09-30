@@ -815,11 +815,28 @@ final class ObjectMeta {
 		}
 	}
 
+	private static Object coerceType(final Object value, final Class<?> targetType) {
+		if (value == null || targetType.isInstance(value)) return value;
+		if (value instanceof final Number n) {
+			if (targetType == Long   .class || targetType == long  .class) return n.longValue();
+			if (targetType == Integer.class || targetType == int   .class) return n.intValue();
+			if (targetType == Double .class || targetType == double.class) return n.doubleValue();
+			if (targetType == Float  .class || targetType == float .class) return n.floatValue();
+			if (targetType == Short  .class || targetType == short .class) return n.shortValue();
+			if (targetType == Byte   .class || targetType == byte  .class) return n.byteValue();
+		}
+		return value;
+	}
+
 	// @SuppressWarnings("unchecked")
 	void setLong(final MetaPool s, final Object context, final int index, final long v) {
 		if (setNumeric0 && v == 0L) return;
 		switch (metaType) {
-		case TYPE_INSTANTIATOR, TYPE_SEALED  -> ((ParseContext)context).prims[index] = v;
+		case TYPE_INSTANTIATOR, TYPE_SEALED  -> {
+			final var pc = (ParseContext)context;
+			if (pc.prims != null) pc.prims[index] = v;
+			else pc.objs[index] = coerceType(v, this.types[index]);
+		}
 		case TYPE_MAP                        -> ((ParseContext)context).primKeyValue(s, PRIMITIVE.LONG, v);
 		case TYPE_OBJ_ARRAY, TYPE_COLLECTION -> { checkComplexTypeConstraint(s); ((ParseContext)context).primIdxValue(s, PRIMITIVE.LONG, v, index); }
 		default -> set(s, context, index, v);
@@ -831,7 +848,11 @@ final class ObjectMeta {
 		if (setNumeric0 && v == 0.0) return;
 		final var bits = Double.doubleToRawLongBits(v);
 		switch (metaType) {
-		case TYPE_INSTANTIATOR, TYPE_SEALED  -> ((ParseContext)context).prims[index] = bits;
+		case TYPE_INSTANTIATOR, TYPE_SEALED  -> {
+			final var pc = (ParseContext)context;
+			if (pc.prims != null) pc.prims[index] = Double.doubleToRawLongBits(v);
+			else pc.objs[index] = coerceType(v, this.types[index]);
+		}
 		case TYPE_MAP                        -> ((ParseContext)context).primKeyValue(s, PRIMITIVE.DOUBLE, bits);
 		case TYPE_OBJ_ARRAY, TYPE_COLLECTION -> { checkComplexTypeConstraint(s); ((ParseContext)context).primIdxValue(s, PRIMITIVE.DOUBLE, bits, index); }
 		default                              -> set(s, context, index, v);
@@ -843,12 +864,13 @@ final class ObjectMeta {
 		case TYPE_INSTANTIATOR, TYPE_SEALED -> {
 			final var pc = (ParseContext)context;
 			pc.objs [index] = v ? Boolean.TRUE : Boolean.FALSE; // Zero-Allocation durch Singletons
-			pc.prims[index] = v ? 1L : 0L;
+			if (pc.prims != null) pc.prims[index] = v ? 1L : 0L;
 		}
 		// Sicherer Fallback für Maps/Collections: Fügt den Wert einmalig als Objekt ein
 		default -> set(s, context, index, v ? Boolean.TRUE : Boolean.FALSE);
 		}
 	}
+
 
 	// @SuppressWarnings("unchecked")
 	void set(final MetaPool s, final Object context, final int index, Object value) {
