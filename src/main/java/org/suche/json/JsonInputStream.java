@@ -559,7 +559,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			if (buffer[pos] != '"') throwInvalid("Expected '\"' for object key");
 			final var targetIdx = parseStringKeyAsIndex(context, meta);
 
-			if (targetIdx < 0) { skipWhitespace(); skipValue(); consumeCommaIfPresent(); continue; }
+			if (targetIdx < 0) { skipWhitespace(); skipValue(); expectKey = consumeCommaIfPresent(); continue; }
 			// Use register-based conditional move for Maps instead of executing a rel32 CALL per entry
 			final var targetTD  = isMap ? mapDesc : meta.fieldDescriptor(targetIdx);
 			if (pos >= limit) { ensure(1); if (pos >= limit) throwInvalid("Unexpedted END.1"); }
