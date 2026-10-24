@@ -50,7 +50,8 @@ final class ObjectMeta {
 	static         final int PRIM_SHORT        =  7;
 	static         final int PRIM_CHAR         =  8;
 	static         final int PRIM_STRING       =  9;
-	static         final int PRIM_OTHER        = 10;
+	static         final int PRIM_RAW_DATE     = 10; // NEU: Für Typen, die direkt auf Roh-Bytes parsen
+	static         final int PRIM_OTHER        = 11;
 
 	static         final int          IDX_GENERIC    = 0;	// Must be 0 for speedup with bit checks
 	static         final int          IDX_MAP        = 1;
@@ -66,6 +67,7 @@ final class ObjectMeta {
 	static final long DESC_PRIM_FLOAT   = (long) PRIM_FLOAT     << 1 | 1L;
 	static final long DESC_PRIM_BOOLEAN = (long) PRIM_BOOLEAN   << 1 | 1L;
 	static final long DESC_PRIM_STRING  = (long) PRIM_STRING    << 1 | 1L;
+	static final long DESC_RAW_DATE     = (long) PRIM_RAW_DATE  << 1 | 1L;
 
 	// NEU: Exakte 32-Bit int-Konstanten für den Switch (schneidet Bit 63 zur Compile-Zeit ab):
 	static final int SW_PRIM_INT     = (int) DESC_PRIM_INT    ; // 3
@@ -75,6 +77,7 @@ final class ObjectMeta {
 	static final int SW_PRIM_BOOLEAN = (int) DESC_PRIM_BOOLEAN; // 11
 	static final int SW_BYTE_ARRAY   = (int) DESC_BYTE_ARRAY  ; // 13
 	static final int SW_PRIM_STRING  = (int) DESC_PRIM_STRING ;
+	static final int  SW_RAW_DATE    = (int)  DESC_RAW_DATE;
 
 	static         final int  IDX_CUSTOM_START = 16;
 	static         final int  TYPE_INSTANTIATOR = 1;
@@ -171,12 +174,20 @@ final class ObjectMeta {
 		if (type == short  .class) return PRIM_SHORT  ;
 		if (type == char   .class) return PRIM_CHAR   ;
 		if (type == String .class) return PRIM_STRING ;
+		if (type == java.time.OffsetDateTime.class ||
+				type == java.time.LocalDateTime.class  ||
+				type == java.time.ZonedDateTime.class  ||
+				type == java.time.LocalDate.class      ||
+				type == java.time.LocalTime.class      ||
+				type == java.time.Instant.class) {
+			return PRIM_RAW_DATE;
+		}
 		return PRIM_OTHER;
 	}
 
 	private static boolean isPrimitive(final Class<?> t) {
 		if(null == t) return false;
-		if(t.isPrimitive() || String.class == t) return true;
+		if(t.isPrimitive() || String.class == t || getPrimId(t) == PRIM_RAW_DATE) return true;
 		return false;
 	}
 

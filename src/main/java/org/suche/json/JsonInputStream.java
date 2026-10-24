@@ -4,6 +4,7 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Type;
+import java.time.temporal.Temporal;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
@@ -266,6 +267,25 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		}
 	}
 
+	@SuppressWarnings("unchecked")
+	private Object parseRawTemporal(final Class<?> targetType) throws IOException {
+		if (limit - pos < 40) ensure(40);
+		pos++; // '"' überspringen
+		final var start = pos;
+		final var buf = buffer;
+		while (pos < limit) {
+			final var b = buf[pos];
+			if (b == '"') break;
+			if (b == '\\') throwInvalid("Escapes not supported in dates");
+			pos++;
+		}
+		if (pos >= limit) throwInvalid("Unexpected end of date string");
+		final var end = pos++; // Schließendes '"' überspringen
+		if (end == start) return null;
+		final var tc = (Class<? extends Temporal>) targetType;
+		return FastDateTime.parseFast(tc, buf, start, end);
+	}
+
 	private String [] parseStringArray(String[] b) throws IOException {
 		var idx = 0;
 		while (true) {
@@ -303,7 +323,8 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				} else {
 					final var targetTD = idx >= 0 ? meta.fieldDescriptor(idx) : 0L;
 					switch ((int) targetTD) {
-					case ObjectMeta.SW_BYTE_ARRAY -> meta.set(this, context, idx, parse64());
+					case ObjectMeta.SW_BYTE_ARRAY                            -> meta.set(this, context, idx, parse64());
+					case ObjectMeta.SW_RAW_DATE                              -> meta.set(this, context, idx, parseRawTemporal(curTypeDesc < 0L ? meta.type(0) : meta.typeOf(idx)));
 					case ObjectMeta.SW_PRIM_INT   , ObjectMeta.SW_PRIM_LONG  -> parseQuotedIntLong    (meta, context, idx);
 					case ObjectMeta.SW_PRIM_DOUBLE, ObjectMeta.SW_PRIM_FLOAT -> parseQuotedDoubleFloat(meta, context, idx);
 					case ObjectMeta.SW_PRIM_BOOLEAN                          -> parseQuotedBoolean    (meta, context, idx);
@@ -573,6 +594,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 			case '"' -> {
 				switch ((int)targetTD) {
 				case ObjectMeta.SW_BYTE_ARRAY                            -> meta.set(this, context, targetIdx, parse64());
+				case ObjectMeta.SW_RAW_DATE                              -> meta.set(this, context, targetIdx, parseRawTemporal(meta.typeOf(targetIdx)));
 				case ObjectMeta.SW_PRIM_INT   , ObjectMeta.SW_PRIM_LONG  -> parseQuotedIntLong(meta, context, targetIdx);
 				case ObjectMeta.SW_PRIM_DOUBLE, ObjectMeta.SW_PRIM_FLOAT -> parseQuotedDoubleFloat(meta, context, targetIdx);
 				case ObjectMeta.SW_PRIM_BOOLEAN                          -> parseQuotedBoolean(meta, context, targetIdx);
@@ -682,6 +704,7 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				state = 1;
 				switch ((int) childDesc) {
 				case ObjectMeta.SW_BYTE_ARRAY                            -> meta.set(this, context, idx, parse64());
+				case ObjectMeta.SW_RAW_DATE                              -> meta.set(this, context, idx, parseRawTemporal(meta.type(0)));
 				case ObjectMeta.SW_PRIM_INT   , ObjectMeta.SW_PRIM_LONG  -> parseQuotedIntLong    (meta, context, idx);
 				case ObjectMeta.SW_PRIM_DOUBLE, ObjectMeta.SW_PRIM_FLOAT -> parseQuotedDoubleFloat(meta, context, idx);
 				case ObjectMeta.SW_PRIM_BOOLEAN                          -> parseQuotedBoolean    (meta, context, idx);
