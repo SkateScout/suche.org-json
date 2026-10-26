@@ -126,10 +126,11 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 		final var idx = idx(pKey);
 		if(idx < 0) return true;
 		return switch(singleType) {
-		case PRIMITIVE.T_EMPTY  -> true;
-		case PRIMITIVE.T_LONG   -> false;
-		case PRIMITIVE.T_DOUBLE -> false;
-		default                -> null != rawValueAt(idx);
+		case PRIMITIVE.T_EMPTY   -> true;
+		case PRIMITIVE.T_LONG    -> false;
+		case PRIMITIVE.T_BOOLEAN -> false;
+		case PRIMITIVE.T_DOUBLE  -> false;
+		default                  -> null != rawValueAt(idx);
 		};
 	}
 
@@ -144,7 +145,7 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 	@Override
 	public JSONObject optJSONObject(final String pKey, final JSONObject fallback) {
 		final var idx = idx(pKey);
-		return (idx >= 0 && rawValueAt(idx) instanceof final CompactMap m ? (CompactMap)m : fallback);
+		return idx >= 0 && rawValueAt(idx) instanceof final CompactMap m ? (CompactMap)m : fallback;
 	}
 
 	// Safely retrieves a nested JSON array
@@ -160,7 +161,7 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 	// Safely retrieves a nested JSON array
 	@Override public JSONArray optJSONArray(final String pKey) {
 		final var idx = idx(pKey);
-		return (idx >= 0 && rawValueAt(idx) instanceof final JSONArray c ? c : null);
+		return idx >= 0 && rawValueAt(idx) instanceof final JSONArray c ? c : null;
 	}
 
 	// Retrieves the string representation of the value
@@ -172,6 +173,7 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 		if(idx < 0) return fallback;
 		return switch(singleType) {
 		case PRIMITIVE.T_EMPTY  -> fallback;
+		case PRIMITIVE.T_BOOLEAN -> prims[idx] != 0 ? "true" : "false";
 		case PRIMITIVE.T_LONG   -> Long  .toString(                        prims[idx] );
 		case PRIMITIVE.T_DOUBLE -> Double.toString(Double.longBitsToDouble(prims[idx]));
 		default                -> {
@@ -188,13 +190,15 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 
 	private Object resolve(final int idx) {
 		return switch(singleType) {
-		case PRIMITIVE.T_EMPTY  -> null;
-		case PRIMITIVE.T_LONG   -> Long  .valueOf(                        prims[idx] );
-		case PRIMITIVE.T_DOUBLE -> Double.valueOf(Double.longBitsToDouble(prims[idx]));
-		default                -> {
+		case PRIMITIVE.T_EMPTY   -> null;
+		case PRIMITIVE.T_BOOLEAN -> Boolean.valueOf(prims[idx] != 0);
+		case PRIMITIVE.T_LONG    -> Long   .valueOf(                        prims[idx] );
+		case PRIMITIVE.T_DOUBLE  -> Double .valueOf(Double.longBitsToDouble(prims[idx]));
+		default                   -> {
 			final var val = rawValueAt(idx);
-			if (val == PRIMITIVE.LONG)   yield Long  .valueOf(prims[idx]);
-			if (val == PRIMITIVE.DOUBLE) yield Double.valueOf(Double.longBitsToDouble(prims[idx]));
+			if (val == PRIMITIVE.LONG   ) yield Long  .valueOf(prims[idx]);
+			if (val == PRIMITIVE.DOUBLE ) yield Double.valueOf(Double.longBitsToDouble(prims[idx]));
+			if (val == PRIMITIVE.BOOLEAN) yield Long  .valueOf(prims[idx]) != 0;
 			yield val;
 		}
 		};
@@ -202,12 +206,12 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 
 	@Override public Object get(final Object key) {
 		final var idx = idx((String)key);
-		return (idx < 0 ? null : resolve(idx));
+		return idx < 0 ? null : resolve(idx);
 	}
 
 	@Override public Object opt(final String key) {
 		final var idx = idx(key);
-		return (idx >= 0 ? resolve(idx) : null);
+		return idx >= 0 ? resolve(idx) : null;
 	}
 
 	@Override public boolean containsKey(final Object key) { return idx((String)key)>=0; }
@@ -275,7 +279,7 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 
 	@Override public boolean equals(final Object obj) {
 		if (this == obj) return true;
-		if ((obj == null) || !super.equals(obj) || (getClass() != obj.getClass())) return false;
+		if (obj == null || !super.equals(obj) || getClass() != obj.getClass()) return false;
 		final var other = (CompactMap) obj;
 		return Arrays.deepEquals(data, other.data) && Arrays.equals(prims, other.prims);
 	}
@@ -289,7 +293,7 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 
 	private int idx(final String key) {
 		if(singleType == PRIMITIVE.T_EMPTY || data == null) return -1;
-		for (var i = 0; i < data.length - 1; i += 2) if (key == data[i] || key.equals(data[i])) return(i >> 1);
+		for (var i = 0; i < data.length - 1; i += 2) if (key == data[i] || key.equals(data[i])) return i >> 1;
 		return -1;
 	}
 
@@ -302,14 +306,14 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 		return val;
 	}
 
-	@Override public Integer   optInteger(final String key, final Integer fallback) { return(oLong(idx(key)) instanceof final Long l?l.intValue():fallback); }
+	@Override public Integer   optInteger(final String key, final Integer fallback) { return oLong(idx(key)) instanceof final Long l?l.intValue():fallback; }
 
 	@Override public Object    get(final String key) { return resolve(idx(key)); }
 	@Override public long      getLong   (final String key) { return                                getLong(idx(key)); }
 	@Override public int       getInt    (final String key) { return (int  )                        getLong(idx(key)); }
 	@Override public short     getShort  (final String key) { return (short)                        getLong(idx(key)); }
 	@Override public byte      getByte   (final String key) { return (byte )                        getLong(idx(key)); }
-	@Override public boolean   getBoolean(final String key) { return (                              getLong(idx(key)) != 0); }
+	@Override public boolean   getBoolean(final String key) { return getLong(idx(key)) != 0; }
 	@Override public char      getChar   (final String key) { return (char )                        getLong(idx(key)); }
 	@Override public double    getDouble (final String key) { return        Double.longBitsToDouble(getLong(idx(key))); }
 	@Override public float     getFloat  (final String key) { return (float)Double.longBitsToDouble(getLong(idx(key))); }
@@ -317,11 +321,11 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 	@Override public int       optInt    (final String key, final int     fallback) { return (int  ) optLong  (idx(key), fallback); }
 	@Override public short     optShort  (final String key, final short   fallback) { return (short) optLong  (idx(key), fallback); }
 	@Override public byte      optByte   (final String key, final byte    fallback) { return (byte ) optLong  (idx(key), fallback); }
-	@Override public boolean   optBoolean(final String key, final boolean fallback) { return (       optLong  (idx(key), fallback?1:0) != 0); }
+	@Override public boolean   optBoolean(final String key, final boolean fallback) { return optLong  (idx(key), fallback?1:0) != 0; }
 	@Override public char      optChar   (final String key, final char    fallback) { return (char ) optLong  (idx(key), fallback); }
 	@Override public float     optFloat  (final String key, final float   fallback) { return (float) optDouble(idx(key), fallback); }
-	@Override public double    optDouble (final String key, final double  fallback) { final var v = oDouble(idx(key)); return(v==null?fallback:v); }
-	@Override public long      optLong   (final String key, final long    fallback) { final var v = oLong(idx(key)); return(v==null?fallback:v); }
+	@Override public double    optDouble (final String key, final double  fallback) { final var v = oDouble(idx(key)); return v==null?fallback:v; }
+	@Override public long      optLong   (final String key, final long    fallback) { final var v = oLong(idx(key)); return v==null?fallback:v; }
 	@Override public Number    optNumber (final String key, final Number  fallback) { return (float)optNumber (idx(key), fallback); }
 
 	@Override public void forEach(final BiConsumer<? super String, ? super Object> action) {
@@ -337,7 +341,7 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 		if (singleType == PRIMITIVE.T_LONG) {
 			if (!(value instanceof final Number n)) upgradeToMixed();
 			else if ((n instanceof Double || n instanceof Float) && n.longValue() != n.doubleValue()) upgradeToDouble();
-		} else if ((singleType == PRIMITIVE.T_DOUBLE) && !(value instanceof Number)) upgradeToMixed();
+		} else if (singleType == PRIMITIVE.T_DOUBLE && !(value instanceof Number)) upgradeToMixed();
 
 		switch (singleType) {
 		case PRIMITIVE.T_LONG   -> longPut  (idx, value);
@@ -379,10 +383,11 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 		final var l = data.length - 1;
 		final var d = data;
 		switch (singleType) {
-		case PRIMITIVE.T_MIXED  -> { return; }
-		case PRIMITIVE.T_LONG   -> { for (var i = 0; i < l; i += 2) if (d[i] != null) d[i + 1] = PRIMITIVE.LONG;   }
-		case PRIMITIVE.T_DOUBLE -> { for (var i = 0; i < l; i += 2) if (d[i] != null) d[i + 1] = PRIMITIVE.DOUBLE; }
-		default                -> { break; }
+		case PRIMITIVE.T_MIXED   -> { return; }
+		case PRIMITIVE.T_BOOLEAN -> { for (var i = 0; i < l; i += 2) if (d[i] != null) d[i + 1] = PRIMITIVE.BOOLEAN; }
+		case PRIMITIVE.T_LONG    -> { for (var i = 0; i < l; i += 2) if (d[i] != null) d[i + 1] = PRIMITIVE.LONG;   }
+		case PRIMITIVE.T_DOUBLE  -> { for (var i = 0; i < l; i += 2) if (d[i] != null) d[i + 1] = PRIMITIVE.DOUBLE; }
+		default                  -> { break; }
 		}
 		singleType = PRIMITIVE.T_MIXED;
 	}
@@ -406,9 +411,9 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 		final var newLen = oldLen + EXPAND_STEP;
 
 		data = Arrays.copyOf(data, newLen);
-		final var newIdx = (oldLen >> 1);
-		data[oldLen] = key;
-		return newIdx;
+		final var newIdx = oldLen >> 1;
+			data[oldLen] = key;
+			return newIdx;
 	}
 
 	private long[] ensurePrims(final int idx) {

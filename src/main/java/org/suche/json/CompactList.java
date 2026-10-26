@@ -21,11 +21,11 @@ public final class CompactList extends AbstractList<Object> implements ContextBa
 		this.singleType = pSingleType;
 		this.data       = pData;
 		this.prims      = pPrims == null ? NO_PRIMS : pPrims;
-		this.removed    = (this.prims != NO_PRIMS ? this.prims.length : (this.data != null ? this.data.length : 0)) - cnt;
+		this.removed    = (this.prims != NO_PRIMS ? this.prims.length : this.data != null ? this.data.length : 0) - cnt;
 	}
 
 	private void ensureCapacity(final int requiredIndex) {
-		final var physicalCapacity = (prims != NO_PRIMS) ? prims.length : (data != null ? data.length : 0);
+		final var physicalCapacity = prims != NO_PRIMS ? prims.length : data != null ? data.length : 0;
 
 		// If the physical array is already large enough, adjust the logical size by reducing 'removed'
 		if (requiredIndex < physicalCapacity) {
@@ -152,10 +152,10 @@ public final class CompactList extends AbstractList<Object> implements ContextBa
 	}
 
 	// Safely retrieves a nested JSON object at the given index
-	@Override public JSONObject optJSONObject(final int index) { return(data != null && index < data.length && data[index] instanceof final JSONObject m ? m : null); }
+	@Override public JSONObject optJSONObject(final int index) { return data != null && index < data.length && data[index] instanceof final JSONObject m ? m : null; }
 
 	// Safely retrieves a nested JSON array at the given index
-	@Override public JSONArray optJSONArray  (final int index) { return(data != null && index < data.length && data[index] instanceof final JSONArray  l  ? l : null); }
+	@Override public JSONArray optJSONArray  (final int index) { return data != null && index < data.length && data[index] instanceof final JSONArray  l  ? l : null; }
 
 	// Safely retrieves a nested JSON object at the given index
 	@Override public JSONObject getJSONObject(final int index) {

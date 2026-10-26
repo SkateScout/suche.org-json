@@ -777,7 +777,6 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 		return internBytes(strBuf, 0, parsedLen, computeHash(strBuf, 0, parsedLen), isAscii);
 	}
 
-
 	final String parseStringValue() throws IOException {
 		pos++; // Skip opening '"'
 		final var start     = pos;

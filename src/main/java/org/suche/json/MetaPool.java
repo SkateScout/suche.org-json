@@ -21,15 +21,31 @@ interface MetaPool {
 			if(objs == null || requiredCapacity > objs.length) ensureObjs(s, requiredCapacity);
 			if(singleType == PRIMITIVE.T_MIXED) return;
 			final var p = switch (singleType) {
-			case PRIMITIVE.T_LONG  ->  PRIMITIVE.LONG;
-			case PRIMITIVE.T_DOUBLE->  PRIMITIVE.DOUBLE;
-			default                ->   null;
+			case PRIMITIVE.T_LONG    -> PRIMITIVE.LONG;
+			case PRIMITIVE.T_BOOLEAN -> PRIMITIVE.BOOLEAN;
+			case PRIMITIVE.T_DOUBLE  -> PRIMITIVE.DOUBLE;
+			default                  -> null;
 			};
 			if(p != null) {
 				if (map != 0) { for (var i = 1; i < cnt; i += 2) objs[i] = p; }
 				else          { for (var i = 0; i < cnt; i++)    objs[i] = p; }
 			}
 			singleType = PRIMITIVE.T_MIXED;
+		}
+
+		void primKeyValue(final MetaPool s, final PRIMITIVE t, final long value) {
+			if (singleType == PRIMITIVE.T_EMPTY) {
+				singleType = t.type;
+			} else if (singleType != PRIMITIVE.T_MIXED && singleType != t.type) {
+				upgradeToMixed(s, this.cnt + 2);
+			}
+			final var valIdx = this.cnt >> 1;
+				if (this.objs == null || this.cnt + 2 > this.objs.length) this.ensureObjs(s, this.cnt + 2);
+				if (this.prims == null || valIdx >= this.prims.length) this.ensurePrims(s, valIdx + 1);
+				this.objs[this.cnt++] = this.currentKey;
+				this.objs[this.cnt++] = t;
+				this.prims[valIdx] = value;
+				this.currentKey = null;
 		}
 
 		void ensureObjs (final MetaPool s, final int minCapacity) {
@@ -57,17 +73,6 @@ interface MetaPool {
 			}
 		}
 
-		void primKeyValue(final MetaPool s, final PRIMITIVE t, final long value) {
-			if(singleType == PRIMITIVE.T_EMPTY) singleType = t.type;
-			final var valIdx = (this.cnt >> 1);
-			if (this.objs == null || this.cnt + 2 > this.objs.length) this.ensureObjs(s, this.cnt + 2);
-			if (this.prims == null || valIdx >= this.prims.length) this.ensurePrims(s, valIdx + 1);
-			this.objs[this.cnt++] = this.currentKey;
-			this.objs[this.cnt++] = t;
-			this.prims[valIdx] = value;
-			this.currentKey = null;
-		}
-
 		void primIdxValue(final MetaPool s, final PRIMITIVE t, final long value, final int index) {
 			if (this.singleType == PRIMITIVE.T_EMPTY) this.singleType = t.type;
 			else if (this.singleType == PRIMITIVE.T_LONG && t == PRIMITIVE.DOUBLE) this.upgradeToDouble();
@@ -77,7 +82,7 @@ interface MetaPool {
 				this.objs [index] = t;
 				this.prims[index] = value;
 			} else {
-				this.prims[index] = (this.singleType == PRIMITIVE.T_DOUBLE && t.type == PRIMITIVE.T_LONG) ? Double.doubleToRawLongBits(value) : value;
+				this.prims[index] = this.singleType == PRIMITIVE.T_DOUBLE && t.type == PRIMITIVE.T_LONG ? Double.doubleToRawLongBits(value) : value;
 			}
 			if (index >= this.cnt) this.cnt = index + 1;
 		}

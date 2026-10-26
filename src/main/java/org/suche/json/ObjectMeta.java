@@ -877,6 +877,7 @@ final class ObjectMeta {
 			pc.objs [index] = v ? Boolean.TRUE : Boolean.FALSE; // Zero-Allocation durch Singletons
 			if (pc.prims != null) pc.prims[index] = v ? 1L : 0L;
 		}
+		case TYPE_MAP -> ((ParseContext)context).primKeyValue(s, PRIMITIVE.BOOLEAN, v ? 1L : 0L);
 		// Sicherer Fallback für Maps/Collections: Fügt den Wert einmalig als Objekt ein
 		default -> set(s, context, index, v ? Boolean.TRUE : Boolean.FALSE);
 		}

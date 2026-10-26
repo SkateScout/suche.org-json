@@ -44,7 +44,7 @@ class JsonDateTime {
 			sec  = v.toEpochSecond(offset);
 			nano = v.getNano();
 		}
-		case final ZonedDateTime v -> { sec = v.toEpochSecond(); nano = v.getNano(); }
+		case final ZonedDateTime  v -> { sec = v.toEpochSecond(); nano = v.getNano(); }
 		case final OffsetDateTime v -> { sec = v.toEpochSecond(); nano = v.getNano(); }
 		default -> throw new IllegalStateException(t.getClass().getName());
 		}
@@ -62,7 +62,7 @@ class JsonDateTime {
 		}
 		case EPOCH_SEC -> sec;
 		case EPOCH_MIN -> sec / 60L;
-		default        -> (sec * 1000) + (nano / 1_000_000);
+		default        -> sec * 1000 + nano / 1_000_000;
 		};
 		s.writeNumber((char)0, outVal);
 	}
