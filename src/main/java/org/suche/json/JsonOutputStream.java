@@ -382,6 +382,20 @@ public final class JsonOutputStream implements AutoCloseable {
 		else SHORT_VIEW.set(buffer, i -= 2, DIGITS_S[val]);
 	}
 
+	private static final byte[] TRUE_BYTES  = "true".getBytes();
+	private static final byte[] FALSE_BYTES = "false".getBytes();
+
+	void writeBoolean(final char prefix, final boolean val) throws IOException {
+		commaNeeded = true;
+		if (pos + 8 > buffer.length) flushBuffer();
+		final var w = val ? TRUE_BYTES : FALSE_BYTES;
+		final var l = w.length;
+		if (prefix != 0) buffer[pos++] = (byte) prefix;
+		System.arraycopy(w, 0, buffer, pos, l);
+		pos += l;
+	}
+
+
 	/** Called from JsonDateTime.java */
 	void writeNumber(final char prefix, long val) throws IOException {
 		if (val >= Integer.MIN_VALUE && val <= Integer.MAX_VALUE) { writeNumber(prefix, (int) val); return; }
@@ -806,6 +820,11 @@ public final class JsonOutputStream implements AutoCloseable {
 						final var entryIdx = c.idx++;
 						final var key      = data[entryIdx << 1];
 						if (key == null) continue;
+						if (sType == PRIMITIVE.T_BOOLEAN) {
+							final var v = prims[entryIdx];
+							if (v != 0 || !skipFalse) { writeMapKey(key, INTERNING); writeBoolean(v!=0); }
+							continue;
+						}
 						if (sType == PRIMITIVE.T_LONG) {
 							final var v = prims[entryIdx];
 							if (v != 0 || !skip0) { writeMapKey(key, INTERNING); writeNumber((char)0, v); }
@@ -817,6 +836,11 @@ public final class JsonOutputStream implements AutoCloseable {
 							continue;
 						}
 						final var val = data[(entryIdx << 1) + 1];
+						if (val == PRIMITIVE.BOOLEAN) {
+							final var v = prims[entryIdx];
+							if (v != 0 || !skipFalse) { writeMapKey(key, INTERNING); writeBoolean((char)0, 0!=v); }
+							continue;
+						}
 						if (val == PRIMITIVE.LONG) {
 							final var v = prims[entryIdx];
 							if (v != 0 || !skip0) { writeMapKey(key, INTERNING); writeNumber((char)0, v); }
@@ -840,11 +864,14 @@ public final class JsonOutputStream implements AutoCloseable {
 						final var sType = cList.singleType();
 						listLoop: while (c.idx < c.len) {
 							final var i = c.idx++;
-							if (sType == PRIMITIVE.T_LONG  ) { writeNumber(commaNeeded ? ',' : 0,                         prims[i] ); continue listLoop; }
-							if (sType == PRIMITIVE.T_DOUBLE) { writeDouble(commaNeeded ? ',' : 0, Double.longBitsToDouble(prims[i])); continue listLoop; }
+
+							if (sType == PRIMITIVE.T_BOOLEAN) { writeBoolean(commaNeeded ? ',' : 0,                    0 != prims[i] ); continue listLoop; }
+							if (sType == PRIMITIVE.T_LONG   ) { writeNumber (commaNeeded ? ',' : 0,                         prims[i] ); continue listLoop; }
+							if (sType == PRIMITIVE.T_DOUBLE ) { writeDouble (commaNeeded ? ',' : 0, Double.longBitsToDouble(prims[i])); continue listLoop; }
 							var val = data[i];
-							if (val   == PRIMITIVE.LONG    ) { writeNumber(commaNeeded ? ',' : 0,                         prims[i] ); continue listLoop; }
-							if (val   == PRIMITIVE.DOUBLE  ) { writeDouble(commaNeeded ? ',' : 0, Double.longBitsToDouble(prims[i])); continue listLoop; }
+							if (val   == PRIMITIVE.BOOLEAN ) { writeBoolean (commaNeeded ? ',' : 0,                     0!= prims[i] ); continue listLoop; }
+							if (val   == PRIMITIVE.LONG    ) { writeNumber  (commaNeeded ? ',' : 0,                         prims[i] ); continue listLoop; }
+							if (val   == PRIMITIVE.DOUBLE  ) { writeDouble  (commaNeeded ? ',' : 0, Double.longBitsToDouble(prims[i])); continue listLoop; }
 							val = transform.apply(val);
 							if (isSkipped(val)) continue listLoop;
 							if (!writePrimitiveInline(commaNeeded ? ',' : 0, val)) { nextVal = val; break listLoop; }

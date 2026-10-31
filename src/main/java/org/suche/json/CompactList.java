@@ -127,8 +127,9 @@ public final class CompactList extends AbstractList<Object> implements ContextBa
 		case PRIMITIVE.T_DOUBLE -> Double.valueOf(Double.longBitsToDouble(prims[valIndex]));
 		default                -> {
 			final var val = data[valIndex];
-			if (val == PRIMITIVE.LONG)   yield Long  .valueOf(                        prims[valIndex] );
-			if (val == PRIMITIVE.DOUBLE) yield Double.valueOf(Double.longBitsToDouble(prims[valIndex]));
+			if (val == PRIMITIVE.BOOLEAN) yield Boolean.valueOf(                     0!=prims[valIndex] );
+			if (val == PRIMITIVE.LONG   ) yield Long   .valueOf(                        prims[valIndex] );
+			if (val == PRIMITIVE.DOUBLE ) yield Double .valueOf(Double.longBitsToDouble(prims[valIndex]));
 			yield val;
 		}
 		};
@@ -144,8 +145,9 @@ public final class CompactList extends AbstractList<Object> implements ContextBa
 		default                -> {
 			final var val = data[index];
 			if(val == null) yield fallback;
-			if(val == PRIMITIVE.LONG)   yield (index>=prims.length ? fallback : Long  .toString(                        prims[index] ));
-			if(val == PRIMITIVE.DOUBLE) yield (index>=prims.length ? fallback : Double.toString(Double.longBitsToDouble(prims[index])));
+			if(val == PRIMITIVE.BOOLEAN) yield (index>=prims.length ? fallback : Boolean.toString(                     0!=prims[index] ));
+			if(val == PRIMITIVE.LONG   ) yield (index>=prims.length ? fallback : Long   .toString(                        prims[index] ));
+			if(val == PRIMITIVE.DOUBLE ) yield (index>=prims.length ? fallback : Double .toString(Double.longBitsToDouble(prims[index])));
 			yield data[index].toString();
 		}
 		};

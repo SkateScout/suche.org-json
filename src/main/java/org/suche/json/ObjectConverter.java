@@ -102,32 +102,22 @@ public final class ObjectConverter {
 				Object val = null;
 				var isLong = false;
 				var isDouble = false;
+				var isBool = false;
 				var primBits = 0L;
 
 				switch (singleType) {
 				case PRIMITIVE.T_EMPTY -> { }
-				case PRIMITIVE.T_LONG -> {
-					isLong = true;
-					primBits = rawPrims[compactIdx];
-				}
-				case PRIMITIVE.T_DOUBLE -> {
-					isDouble = true;
-					primBits = rawPrims[compactIdx];
-				}
+				case PRIMITIVE.T_LONG -> { isLong = true; primBits = rawPrims[compactIdx]; }
+				case PRIMITIVE.T_BOOLEAN -> { isBool = true; primBits = rawPrims[compactIdx]; }
+				case PRIMITIVE.T_DOUBLE -> { isDouble = true; primBits = rawPrims[compactIdx]; }
 				default -> {
 					val = rawData[(compactIdx << 1) + 1];
-					if (val == PRIMITIVE.LONG) {
-						isLong = true;
-						primBits = rawPrims[compactIdx];
-						val = null;
-					} else if (val == PRIMITIVE.DOUBLE) {
-						isDouble = true;
-						primBits = rawPrims[compactIdx];
-						val = null;
+					if        (val == PRIMITIVE.LONG   ) { isLong   = true; primBits = rawPrims[compactIdx]; val = null;
+					} else if (val == PRIMITIVE.DOUBLE ) { isDouble = true; primBits = rawPrims[compactIdx]; val = null;
+					} else if (val == PRIMITIVE.BOOLEAN) { isBool   = true; primBits = rawPrims[compactIdx]; val = null;
 					}
 				}
 				}
-
 				if (targetType.isPrimitive()) {
 					if (prims == null) throw JsonEngine.illegalStateException("Missing prims");
 					if (isLong) {
@@ -142,9 +132,9 @@ public final class ObjectConverter {
 						if      (targetType == double.class) prims[targetIdx] = Double.doubleToRawLongBits(n.doubleValue());
 						else if (targetType == float.class)  prims[targetIdx] = Float.floatToRawIntBits(n.floatValue());
 						else                                 prims[targetIdx] = n.longValue();
-					} else if (val instanceof final Boolean b) {
-						objs[targetIdx] = b;
-						prims[targetIdx] = b ? 1L : 0L;
+					} else if (isBool) {
+						objs [targetIdx] = 0 != primBits;
+						prims[targetIdx] = 0 != primBits ? 1L : 0L;
 					}
 				} else {
 					if (isLong) {
@@ -162,6 +152,8 @@ public final class ObjectConverter {
 						else if (targetType == Short.class   || targetType == short.class)  val = (short) dVal;
 						else if (targetType == Byte.class    || targetType == byte.class)   val = (byte) dVal;
 						else                                                                val = dVal;
+					} else if (isBool) {
+						if      (targetType == Boolean.class   || targetType == boolean.class)  val = primBits != 0;
 					} else if (val instanceof final Number n) {
 						val = coerceNumber(n, targetType);
 					}

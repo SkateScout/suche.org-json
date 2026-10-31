@@ -179,8 +179,9 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 		default                -> {
 			final var val = rawValueAt(idx);
 			if (val == null) yield fallback;
-			if (val == PRIMITIVE.LONG)   yield Long  .toString(                        prims[idx] );
-			if (val == PRIMITIVE.DOUBLE) yield Double.toString(Double.longBitsToDouble(prims[idx]));
+			if (val == PRIMITIVE.BOOLEAN) yield Boolean.toString(                     0!=prims[idx] );
+			if (val == PRIMITIVE.LONG   ) yield Long   .toString(                        prims[idx] );
+			if (val == PRIMITIVE.DOUBLE ) yield Double .toString(Double.longBitsToDouble(prims[idx]));
 			yield val.toString();
 		}
 		};
@@ -196,6 +197,7 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 		case PRIMITIVE.T_DOUBLE  -> Double .valueOf(Double.longBitsToDouble(prims[idx]));
 		default                   -> {
 			final var val = rawValueAt(idx);
+			if (val == PRIMITIVE.BOOLEAN) yield 0!=prims[idx];
 			if (val == PRIMITIVE.LONG   ) yield Long  .valueOf(prims[idx]);
 			if (val == PRIMITIVE.DOUBLE ) yield Double.valueOf(Double.longBitsToDouble(prims[idx]));
 			if (val == PRIMITIVE.BOOLEAN) yield Long  .valueOf(prims[idx]) != 0;

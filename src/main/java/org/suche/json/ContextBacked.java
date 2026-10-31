@@ -20,6 +20,10 @@ sealed interface ContextBacked permits CompactList, CompactMap, JSONArray {
 		}
 		default -> {
 			final var data = rawValueAt(idx);
+			if(data == PRIMITIVE.BOOLEAN) {
+				if(idx < 0 || idx >= size()) JsonEngine.illegalStateException("Index "+idx+" not in [0...S:"+size()+"<C:"+(prims.length-1)+"]");
+				yield prims[idx];
+			}
 			if(data == PRIMITIVE.LONG  ) {
 				if(idx < 0 || idx >= size()) JsonEngine.illegalStateException("Index "+idx+" not in [0...S:"+size()+"<C:"+(prims.length-1)+"]");
 				yield prims[idx];
@@ -43,8 +47,9 @@ sealed interface ContextBacked permits CompactList, CompactMap, JSONArray {
 		case PRIMITIVE.T_DOUBLE -> Double.longBitsToDouble(prims[idx]);
 		default -> {
 			final var data = rawValueAt(idx);
-			if(data == PRIMITIVE.LONG  ) yield prims[idx];
-			if(data == PRIMITIVE.DOUBLE) yield Double.longBitsToDouble(prims[idx]);
+			if(data == PRIMITIVE.BOOLEAN) yield prims[idx];
+			if(data == PRIMITIVE.LONG   ) yield prims[idx];
+			if(data == PRIMITIVE.DOUBLE ) yield Double.longBitsToDouble(prims[idx]);
 			if(data instanceof final Number t) yield t.longValue();
 			yield fallback;
 		}
@@ -85,8 +90,9 @@ sealed interface ContextBacked permits CompactList, CompactMap, JSONArray {
 		case PRIMITIVE.T_DOUBLE -> Double.longBitsToDouble(prims[idx]);
 		default -> {
 			final var data = rawValueAt(idx);
-			if(data == PRIMITIVE.LONG  ) yield (double)prims[idx];
-			if(data == PRIMITIVE.DOUBLE) yield Double.longBitsToDouble(prims[idx]);
+			if(data == PRIMITIVE.BOOLEAN) yield (double)prims[idx];
+			if(data == PRIMITIVE.LONG   ) yield (double)prims[idx];
+			if(data == PRIMITIVE.DOUBLE ) yield Double.longBitsToDouble(prims[idx]);
 			if(data instanceof final Number t) yield t.doubleValue();
 			yield null;
 		}

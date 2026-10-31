@@ -774,10 +774,10 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		var fieldName = "unknownField";
 		var fieldType = "unknownType";
 		if (meta != null) {
-			if(meta.className instanceof final String t) className = t;
-			if (targetIdx >= 0) {
+			if (meta.className instanceof final String t) className = t;
+			if (targetIdx >= 0 && meta.components != null && targetIdx < meta.components.length) {
 				final var c = meta.components[targetIdx];
-				fieldName = c.name(); // Adapt to how your ObjectMeta stores the field names
+				fieldName = c.name();
 				fieldType = c.valueType().getTypeName();
 			}
 		}
