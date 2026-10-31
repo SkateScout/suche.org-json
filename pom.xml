@@ -10,7 +10,7 @@
 
 	<properties>
         <revision>0.0.0-SNAPSHOT</revision>
-		<maven.compiler.release>26</maven.compiler.release>
+		<maven.compiler.release>27</maven.compiler.release>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 	</properties>
 	<dependencies>
@@ -66,7 +66,7 @@
            <plugin>
                 <groupId>io.github.git-commit-id</groupId>
                 <artifactId>git-commit-id-maven-plugin</artifactId>
-                <version>9.0.1</version> <!-- Version für JDK 26 prüfen -->
+                <version>9.0.1</version>
                 <executions>
                     <execution>
                         <id>get-the-git-infos</id>
@@ -87,7 +87,14 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.13.0</version> <!-- Nutze eine aktuelle Version -->
+		        <version>3.13.0</version> <!-- Nutze eine aktuelle Version -->
+                <dependencies>
+                  <dependency>
+                      <groupId>org.ow2.asm</groupId>
+                      <artifactId>asm</artifactId>
+                      <version>9.7.1</version> <!-- Oder neuer, falls verfügbar -->
+                  </dependency>
+                </dependencies>		
                 <executions>
                     <!-- 1. Regulärer Compile: Alles AUSSER der Preview-Klasse -->
                     <execution>
@@ -97,8 +104,8 @@
                             <goal>compile</goal>
                         </goals>
                         <configuration>
-				        	<source>26</source>
-				        	<target>26</target>
+				        	<source>27</source>
+				        	<target>27</target>
                             <excludes>
                                 <exclude>**/JSONStringVectorAPI.java</exclude>
                             </excludes>
@@ -112,8 +119,8 @@
                         <phase>compile</phase>
                         <goals><goal>compile</goal></goals>
                         <configuration>
-					        <source>26</source>
-					        <target>26</target>
+					        <source>27</source>
+					        <target>27</target>
                             <includes>
                                 <include>**/JSONStringVectorAPI.java</include>
                             </includes>
@@ -201,6 +208,13 @@
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-pmd-plugin</artifactId>
 				<version>3.21.2</version>
+                <dependencies>
+                  <dependency>
+                      <groupId>org.ow2.asm</groupId>
+                      <artifactId>asm</artifactId>
+                      <version>9.7.1</version> <!-- Oder neuer, falls verfügbar -->
+                  </dependency>
+                </dependencies>		
 				<executions>
 					<execution>
 						<phase>verify</phase>
