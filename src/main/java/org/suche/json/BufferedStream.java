@@ -9,18 +9,18 @@ import java.util.Map;
 import org.suche.annotation.NonNull;
 
 abstract sealed class BufferedStream  implements MetaPool permits JsonInputStream {
-	private static final int        BUFFER_SIZE = 128*1024;
-	private static final int        POOL_SIZE = 128;
-	private static final int        STRING_POOL_SIZE = 4096;
+	private static final int  BUFFER_SIZE = 128*1024;
+	private static final int  POOL_SIZE = 128;
+	private static final int  STRING_POOL_SIZE = 4096;
 	// Little-Endian 32-Bit Konstanten für "true", "fals" und "null"
-	private static final int TRUE_MAGIC  = 0x65757274; // 'e'|'u'|'r'|'t'
-	private static final int FALSE_MAGIC = 0x736C6166; // 's'|'l'|'a'|'f'
-	private static final int NULL_MAGIC  = 0x6C6C756E; // 'l'|'l'|'u'|'n'
+	private static final int  TRUE_MAGIC  = 0x65757274; // 'e'|'u'|'r'|'t'
+	private static final int  FALSE_MAGIC = 0x736C6166; // 's'|'l'|'a'|'f'
+	private static final int  NULL_MAGIC  = 0x6C6C756E; // 'l'|'l'|'u'|'n'
 	private static final long PATTERN_BRACE_OPEN    = 0x7B7B7B7B7B7B7B7BL; // '{'
 	private static final long PATTERN_BRACKET_OPEN  = 0x5B5B5B5B5B5B5B5BL; // '['
 
 	// FNV-1a offset basis
-	private static final long HASH_BASIS = new java.security.SecureRandom().nextLong();
+	private static final long HASH_BASIS = System.nanoTime();
 	// FNV-1a 64-bit prime
 	private static final long HASH_PRIME = 0x100000001b3L;
 
@@ -590,7 +590,7 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 			if ((word & JSONString.NON_ASCII_PATTERN) != 0) break;
 			final var quoteXor     = word ^ JSONString.QUOTE_PATTERN;
 			final var backslashXor = word ^ JSONString.BACKSLASH_PATTERN;
-			final var hasQuote     = quoteXor     - 0x0101010101010101L & ~quoteXor;
+			final var hasQuote     = quoteXor - 0x0101010101010101L & ~quoteXor;
 			final var hasBackslash = backslashXor - 0x0101010101010101L & ~backslashXor;
 			final var hasCtrl      = word - 0x2020202020202020L & ~word;
 			final var has = (hasQuote | hasBackslash | hasCtrl) & JSONString.NON_ASCII_PATTERN;
