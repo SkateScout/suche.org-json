@@ -39,7 +39,7 @@ jobs:
       with:
         languages: ${{ matrix.language }}
         # Fokussiert die Analyse auf Sicherheit (lässt unwichtige Style-Warnungen weg)
-        queries: security-extended,security-and-quality 
+        queries: security-extended
 
     # Wir zwingen CodeQL, nur den Main-Code zu kompilieren.
     # Benchmarks und Test-Ressourcen (-DskipTests) werden ignoriert!
