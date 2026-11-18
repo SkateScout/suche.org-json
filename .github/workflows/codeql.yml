@@ -24,18 +24,18 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
 
     # Zwingend nötig für deine Engine!
-    - name: Set up JDK 26
-      uses: actions/setup-java@v4
+    - name: Set up JDK 27
+      uses: actions/setup-java@v5
       with:
-        java-version: '26'
+        java-version: '27'
         distribution: 'temurin'
         cache: maven
 
     - name: Initialize CodeQL
-      uses: github/codeql-action/init@v3
+      uses: github/codeql-action/init@v4
       with:
         languages: ${{ matrix.language }}
         # Fokussiert die Analyse auf Sicherheit (lässt unwichtige Style-Warnungen weg)
@@ -47,6 +47,6 @@ jobs:
       run: mvn clean compile -B -DskipTests
 
     - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v3
+      uses: github/codeql-action/analyze@v4
       with:
         category: "/language:${{matrix.language}}"
