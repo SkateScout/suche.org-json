@@ -652,12 +652,11 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 	}
 
 	private Object parseArrayRecursive(final ObjectMeta meta, final int recursionDeep) throws Throwable {
-		depth = recursionDeep;
 		final var context    = meta.start(this);
 		final var limitDepth = this.maxDepth;
 		final var childDesc  = meta.fieldDescriptor(0);
 		var idx = 0;
-		byte state = 0;
+		var expectValue = false;
 		var objPassDesc = 0L;
 		var arrPassDesc = 0L;
 		ObjectMeta objFallbackMeta = null;
@@ -666,42 +665,23 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 		var metaIdx = 0;
 		while (true) {
 			if (pos >= limit) { ensure(1); if (pos >= limit) throwInvalid("Unexpected end"); }
-			switch (buffer[pos]) {
-			case '\t','\n','\r',' ' -> { pos++; }
-			case ']' -> {
-				if (state == 0 && idx > 0) throwTypeMismatch(meta, idx, "Trailing comma in array");
-				pos++; return meta.end(this, context);
+			var b = buffer[pos];
+			if ((b & 0xC0) == 0 && (1L << b & WHITESPACE_MASK) != 0) {
+				skipWhitespace();
+				if (pos >= limit) { ensure(1); if (pos >= limit) throwInvalid("Unexpected end"); }
+				b = buffer[pos];
 			}
-			case '-','0','1','2','3','4','5','6','7','8','9' -> {
-				if(state==1) throwTypeMismatch(meta, idx, "Komma or Closeing breaket instead of NUMERIC expected");
-				state = 1;
-				parseNumericPrimitive(meta, context, idx, childDesc);
-			}
-			case ',' -> {
-				idx++;
-				if(state==0) throwTypeMismatch(meta, idx, "VALUE instead of KOMMA expected");
-				state = 0;
+			if (b == ']') {
+				if (expectValue) throwTypeMismatch(meta, idx, "Trailing comma in array");
 				pos++;
+				return meta.end(this, context);
 			}
-			case 'n' -> {
-				if(state==1) throwTypeMismatch(meta, idx, "Komma or Closeing breaket instead of NULL expected");
-				state = 1;
-				fillNullValue(childDesc, context, idx, meta);
-			}
-			case 't' -> {
-				if(state==1) throwTypeMismatch(meta, idx, "Komma or Closeing breaket instead of BOOLEAN expected");
-				state = 1;
-				meta.setBoolean(this, context, idx, parseTrue());
-			}
-			case 'f' -> {
-				if(state==1) throwTypeMismatch(meta, idx, "Komma or Closeing breaket instead of BOOLEAN expected");
-				state = 1;
-				meta.setBoolean(this, context, idx, parseFalse());
-
-			}
+			switch (b) {
+			case '-','0','1','2','3','4','5','6','7','8','9' -> parseNumericPrimitive(meta, context, idx, childDesc);
+			case 'n' -> fillNullValue(childDesc, context, idx, meta);
+			case 't' -> meta.setBoolean(this, context, idx, parseTrue());
+			case 'f' -> meta.setBoolean(this, context, idx, parseFalse());
 			case '"' -> {
-				if(state==1) throwTypeMismatch(meta, idx, "Komma or Closeing breaket instead of STRING expected");
-				state = 1;
 				switch ((int) childDesc) {
 				case ObjectMeta.SW_BYTE_ARRAY                            -> meta.set(this, context, idx, parse64());
 				case ObjectMeta.SW_RAW_DATE                              -> meta.set(this, context, idx, parseRawTemporal(meta.type(0)));
@@ -713,8 +693,6 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				}
 			}
 			case '{' -> {
-				if(state==1) throwTypeMismatch(meta, idx, "Komma or Closeing breaket instead of OBJECT expected");
-				state = 1;
 				if (objFallbackMeta == null) {
 					isPrimitive = (childDesc & 1L) != 0L;
 					metaIdx = (int) (childDesc >>> 1);
@@ -725,7 +703,6 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 					arrFallbackMeta = isFallbackToCollection ? metaCache[ObjectMeta.IDX_COLLECTION] : childMeta != null ? childMeta : metaCache[ObjectMeta.IDX_COLLECTION];
 					arrPassDesc = isFallbackToCollection ? ObjectMeta.DESC_COLLECTION : childDesc == 0L ? ObjectMeta.DESC_COLLECTION : childDesc;
 				}
-
 				if (childDesc < 0L || isPrimitive) throwTypeMismatch(meta, idx, "Expected array, got '{'");
 				if (recursionDeep >= limitDepth) {
 					meta.set(this, context, idx, runStateEngine(objPassDesc, objFallbackMeta.start(this), objFallbackMeta, -1));
@@ -735,8 +712,6 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 				}
 			}
 			case '[' -> {
-				if(state==1) throwTypeMismatch(meta, idx, "Komma or Closeing breaket instead of ARRAY expected");
-				state = 1;
 				if (arrFallbackMeta == null) {
 					isPrimitive = (childDesc & 1L) != 0L;
 					metaIdx = (int) (childDesc >>> 1);
@@ -747,7 +722,6 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 					arrFallbackMeta = isFallbackToCollection ? metaCache[ObjectMeta.IDX_COLLECTION] : childMeta != null ? childMeta : metaCache[ObjectMeta.IDX_COLLECTION];
 					arrPassDesc     = isFallbackToCollection ?           ObjectMeta.DESC_COLLECTION : childDesc == 0L ? ObjectMeta.DESC_COLLECTION : childDesc;
 				}
-
 				if (childDesc >= 0L && metaIdx != ObjectMeta.IDX_GENERIC && metaIdx != ObjectMeta.IDX_MAP) throwTypeMismatch(meta, idx, OBJECT_INSTEAD_OF_ARRAY);
 				if (isPrimitive && childDesc < 0L) {
 					pos++;
@@ -759,7 +733,20 @@ public final class JsonInputStream extends BufferedStream implements AutoCloseab
 					meta.set(this, context, idx, parseArrayRecursive(arrFallbackMeta, recursionDeep + 1));
 				}
 			}
-			default -> throwInvalid("Unexpected byte["+buffer[pos]+"] instead of "+(state==0?"VALUE":"KOMMA/END"));
+			default -> throwInvalid("Unexpected byte["+buffer[pos]+"] instead of VALUE");
+			}
+			idx++;
+			if (pos < limit && buffer[pos] == ',') {
+				pos++;
+				expectValue = true;
+			} else if (pos < limit && buffer[pos] == ']') {
+				pos++;
+				return meta.end(this, context);
+			} else {
+				expectValue = consumeCommaSlow();
+				if (!expectValue && (pos >= limit || buffer[pos] != ']')) {
+					throwTypeMismatch(meta, idx, "Comma or closing bracket expected");
+				}
 			}
 		}
 	}

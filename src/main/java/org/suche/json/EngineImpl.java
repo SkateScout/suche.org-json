@@ -53,7 +53,10 @@ final class EngineImpl implements InternalEngine {
 
 	// 2. Cache key is now java.lang.reflect.Type
 	private final ConcurrentHashMap<Type, TypeRecord> typeRecordCache = new ConcurrentHashMap<>();
-	private TypeRecord getTypeRecord(final Type c) { return typeRecordCache.computeIfAbsent(c, TypeRecord::new); }
+	private TypeRecord getTypeRecord(final Type c) {
+		final var tr = typeRecordCache.get(c);
+		return tr != null ? tr : typeRecordCache.computeIfAbsent(c, TypeRecord::new);
+	}
 
 	void putMeta(final Type c, final ObjectMeta m) {
 		final var t = getTypeRecord(c);
@@ -117,7 +120,7 @@ final class EngineImpl implements InternalEngine {
 	}
 
 	static long createTypeDesc(final boolean isArray, final boolean isPrimitive, final int cacheIndex) {
-		var desc = ((long) cacheIndex) << 1;
+		var desc = (long) cacheIndex << 1;
 		if (isArray) desc |= 0x8000000000000000L;
 		if (isPrimitive) desc |= 1L;
 		return desc;
@@ -128,13 +131,13 @@ final class EngineImpl implements InternalEngine {
 
 		if (rawType.isArray()) {
 			final Class<?> rawVal = GernericsHandler.resolveClass(valueType);
-			final var compType = (rawVal != null && rawVal != Object.class) ? rawVal : rawType.componentType();
+			final var compType = rawVal != null && rawVal != Object.class ? rawVal : rawType.componentType();
 			return this.getDynamicMetaId(rawType, compType, ObjectMeta.TYPE_OBJ_ARRAY);
 		}
 		if (Collection.class.isAssignableFrom(rawType)) return this.getDynamicMetaId(type, valueType, ObjectMeta.TYPE_COLLECTION);
 		if (Map       .class.isAssignableFrom(rawType)) return this.getDynamicMetaId(type, valueType, ObjectMeta.TYPE_MAP       );
 
-		return this.metaIdOf((valueType != null && valueType != Object.class) ? valueType : type);
+		return this.metaIdOf(valueType != null && valueType != Object.class ? valueType : type);
 	}
 
 	// Not used in hot path only by resolveDescriptor in Constructor
@@ -193,14 +196,11 @@ final class EngineImpl implements InternalEngine {
 
 	// 4. The core: metaIdOf with native GenericsHandler integration
 	int metaIdOf(final Type type) {
-		if (type == null || type == Object.class) return ObjectMeta.IDX_MAP;
+		if (type == null || type == Object.class|| type == Map.class) return ObjectMeta.IDX_MAP;
 		final var t = getTypeRecord(type);
 		final Class<?> clazz = t.rawClass;
 
-
-		if (type == Map.class || (clazz == Map.class && !(type instanceof ParameterizedType))) {
-			return ObjectMeta.IDX_MAP;
-		}
+		if (clazz == Map.class && !(type instanceof ParameterizedType)) return ObjectMeta.IDX_MAP;
 
 		if (t.cacheIndex == -1) {
 			synchronized (t.mutex) {
@@ -210,7 +210,7 @@ final class EngineImpl implements InternalEngine {
 		if (t.metaObject != null) return t.cacheIndex;
 
 		synchronized (t.mutex) {
-			if ((t.metaObject != null) || t.building) return t.cacheIndex;
+			if (t.metaObject != null || t.building) return t.cacheIndex;
 			t.building = true;
 
 			if (Collection.class.isAssignableFrom(clazz) || Map.class.isAssignableFrom(clazz)) {
@@ -218,7 +218,7 @@ final class EngineImpl implements InternalEngine {
 				final var targetMetaType = Map.class.isAssignableFrom(clazz) ? ObjectMeta.TYPE_MAP : ObjectMeta.TYPE_COLLECTION;
 				if (!clazz.getName().startsWith("java.util.") && clazz != Map.class && clazz != Set.class && clazz != Collection.class) {
 					final var customId = registerMeta(null);
-					final var m = (targetMetaType == ObjectMeta.TYPE_MAP) ? new ObjectMeta(this, type, valType, customId) : new ObjectMeta(this, type, valType, targetMetaType, customId);
+					final var m = targetMetaType == ObjectMeta.TYPE_MAP ? new ObjectMeta(this, type, valType, customId) : new ObjectMeta(this, type, valType, targetMetaType, customId);
 					t.cacheIndex = customId;
 					t.metaObject = m;
 					metaCache[customId] = m;
@@ -228,13 +228,13 @@ final class EngineImpl implements InternalEngine {
 				final var dynId = getDynamicMetaId(type, valType, targetMetaType);
 				t.cacheIndex = dynId;
 				t.metaObject = metaCache[dynId];
-				t.building = false;
+				t.building   = false;
 				return dynId;
 			}
 
 			final ObjectMeta r;
 			if      ( clazz.isSealed    ()) r = SealedUnionMapper.build(this, clazz, t.cacheIndex);
-			else if ((clazz.isPrimitive () || clazz.isArray() || 0 != (clazz.getModifiers() & MOG_IGNORE)) || isJDKClass(clazz)) r = ObjectMeta.NULL;
+			else if (clazz.isPrimitive () || clazz.isArray() || 0 != (clazz.getModifiers() & MOG_IGNORE) || isJDKClass(clazz)) r = ObjectMeta.NULL;
 			else if ( clazz.isRecord    ()) r = ObjectMeta.ofRecord(this, type, clazz.asSubclass(Record.class), t.cacheIndex);
 			else if ( clazz.isEnum      ()) r = ObjectMeta.ofEnum(this, clazz.asSubclass(Enum.class), t.cacheIndex);
 			else                            r = ObjectMeta.ofPojo(this, type, clazz, t.cacheIndex);

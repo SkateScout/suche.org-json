@@ -213,8 +213,13 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 	}
 
 	@Override public final String internBytes(final byte[] src, final int start, final int len, final int hash, final boolean isAscii) {
+		if (len == 0) return "";
+		if (stringPoolKeys == null) return newString(src, start, len, isAscii);
 		// Strings over 36 Zeichen (Text, long URLs) are not pooled or uuids
-		if (stringPoolKeys == null || len > 36 || len == 36 && src[start + 8] == '-') return newString(src, start, len, isAscii);
+		if (len > 36 || len <= 16 && (byte) (src[start] - '0') <= 9 && src[start] >= '0' || len == 36 && src[start + 8] == '-') {
+			return newString(src, start, len, isAscii);
+		}
+
 		final var keys = this.stringPoolKeys;
 		final var mask = keys.length - 1;
 		var idx = hash & mask;
@@ -269,9 +274,9 @@ abstract sealed class BufferedStream  implements MetaPool permits JsonInputStrea
 			final var oldV = stringPoolVals;
 			final var oldH = stringPoolHashes;
 
-			stringPoolKeys   = new byte[oldK.length << 1][];
+			stringPoolKeys   = new byte  [oldK.length << 1][];
 			stringPoolVals   = new String[oldV.length << 1];
-			stringPoolHashes = new int [oldH.length << 1];
+			stringPoolHashes = new int   [oldH.length << 1];
 			mask = stringPoolKeys.length - 1;
 
 			for (var i = 0; i < oldK.length; i++) {

@@ -130,7 +130,7 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 		case PRIMITIVE.T_LONG    -> false;
 		case PRIMITIVE.T_BOOLEAN -> false;
 		case PRIMITIVE.T_DOUBLE  -> false;
-		default                  -> null != rawValueAt(idx);
+		default                  -> null == rawValueAt(idx);
 		};
 	}
 
@@ -200,7 +200,6 @@ public final class CompactMap extends AbstractMap<String, Object> implements Con
 			if (val == PRIMITIVE.BOOLEAN) yield 0!=prims[idx];
 			if (val == PRIMITIVE.LONG   ) yield Long  .valueOf(prims[idx]);
 			if (val == PRIMITIVE.DOUBLE ) yield Double.valueOf(Double.longBitsToDouble(prims[idx]));
-			if (val == PRIMITIVE.BOOLEAN) yield Long  .valueOf(prims[idx]) != 0;
 			yield val;
 		}
 		};

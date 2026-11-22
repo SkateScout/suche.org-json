@@ -689,6 +689,7 @@ public final class JsonOutputStream implements AutoCloseable {
 	}
 
 	private boolean handleCycle(final Object obj) throws IOException {
+		if(stack.depth <8) return false;
 		for (var i = 0; i <= stack.depth; i++) {
 			if (stack.stack[i].obj == obj) {
 				final var replacement = cycleMarker.get();
@@ -708,6 +709,8 @@ public final class JsonOutputStream implements AutoCloseable {
 		case final String             t -> writeEscapedString(t);
 		case final Long               t -> writeNumber((char)0, t);
 		case final Double             t -> writeDouble((char)0, t);
+		case final CompactList t when t.singleType() == PRIMITIVE.T_LONG   -> { final var len = t.size(); if (len > 0) { final var p = t.prims(); writeNumber('[',                         p[0] ); for (var i = 1; i < len; i++) writeNumber(',',                         p[i] ); closeArray(); } else safeEmptyArray(); }
+		case final CompactList t when t.singleType() == PRIMITIVE.T_DOUBLE -> { final var len = t.size(); if (len > 0) { final var p = t.prims(); writeDouble('[', Double.longBitsToDouble(p[0])); for (var i = 1; i < len; i++) writeDouble(',', Double.longBitsToDouble(p[i])); closeArray(); } else safeEmptyArray(); }
 		case final CompactList        t -> push((byte)'[', TYPE_OBJ_ARRAY  , t, null, t.size()); // Iterator is slower
 		case final ArrayList<?>       t -> push((byte)'[', TYPE_LIST       , t, null, t.size());
 		case final CompactMap         t -> push((byte)'{', TYPE_COMPACT_MAP, t, null, t.size());

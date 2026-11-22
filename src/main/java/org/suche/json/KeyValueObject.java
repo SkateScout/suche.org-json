@@ -40,7 +40,7 @@ record KeyValueObject(
 
 	private static final Logger     LOG               = Logger.getLogger(KeyValueObject.class.getCanonicalName());
 	static final byte[]     CLASS_NAME_FIRST        = "__class__:".getBytes();
-	static final byte[]     CLASS_NAME_NEXT        = "__class__:".getBytes();
+	static final byte[]     CLASS_NAME_NEXT         = "__class__:".getBytes();
 
 	static byte[] commaPrefix(final byte[] b) { // KeyValueObject.kommaPrefix
 		final var r = new byte[b.length+1];
