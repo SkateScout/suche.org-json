@@ -20,6 +20,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -133,6 +134,7 @@ public final class JsonOutputStream implements AutoCloseable {
 	private              OutputStream     out       ;
 	private              boolean          commaNeeded;
 	private              int              arrayPoolSize   = 0;
+	private              int              mapDepth;
 
 	Object[] takeArray(final int minCapacity) {
 		if (arrayPoolSize > 0) {
@@ -154,6 +156,7 @@ public final class JsonOutputStream implements AutoCloseable {
 		this.commaNeeded        = false;
 		this.timeFormat         = pTimeFormat==null ? TimeFormatDefault.EPOCH_MILLIS : pTimeFormat;
 		this.stack.depth        = -1;
+		this.mapDepth           = 0;
 		this.hasCoreTransformer = pEngine.hasCoreTransformer();
 	}
 
@@ -507,40 +510,6 @@ public final class JsonOutputStream implements AutoCloseable {
 		SHORT_VIEW.set(buffer,pos, DIGITS_S[q]); pos+=2;
 	}
 
-	private boolean isSkipped(final Object v) {
-		return switch(v) {
-		case null                  -> skipNull;
-		case final String        t -> skipEmpty && t.isEmpty();
-		case final Integer       t -> t==0 && skip0;
-		case final Long          t -> t==0 && skip0;
-		case final Double        t -> t==0 && skip0;
-		case final Boolean       t -> skipFalse && !t;
-		case final CompactList   t -> skipEmpty && t.isEmpty();
-		case final CompactMap    t -> skipEmpty && t.size() == 0;
-		case final Object[]      t -> skipEmpty && t.length == 0;
-		case final Collection<?> t -> skipEmpty && t.isEmpty();
-		case final Map<?, ?>     t -> skipEmpty && t.isEmpty();
-		case final Record        t -> skipEmpty && engine.ofComplex(t.getClass()).length == 0;
-		default                    -> (skipEmpty && v.getClass().isArray() && Array.getLength(v) == 0);
-		};
-	}
-
-	private boolean writePrimitiveInline(final char prefix, final Object val) throws IOException {
-		if (pos + 64 > buffer.length) flushBuffer();
-		if(prefix != 0) buffer[pos++] = (byte)prefix;
-		var ret = true;
-		switch(val) {
-		case null            -> safeNull();
-		case final String  t -> writeEscapedString(t);
-		case final Integer t -> writeNumber       ((char)0, t);
-		case final Long    t -> writeNumber       ((char)0, t);
-		case final Boolean t -> safeBoolean       (         t);
-		case final Double  t -> writeDouble       ((char)0, t);
-		default              -> ret = false;
-		}
-		return ret;
-	}
-
 	private void safeEmptyArray() {
 		SHORT_VIEW.set(buffer, pos, EMPTY_ARRAY);
 		pos += 2;
@@ -665,20 +634,162 @@ public final class JsonOutputStream implements AutoCloseable {
 		return true;
 	}
 
+	private boolean isSkipped(final Object v) {
+		return switch(v) {
+		case null                  -> skipNull;
+		case final String        t -> skipEmpty && t.isEmpty();
+		case final Integer       t -> t==0 && skip0;
+		case final Long          t -> t==0 && skip0;
+		case final Double        t -> t==0 && skip0;
+		case final Boolean       t -> skipFalse && !t;
+
+		case final CompactList   t -> skipEmpty && t.isEmpty();
+		case final CompactMap    t -> skipEmpty && t.size() == 0;
+		case final Object[]      t -> skipEmpty && t.length == 0;
+		case final Collection<?> t -> skipEmpty && t.isEmpty();
+		case final Map<?, ?>     t -> skipEmpty && t.isEmpty();
+		case final Record        t -> skipEmpty && engine.ofComplex(t.getClass()).length == 0;
+		default                    -> (skipEmpty && v.getClass().isArray() && Array.getLength(v) == 0);
+		};
+	}
+
+	private boolean isSkippedComplex(final Object v) {
+		return switch(v) {
+		case final CompactList   t -> skipEmpty && t.isEmpty();
+		case final CompactMap    t -> skipEmpty && t.size() == 0;
+		case final Object[]      t -> skipEmpty && t.length == 0;
+		case final Collection<?> t -> skipEmpty && t.isEmpty();
+		case final Map<?, ?>     t -> skipEmpty && t.isEmpty();
+		case final Record        t -> skipEmpty && engine.ofComplex(t.getClass()).length == 0;
+		default                    -> (skipEmpty && v.getClass().isArray() && Array.getLength(v) == 0);
+		};
+	}
+
+	private boolean writePrimitiveInline(final char prefix, final Object val) throws IOException {
+		if (pos + 64 > buffer.length) flushBuffer();
+		if(prefix != 0) buffer[pos++] = (byte)prefix;
+		var ret = true;
+		switch(val) {
+		case null            -> safeNull();
+		case final String  t -> writeEscapedString(t);
+		case final Integer t -> writeNumber       ((char)0, t);
+		case final Long    t -> writeNumber       ((char)0, t);
+		case final Boolean t -> safeBoolean       (         t);
+		case final Double  t -> writeDouble       ((char)0, t);
+		default              -> ret = false;
+		}
+		return ret;
+	}
+
+	private void writeComma() throws IOException {
+		if (commaNeeded) {
+			if (pos == buffer.length) flushBuffer();
+			buffer[pos++] = ',';
+		}
+	}
+
+	private void acceptMapEntry(final Object k, final Object rawVal) {
+		try {
+			if (rawVal == null) { if (!skipNull) { writeMapKey(k, EXTSTRING); writeNull(); } return; }
+			final var val = hasCoreTransformer ? transform(rawVal) : rawVal;
+			switch (val) {
+			case null            -> { if (skipNull)                 return; writeMapKey(k, EXTSTRING); writeNull(); }
+			case final String  s -> { if (skipEmpty && s.isEmpty()) return; writeMapKey(k, EXTSTRING); writeEscapedString(s); }
+			case final Integer i -> { if (skip0     && i == 0     ) return; writeMapKey(k, EXTSTRING); writeNumber((char) 0, i); }
+			case final Long    l -> { if (skip0     && l == 0L    ) return; writeMapKey(k, EXTSTRING); writeNumber((char) 0, l); }
+			case final Boolean b -> { if (skipFalse && !b         ) return; writeMapKey(k, EXTSTRING); writeBoolean(b); }
+			case final Double  d -> { if (skip0     && d == 0.0d  ) return; writeMapKey(k, EXTSTRING); writeDouble((char) 0, d); }
+			default              -> { if (isSkippedComplex(val))    return; writeMapKey(k, EXTSTRING); writeObject(val); }
+			}
+		} catch (final IOException e) { throw new MyRuntimeException(e); }
+	}
+
+	private void acceptColEntry(final Object rawVal) {
+		try {
+			final var val = hasCoreTransformer ? transform(rawVal) : rawVal;
+			switch (val) {
+			case null            -> { if (skipNull                ) return; writeComma(); writeNull(); }
+			case final String  s -> { if (skipEmpty && s.isEmpty()) return; writeComma(); writeEscapedString(s); }
+			case final Integer i -> { if (skip0     && i == 0     ) return; writeNumber(commaNeeded ? ',' : (char) 0, i); }
+			case final Long    l -> { if (skip0     && l == 0L    ) return; writeNumber(commaNeeded ? ',' : (char) 0, l); }
+			case final Boolean b -> { if (skipFalse && !b         ) return; writeComma(); writeBoolean(b); }
+			case final Double  d -> { if (skip0     && d == 0.0d  ) return; writeDouble(commaNeeded ? ',' : (char) 0, d); }
+			default              -> { if (!isSkippedComplex(val)) { writeComma(); writeObject(val); } }
+			}
+		} catch (final IOException e) { throw new MyRuntimeException(e); }
+	}
+	private final BiConsumer<Object, Object> MAP_ENTRY = this::acceptMapEntry;
+	private final Consumer<Object> COL_ENTRY = this::acceptColEntry;
+
 	private void handleMap(final Map<?,?> t) throws IOException {
-		// JsonSerializationBenchmark.benchmarkFastjson2        twitter.json  thrpt    5  1354,511 ± 57,029  ops/s
-		// JsonSerializationBenchmark.benchmarkMyEngineVanilla  twitter.json  thrpt    5  1167,807 ± 26,044  ops/s
-		// vs using keySet.iterator
-		// JsonSerializationBenchmark.benchmarkFastjson2        twitter.json  thrpt    5  1353,228 ± 63,739  ops/s
-		// JsonSerializationBenchmark.benchmarkMyEngineVanilla  twitter.json  thrpt    5  1144,699 ± 32,531  ops/s
 		final var size = t.size();
 		if (size == 0) { safeEmptyArray(); return; }
+		if (mapDepth < 64) {
+			if (pos >= buffer.length - 1) flushBuffer();
+			buffer[pos++] = '{';
+			commaNeeded = false;
+			mapDepth++;
+			try {
+				((Map<Object, Object>) t).forEach(MAP_ENTRY);
+			} finally {
+				mapDepth--;
+			}
+			if (pos >= buffer.length) flushBuffer();
+			buffer[pos++] = '}';
+			commaNeeded = true;
+			return;
+		}
+		// Fallback für extreme Tiefe / Cycle-Detection:
 		final var flat = takeArray(size * 2);
 		mapDumper.target = flat;
 		mapDumper.idx    = 0;
 		t.forEach(mapDumper);
 		mapDumper.target = null;
 		if (!push((byte)'{', TYPE_POOLED_MAP, t, flat, size * 2)) returnArray(flat);
+	}
+
+	private void handleCollection(final Collection<?> t) throws IOException {
+		final var len = t.size();
+		if (len == 0) {
+			safeEmptyArray();
+			return;
+		}
+		if (mapDepth < 64) {
+			if (pos >= buffer.length - 1) flushBuffer();
+			buffer[pos++] = '[';
+			commaNeeded = false;
+			mapDepth++;
+			try {
+				t.forEach(COL_ENTRY);
+			} finally {
+				mapDepth--;
+			}
+			closeArray();
+			return;
+		}
+		push((byte) '[', TYPE_COL, t, null, len);
+	}
+
+	private void handleArrayList(final ArrayList<?> t) throws IOException {
+		final var len = t.size();
+		if (len == 0) {
+			safeEmptyArray();
+			return;
+		}
+		if (mapDepth < 64) {
+			if (pos >= buffer.length - 1) flushBuffer();
+			buffer[pos++] = '[';
+			commaNeeded = false;
+			mapDepth++;
+			try {
+				for (var i = 0; i < len; i++) acceptColEntry(t.get(i));
+			} finally {
+				mapDepth--;
+			}
+			closeArray();
+			return;
+		}
+		push((byte) '[', TYPE_LIST, t, null, len);
 	}
 
 	private void handleValue(final Object val) throws IOException {
@@ -712,14 +823,14 @@ public final class JsonOutputStream implements AutoCloseable {
 		case final CompactList t when t.singleType() == PRIMITIVE.T_LONG   -> { final var len = t.size(); if (len > 0) { final var p = t.prims(); writeNumber('[',                         p[0] ); for (var i = 1; i < len; i++) writeNumber(',',                         p[i] ); closeArray(); } else safeEmptyArray(); }
 		case final CompactList t when t.singleType() == PRIMITIVE.T_DOUBLE -> { final var len = t.size(); if (len > 0) { final var p = t.prims(); writeDouble('[', Double.longBitsToDouble(p[0])); for (var i = 1; i < len; i++) writeDouble(',', Double.longBitsToDouble(p[i])); closeArray(); } else safeEmptyArray(); }
 		case final CompactList        t -> push((byte)'[', TYPE_OBJ_ARRAY  , t, null, t.size()); // Iterator is slower
-		case final ArrayList<?>       t -> push((byte)'[', TYPE_LIST       , t, null, t.size());
+		case final ArrayList<?>       t -> handleArrayList(t);
 		case final CompactMap         t -> push((byte)'{', TYPE_COMPACT_MAP, t, null, t.size());
 		case final LinkedHashMap<?,?> t -> handleMap(t);
 		case final String[]           t -> { if(t.length>0) { write((byte)'['); writeEscapedString(t[0]); for(var i=1; i<t.length; i++) { write((byte)','); writeEscapedString(t[i]); } closeArray(); } else safeEmptyArray(); }
 		case final Object[]           t -> push((byte)'[', TYPE_OBJ_ARRAY  , t, null, t.length);
 		case final Record             t -> { final var parts = engine.ofComplex(t.getClass()); push((byte)'{', TYPE_RECORD, t, parts, parts.length); }
 		case final List<?>            t when t instanceof java.util.RandomAccess -> push((byte)'[', TYPE_LIST, t, null, t.size());	// AttributeList, CopyOnWriteArrayList, RoleList, RoleUnresolvedList, Stack, Vector
-		case final Collection<?>      t -> push((byte)'[', TYPE_COL        , t, t.iterator(),  t.size());
+		case final Collection<?>      t -> handleCollection(t);
 		case final Map<?,?>           t -> handleMap(t);
 		case final Integer            t -> writeNumber((char)0, t);
 		case final Boolean            t -> safeBoolean(t);
@@ -761,11 +872,12 @@ public final class JsonOutputStream implements AutoCloseable {
 	private final Function<Object,Object> PLAIN = (Function<Object,Object>)t->t;
 
 	public void writeObject( final Object root) throws IOException {
+		final var baseDepth   = stack.depth;
 		final var transform   = hasCoreTransformer ? TRANS : PLAIN;
 		final var transformed = transform.apply(root);
 		try {
 			handleValue(transformed);
-			while (stack.depth >= 0) {
+			while (stack.depth > baseDepth) {
 				final var c = stack.stack[stack.depth];
 				final var type = c.type;
 				var nextVal = EXHAUSTED;

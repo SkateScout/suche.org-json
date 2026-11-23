@@ -38,17 +38,24 @@ final class JSONStringVanilla implements JSONStringProvider {
 				final var c2 = s.charAt(sOff + 2);
 				final var c3 = s.charAt(sOff + 3);
 				if((c0 | c1 | c2 | c3) >= 128) break;
-				if (    (c0 < 32) || (c0 == '"') || (c0 == '\\') ||
-						(c1 < 32) || (c1 == '"') || (c1 == '\\') ||
-						(c2 < 32) || (c2 == '"') || (c2 == '\\') ||
-						(c3 < 32) || (c3 == '"') || (c3 == '\\')) {
-					break;
-				}
+				// if (    (c0 < 32) || (c0 == '"') || (c0 == '\\') ||
+				// 		(c1 < 32) || (c1 == '"') || (c1 == '\\') ||
+				// 		(c2 < 32) || (c2 == '"') || (c2 == '\\') ||
+				// 		(c3 < 32) || (c3 == '"') || (c3 == '\\')) {
+				// 	break;
+				// }
+
 				// dst[dstOff    ] = (byte) c0;
 				// dst[dstOff + 1] = (byte) c1;
 				// dst[dstOff + 2] = (byte) c2;
 				// dst[dstOff + 3] = (byte) c3;
-				final var packed = c0 | (c1 << 8) | (c2 << 16) | (c3 << 24);
+				final var packed = c0 | c1 << 8 | c2 << 16 | c3 << 24;
+
+				final var qXor = packed ^ 0x22222222;
+				final var bXor = packed ^ 0x5C5C5C5C;
+				final var bad  = (qXor - 0x01010101 & ~qXor |  bXor - 0x01010101 & ~bXor |  packed - 0x20202020) & 0x80808080;
+				if (bad != 0) break;
+
 				// Einen 32-Bit Write ausführen
 				JSONStringAddOpens.INT_VIEW.set(dst, dstOff, packed);
 				sOff   += 4;
@@ -58,17 +65,17 @@ final class JSONStringVanilla implements JSONStringProvider {
 			char c = 0;
 			if (sOff < runLimit) {
 				c = s.charAt(sOff);
-				if (((((char) (c - 32)) <= 95) && (c != '"') && (c != '\\'))) {
+				if ((char) (c - 32) <= 95 && c != '"' && c != '\\') {
 					dst[dstOff++] = (byte) c;
 					sOff++;
 					if (sOff < runLimit) {
 						c = s.charAt(sOff);
-						if (((((char) (c - 32)) <= 95) && (c != '"') && (c != '\\'))) {
+						if ((char) (c - 32) <= 95 && c != '"' && c != '\\') {
 							dst[dstOff++] = (byte) c;
 							sOff++;
 							if (sOff < runLimit) {
 								c = s.charAt(sOff);
-								if (((((char) (c - 32)) <= 95) && (c != '"') && (c != '\\'))) {
+								if ((char) (c - 32) <= 95 && c != '"' && c != '\\') {
 									dst[dstOff++] = (byte) c;
 									sOff++;
 								}
@@ -97,27 +104,27 @@ final class JSONStringVanilla implements JSONStringProvider {
 							acc |= entry << (accLen << 3);
 							accLen += (int) (entry >>> 56);
 						} else {
-							final var utf8 = (0xC0L | (c >> 6))
-									|       ((0x80L | (c & 0x3F)) << 8);
+							final var utf8 = 0xC0L | c >> 6
+									|       (0x80L | c & 0x3F) << 8;
 							acc |= utf8 << (accLen << 3);
 							accLen += 2;
 						}
 					} else if ((d & 0xF8) != 0xD8) {
-						final var utf8 = (0xE0L |  (c >> 12))
-								|       ((0x80L | ((c >> 6) & 0x3F)) << 8)
-								|       ((0x80L | (c & 0x3F)) << 16);
-						acc |= utf8 << (accLen << 3);
-						accLen += 3;
+						final var utf8 = 0xE0L |  c >> 12
+									|       (0x80L | c >> 6 & 0x3F) << 8
+									|       (0x80L | c & 0x3F) << 16;
+							acc |= utf8 << (accLen << 3);
+							accLen += 3;
 					} else {
 						var validSurrogate = false;
-						if (((d & 0x4) == 0) && (sOff < sLen)) {
+						if ((d & 0x4) == 0 && sOff < sLen) {
 							final var low = s.charAt(sOff);
 							if ((low & 0xFC00) == 0xDC00) {
 								final var cp = (c << 10) + low - 0x35FDC00;
-								final var utf8 = (0xF0L | (cp >> 18))
-										|       ((0x80L | ((cp >> 12) & 0x3F)) << 8)
-										|       ((0x80L | ((cp >> 6)  & 0x3F)) << 16)
-										|       ((0x80L | (cp & 0x3F)) << 24);
+								final var utf8 = 0xF0L | cp >> 18
+										|       (0x80L | cp >> 12 & 0x3F) << 8
+										|       (0x80L | cp >> 6  & 0x3F) << 16
+										|       (0x80L | cp & 0x3F) << 24;
 								acc |= utf8 << (accLen << 3);
 								accLen += 4;
 								sOff ++;
@@ -125,7 +132,7 @@ final class JSONStringVanilla implements JSONStringProvider {
 							}
 						}
 						if (!validSurrogate) {
-							acc |= ((long) '?') << (accLen << 3);
+							acc |= (long) '?' << (accLen << 3);
 							accLen++;
 						}
 					}
@@ -136,7 +143,7 @@ final class JSONStringVanilla implements JSONStringProvider {
 					// 3. ANTI-PING-PONG GUARD:
 					// Only jump back into vectorization if there are enough characters left
 					// so that the C2 loop overhead is worth it!
-					if (((((char) (c - 32)) <= 95) && (c != '"') && (c != '\\')) && (sLen - sOff > 16)) {
+					if ((char) (c - 32) <= 95 && c != '"' && c != '\\' && sLen - sOff > 16) {
 						if (accLen > 0) {
 							JSONString.LONG_VIEW.set(dst, dstOff, acc);
 							dstOff += accLen;
@@ -153,6 +160,6 @@ final class JSONStringVanilla implements JSONStringProvider {
 			}
 		}
 		// No Tail-Loop recalled after flush from OutputStream
-		return (((long) (sOff - startS)) << 32) | ((dstOff - startD) & 0xFFFFFFFFL);
+		return (long) (sOff - startS) << 32 | dstOff - startD & 0xFFFFFFFFL;
 	}
 }
